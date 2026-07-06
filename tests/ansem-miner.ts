@@ -4,8 +4,17 @@ import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
 import { getAssociatedTokenAddressSync, getAccount, createAssociatedTokenAccountIdempotent } from "@solana/spl-token";
+import { keccak256 } from "js-sha3";
 
 const enc = (s: string) => Buffer.from(s);
+
+// Mirrors the Rust `jackpot_block` in programs/ansem-miner/src/math.rs EXACTLY:
+// keccak256( randomness[32 bytes] || utf8("jkblock") ), take output byte[0] % 25.
+function computeJackpotBlock(rnd: Buffer): number {
+  const h = keccak256.arrayBuffer(Buffer.concat([rnd, Buffer.from("jkblock")]));
+  const firstByte = new Uint8Array(h)[0];
+  return firstByte % 25;
+}
 
 describe("ansem-miner", () => {
   const provider = anchor.AnchorProvider.env();
@@ -360,4 +369,102 @@ describe("ansem-miner", () => {
   // invariant is upheld. We intentionally do NOT ship a test-only vault-drain
   // instruction to exercise the reject branch: an admin instruction able to
   // move pot_vault lamports would be a rug vector on the live program.
+
+  // Task 12: multi-player solvency + jackpot integration tests.
+  it("pays 3 players summing to (approximately) the swap proceeds", async () => {
+    const players = [0, 1, 2].map(() => anchor.web3.Keypair.generate());
+    for (const p of players) {
+      const s = await provider.connection.requestAirdrop(p.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+      await provider.connection.confirmTransaction(s);
+      await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
+        .accounts({ authority: p.publicKey }).signers([p]).rpc();
+      await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
+    }
+    const { id, pda } = await freshInstantRound(4);
+    // varied stakes across squares
+    await program.methods.stake(0, new anchor.BN(0.3e9)).accounts({ authority: players[0].publicKey, round: pda }).signers([players[0]]).rpc();
+    await program.methods.stake(1, new anchor.BN(0.2e9)).accounts({ authority: players[0].publicKey, round: pda }).signers([players[0]]).rpc();
+    await program.methods.stake(1, new anchor.BN(0.5e9)).accounts({ authority: players[1].publicKey, round: pda }).signers([players[1]]).rpc();
+    await program.methods.stake(7, new anchor.BN(0.1e9)).accounts({ authority: players[1].publicKey, round: pda }).signers([players[1]]).rpc();
+    await program.methods.stake(7, new anchor.BN(0.9e9)).accounts({ authority: players[2].publicKey, round: pda }).signers([players[2]]).rpc();
+
+    await sleep(4500);
+    await program.methods.settle([...Buffer.alloc(32, 42)]).accounts({ admin: admin.publicKey, round: pda }).rpc();
+    const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
+    await program.methods.executeSwapMock().accounts({
+      payer: admin.publicKey, round: pda, ansemMint,
+      mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault, potVault, treasury,
+    }).rpc();
+    const r = await program.account.round.fetch(pda);
+    const proceeds = r.swapProceeds.toNumber();
+
+    const jackpotVault = getAssociatedTokenAddressSync(ansemMint, jackpotAuth, true);
+    await createAssociatedTokenAccountIdempotent(
+      provider.connection, admin.payer, ansemMint, jackpotAuth, { commitment: "confirmed" }, undefined, undefined, true,
+    );
+
+    let sum = 0;
+    for (const p of players) {
+      const ata = getAssociatedTokenAddressSync(ansemMint, p.publicKey);
+      await program.methods.claim(new anchor.BN(id)).accounts({
+        authority: p.publicKey, round: pda, ansemMint,
+        vaultAuthority: vaultAuth, jackpotAuthority: jackpotAuth,
+        payoutVault, jackpotVault, playerAta: ata,
+      }).signers([p]).rpc();
+      const bal = await getAccount(provider.connection, ata);
+      sum += Number(bal.amount);
+    }
+    assert.isAtMost(proceeds - sum, players.length); // floor dust only
+    assert.isAbove(sum, proceeds - players.length - 1);
+  });
+
+  it("adds a jackpot payout when odds are forced to 1", async () => {
+    await program.methods.setJackpotOdds(1).accounts({ admin: admin.publicKey }).rpc();
+    const jackpotVault = getAssociatedTokenAddressSync(ansemMint, jackpotAuth, true);
+    await createAssociatedTokenAccountIdempotent(
+      provider.connection, admin.payer, ansemMint, jackpotAuth, { commitment: "confirmed" }, undefined, undefined, true,
+    );
+    await program.methods.seedJackpot(new anchor.BN(1_000_000_000)).accounts({
+      admin: admin.publicKey, ansemMint, jackpotVault,
+    }).rpc();
+
+    const p = anchor.web3.Keypair.generate();
+    const s = await provider.connection.requestAirdrop(p.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(s);
+    await program.methods.deposit(new anchor.BN(2e9)).accounts({ authority: p.publicKey }).signers([p]).rpc();
+    await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
+    const { id, pda } = await freshInstantRound(4);
+
+    const rnd = Buffer.alloc(32, 5);
+    const jackpotBlock = computeJackpotBlock(rnd);
+    // Stake the jackpot_block(rnd) square so the additive jackpot path is
+    // actually exercised (sole staker, so this is also the only square).
+    await program.methods.stake(jackpotBlock, new anchor.BN(1e9))
+      .accounts({ authority: p.publicKey, round: pda }).signers([p]).rpc();
+
+    await sleep(4500);
+    await program.methods.settle([...rnd]).accounts({ admin: admin.publicKey, round: pda }).rpc();
+    const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
+    await program.methods.executeSwapMock().accounts({
+      payer: admin.publicKey, round: pda, ansemMint,
+      mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault, potVault, treasury,
+    }).rpc();
+
+    const r = await program.account.round.fetch(pda);
+    assert.isTrue(r.jackpotHit);
+    assert.equal(r.jackpotBlock, jackpotBlock);
+
+    const ata = getAssociatedTokenAddressSync(ansemMint, p.publicKey);
+    await program.methods.claim(new anchor.BN(id)).accounts({
+      authority: p.publicKey, round: pda, ansemMint,
+      vaultAuthority: vaultAuth, jackpotAuthority: jackpotAuth,
+      payoutVault, jackpotVault, playerAta: ata,
+    }).signers([p]).rpc();
+    const bal = await getAccount(provider.connection, ata);
+    // sole staker: main payout == proceeds. Jackpot pool seeded with 1e9,
+    // jackpot_bps default 1000 (10%) -> payout_pool = 1e8; sole staker on the
+    // jackpot block gets the full payout_pool share on top of main proceeds.
+    const mainProceeds = r.swapProceeds.toNumber();
+    assert.equal(Number(bal.amount), mainProceeds + 100_000_000);
+  });
 });

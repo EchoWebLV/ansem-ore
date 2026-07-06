@@ -50,6 +50,10 @@ pub mod ansem_miner {
         instructions::admin::set_jackpot_odds(ctx, odds)
     }
 
+    pub fn seed_jackpot(ctx: Context<SeedJackpot>, amount: u64) -> Result<()> {
+        instructions::admin::seed_jackpot(ctx, amount)
+    }
+
     pub fn execute_swap_mock(ctx: Context<ExecuteSwapMock>) -> Result<()> {
         instructions::swap::handler(ctx)
     }
