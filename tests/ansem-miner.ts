@@ -467,4 +467,78 @@ describe("ansem-miner", () => {
     const mainProceeds = r.swapProceeds.toNumber();
     assert.equal(Number(bal.amount), mainProceeds + 100_000_000);
   });
+
+  // Task 13: final end-to-end happy-path sweep for a completely fresh player,
+  // chaining every M1 instruction in lifecycle order and asserting the two
+  // key final invariants: the player's ATA balance matches the sole-staker
+  // proceeds, and escrow.balance == deposit - staked (nothing else moved it).
+  it("end-to-end: initialize->createRound->deposit->initMiner->stake->settle->executeSwapMock->claim", async () => {
+    const fresh = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(fresh.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+
+    const depositAmount = 2 * anchor.web3.LAMPORTS_PER_SOL;
+    const stakeAmount = 0.7 * anchor.web3.LAMPORTS_PER_SOL;
+
+    const [freshEscrow] = PublicKey.findProgramAddressSync(
+      [enc("escrow"), fresh.publicKey.toBuffer()], program.programId);
+
+    // initialize: already done in the first test of this suite (config is a
+    // singleton PDA); re-affirm it's live rather than re-calling it.
+    const cfgCheck = await program.account.config.fetch(configPda);
+    assert.equal(cfgCheck.admin.toBase58(), admin.publicKey.toBase58());
+
+    // createRound
+    const { id, pda: roundPda } = await freshInstantRound(4);
+
+    // deposit
+    await program.methods.deposit(new anchor.BN(depositAmount))
+      .accounts({ authority: fresh.publicKey }).signers([fresh]).rpc();
+
+    // initMiner
+    await program.methods.initMiner().accounts({ authority: fresh.publicKey }).signers([fresh]).rpc();
+
+    // stake (sole staker on this round)
+    await program.methods.stake(11, new anchor.BN(stakeAmount))
+      .accounts({ authority: fresh.publicKey, round: roundPda }).signers([fresh]).rpc();
+
+    await sleep(4500);
+
+    // settle (admin, injected randomness)
+    await program.methods.settle([...Buffer.alloc(32, 21)])
+      .accounts({ admin: admin.publicKey, round: roundPda }).rpc();
+
+    // executeSwapMock
+    const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
+    await program.methods.executeSwapMock().accounts({
+      payer: admin.publicKey, round: roundPda, ansemMint,
+      mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault, potVault, treasury,
+    }).rpc();
+
+    const settledRound = await program.account.round.fetch(roundPda);
+    assert.equal(settledRound.state, 4); // CLAIMABLE
+
+    // claim
+    const jackpotVault = getAssociatedTokenAddressSync(ansemMint, jackpotAuth, true);
+    await createAssociatedTokenAccountIdempotent(
+      provider.connection, admin.payer, ansemMint, jackpotAuth, { commitment: "confirmed" }, undefined, undefined, true,
+    );
+    const freshAta = getAssociatedTokenAddressSync(ansemMint, fresh.publicKey);
+    await program.methods.claim(new anchor.BN(id)).accounts({
+      authority: fresh.publicKey, round: roundPda, ansemMint,
+      vaultAuthority: vaultAuth, jackpotAuthority: jackpotAuth,
+      payoutVault, jackpotVault, playerAta: freshAta,
+    }).signers([fresh]).rpc();
+
+    // Final assertions: sole staker gets the entire swap proceeds in their ATA.
+    const finalAtaBal = await getAccount(provider.connection, freshAta);
+    assert.equal(Number(finalAtaBal.amount), settledRound.swapProceeds.toNumber());
+
+    // escrow.balance == deposit - staked (claim doesn't touch SOL escrow balance,
+    // only active_round/last_claimed_round bookkeeping).
+    const finalEscrow = await program.account.playerEscrow.fetch(freshEscrow);
+    assert.equal(finalEscrow.balance.toNumber(), depositAmount - stakeAmount);
+    assert.equal(finalEscrow.activeRound.toNumber(), 0);
+    assert.equal(finalEscrow.lastClaimedRound.toNumber(), id);
+  });
 });
