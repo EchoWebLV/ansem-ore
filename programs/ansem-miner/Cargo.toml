@@ -34,3 +34,10 @@ ephemeral-rollups-sdk = { version = "=0.14.3", features = ["anchor"] }
 # vrf-oracle 0.3.0 — the 0.4.1 scoped-identity path would hang in VrfPending against
 # a 0.3.0 oracle. Non-scoped create_request_randomness_ix + global VRF_PROGRAM_IDENTITY.
 ephemeral-vrf-sdk = { version = "=0.3.0", features = ["anchor"] }
+
+# M2c: Gum session keys. Gates the ER `stake` so a browser signs a burst of stakes
+# with an ephemeral key (no wallet popup per tile). "no-entrypoint" gates the macro
+# re-export (Session / SessionTokenV2 / session_auth_or). anchor-lang ">=0.28,<2.0"
+# → our 1.0.2 satisfies; NOT yanked → normal resolve (no lock-seeding). The gum
+# program KeyspM2ss… is bundled by mb-test-validator at genesis (verified).
+session-keys = { version = "=3.1.1", features = ["no-entrypoint"] }
