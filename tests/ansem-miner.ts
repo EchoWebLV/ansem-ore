@@ -3,6 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
+import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
 
 const enc = (s: string) => Buffer.from(s);
 
@@ -119,11 +120,17 @@ describe("ansem-miner", () => {
   });
 
   // Task 9b: deterministic time control for tests.
-  // Drives round_duration_secs to 0 for a dedicated round so settle/swap/claim
-  // can be exercised immediately without waiting out a real 60s deadline.
+  // Drives round_duration_secs down for a dedicated round so settle/swap/claim
+  // can be exercised without waiting out a real 60s deadline.
   // The earlier rounds (e.g. round1) keep the 60s default untouched.
-  async function freshInstantRound(): Promise<{ id: number; pda: PublicKey }> {
-    await program.methods.setRoundDuration(new anchor.BN(0)).accounts({ admin: admin.publicKey }).rpc();
+  //
+  // durationSecs defaults to 0 (round already "ended" the instant it's
+  // created — used by tests that only need to settle/swap/claim). Tasks 10-12
+  // need to stake on the round *before* settling it, so they pass a small
+  // positive duration long enough to fit the staking txs but short enough
+  // that the round has expired by the time settle() runs.
+  async function freshInstantRound(durationSecs = 0): Promise<{ id: number; pda: PublicKey }> {
+    await program.methods.setRoundDuration(new anchor.BN(durationSecs)).accounts({ admin: admin.publicKey }).rpc();
     const cfgBefore = await program.account.config.fetch(configPda);
     const nextId = cfgBefore.currentRoundId.toNumber() + 1;
     const [pda] = PublicKey.findProgramAddressSync(
@@ -134,6 +141,10 @@ describe("ansem-miner", () => {
     return { id, pda };
   }
 
+  // Sleep helper: used to let a short-duration round's deadline pass before
+  // calling settle(), after staking txs have landed.
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
   it("creates a zero-duration round that is immediately settleable", async () => {
     const { pda } = await freshInstantRound();
     const rnd = Buffer.alloc(32, 5);
@@ -141,5 +152,45 @@ describe("ansem-miner", () => {
       .accounts({ admin: admin.publicKey, round: pda }).rpc();
     const r = await program.account.round.fetch(pda);
     assert.equal(r.state, 2); // STATE_SETTLED
+  });
+
+  const [vaultAuth] = PublicKey.findProgramAddressSync([enc("vault_auth")], program.programId);
+  const [mintAuth] = PublicKey.findProgramAddressSync([enc("mint_auth")], program.programId);
+  const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.programId);
+
+  it("mock-swaps a settled round's pot into ANSEM", async () => {
+    const { pda } = await freshInstantRound(3);
+    // Use a second fresh player to avoid the unclaimed-round guard from the
+    // earlier player (player already staked round1 and hasn't claimed it).
+    const p2 = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(p2.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+    await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: p2.publicKey }).signers([p2]).rpc();
+    await program.methods.initMiner().accounts({ authority: p2.publicKey }).signers([p2]).rpc();
+    await program.methods.stake(5, new anchor.BN(anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: p2.publicKey, round: pda }).signers([p2]).rpc();
+    await sleep(3500);
+    await program.methods.settle([...Buffer.alloc(32, 3)])
+      .accounts({ admin: admin.publicKey, round: pda }).rpc();
+
+    const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
+    await program.methods.executeSwapMock().accounts({
+      payer: admin.publicKey,
+      round: pda,
+      ansemMint,
+      mintAuthority: mintAuth,
+      vaultAuthority: vaultAuth,
+      payoutVault,
+      potVault,
+      treasury,
+    }).rpc();
+
+    const r = await program.account.round.fetch(pda);
+    assert.equal(r.state, 4); // CLAIMABLE
+    // net = 1 SOL - 1% fee = 0.99 SOL; ansem = 0.99 * 2800e6 = 2,772,000,000
+    assert.equal(r.swapProceeds.toNumber(), 2_772_000_000);
+    const bal = await getAccount(provider.connection, payoutVault);
+    assert.equal(Number(bal.amount), 2_772_000_000);
   });
 });
