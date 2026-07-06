@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::constants::*;
 use crate::error::AnsemError;
-use crate::state::{Config, PlayerEscrow, Round, STATE_CLOSED, STATE_OPEN, STATE_SETTLED};
+use crate::state::{Config, PlayerEscrow, Round, STATE_CLOSED, STATE_OPEN, STATE_SETTLED, STATE_VRF_PENDING};
 
 // ---------------------------------------------------------------------------
 // cancel_round (admin escape hatch)
@@ -34,8 +34,15 @@ pub fn cancel_round_handler(ctx: Context<CancelRound>) -> Result<()> {
     let current_round_id = ctx.accounts.config.current_round_id;
     let round = &mut ctx.accounts.round;
     // Only a past-deadline round that never reached Claimable can be canceled.
+    // STATE_VRF_PENDING is included so a VRF request that the oracle never
+    // fulfills (queue misconfig, oracle down) can't strand the game + escrow
+    // locks forever — a late settle_callback afterward no-ops on the closed round
+    // (it requires state == VrfPending). A Settled round is likewise recoverable
+    // pre-swap. All three pre-Claimable states resolve to Closed → refund.
     require!(
-        round.state == STATE_OPEN || round.state == STATE_SETTLED,
+        round.state == STATE_OPEN
+            || round.state == STATE_VRF_PENDING
+            || round.state == STATE_SETTLED,
         AnsemError::RoundNotCancelable
     );
     // Defense-in-depth: only the current round is ever cancelable. Under M1's

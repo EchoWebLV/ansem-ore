@@ -266,4 +266,60 @@ describe("ansem-miner (M2b VRF)", () => {
     const ata = await getAccount(provider.connection, playerAta);
     assert.isAbove(Number(ata.amount), 0, "player mined ANSEM via the VRF-settled round");
   });
+
+  it("recovers a VrfPending round the oracle never fulfilled (request_settle -> cancel -> refund)", async function () {
+    this.timeout(60000);
+    // Round 1 is Claimable (previous test), so a new round may open. No oracle is
+    // running here — request_settle posts to the queue and the round is stuck in
+    // VrfPending, which the M2b liveness fix makes cancelable.
+    // Guarantee NO oracle fulfills round 2 — test 1's base oracle must be dead, or
+    // it would settle this request too (defeating the "never fulfilled" scenario).
+    stopOracle();
+    await new Promise<void>((res) => {
+      const p = spawn("pkill", ["-9", "-f", "vrf-oracle"], { stdio: "ignore" });
+      p.on("close", () => res()); p.on("error", () => res());
+    });
+    await sleep(2500);
+
+    const ROUND2 = 2;
+    const [round2Pda] = PublicKey.findProgramAddressSync([enc("round"), roundSeed(ROUND2)], program.programId);
+    await program.methods.setRoundDuration(new anchor.BN(3)).accounts({ admin: admin.publicKey }).rpc();
+    await program.methods.createRound().accounts({ payer: admin.publicKey, round: round2Pda }).rpc();
+
+    // Player joins (holds a withdraw-lock) but never stakes.
+    await program.methods.joinRound(new anchor.BN(ROUND2))
+      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda })
+      .signers([player]).rpc();
+
+    // request_settle on L1 posts the VRF request → VrfPending. Poll past the
+    // deadline; idempotent (check state first) + tolerate the confirm-layer flake.
+    for (let i = 0; i < 20; i++) {
+      const r: any = await program.account.round.fetch(round2Pda).catch(() => null);
+      if (r && r.state !== 0) break; // VrfPending (or beyond) reached
+      try {
+        await program.methods.requestSettle(9)
+          .accounts({ payer: admin.publicKey, round: round2Pda, config: configPda, oracleQueue: VRF_BASE_QUEUE })
+          .rpc({ skipPreflight: true, commitment: "confirmed" });
+      } catch (e: any) {
+        const s = String(e);
+        if (!/RoundNotEnded|Unknown action|not confirmed|block height|Blockhash not found|BadRoundState/i.test(s)) throw e;
+      }
+      await sleep(1000);
+    }
+    await awaitEr(() => program.account.round.fetch(round2Pda), (r: any) => r.state === 1, 15);
+    assert.equal((await program.account.round.fetch(round2Pda)).state, 1, "round is stuck in VrfPending");
+
+    // The fix: cancel_round now accepts a past-deadline VrfPending round → Closed.
+    await program.methods.cancelRound().accounts({ admin: admin.publicKey, round: round2Pda }).rpc();
+    assert.equal((await program.account.round.fetch(round2Pda)).state, 5, "VrfPending round cancels to Closed");
+
+    // The joined-but-unstaked player releases their withdraw-lock (no credit — the
+    // round was never reconciled, so nothing was debited).
+    const escBefore = await program.account.playerEscrow.fetch(escrowPda);
+    await program.methods.refund(new anchor.BN(ROUND2))
+      .accounts({ authority: player.publicKey, round: round2Pda }).signers([player]).rpc();
+    const escAfter = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(escAfter.activeRound.toNumber(), 0, "withdraw-lock released");
+    assert.equal(escAfter.balance.toString(), escBefore.balance.toString(), "no credit on refund");
+  });
 });
