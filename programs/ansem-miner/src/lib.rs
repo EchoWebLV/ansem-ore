@@ -33,4 +33,8 @@ pub mod ansem_miner {
     pub fn init_miner(ctx: Context<InitMiner>) -> Result<()> {
         instructions::miner::handler(ctx)
     }
+
+    pub fn stake(ctx: Context<Stake>, block: u8, amount: u64) -> Result<()> {
+        instructions::stake::handler(ctx, block, amount)
+    }
 }

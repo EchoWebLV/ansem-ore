@@ -9,3 +9,6 @@ pub use round::*;
 
 pub mod miner;
 pub use miner::*;
+
+pub mod stake;
+pub use stake::*;

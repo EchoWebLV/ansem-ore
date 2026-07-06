@@ -70,4 +70,39 @@ describe("ansem-miner", () => {
     assert.equal(m.authority.toBase58(), player.publicKey.toBase58());
     assert.equal(m.roundId.toNumber(), 0);
   });
+
+  const round1 = PublicKey.findProgramAddressSync(
+    [enc("round"), new anchor.BN(1).toArrayLike(Buffer, "le", 8)], program.programId)[0];
+
+  it("stakes on two squares", async () => {
+    await program.methods.stake(3, new anchor.BN(0.3 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: player.publicKey, round: round1 }).signers([player]).rpc();
+    await program.methods.stake(14, new anchor.BN(0.2 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: player.publicKey, round: round1 }).signers([player]).rpc();
+    const m = await program.account.minerPosition.fetch(minerPda);
+    assert.equal(m.roundId.toNumber(), 1);
+    assert.equal(m.blockStake[3].toNumber(), 0.3 * anchor.web3.LAMPORTS_PER_SOL);
+    assert.equal(m.blockStake[14].toNumber(), 0.2 * anchor.web3.LAMPORTS_PER_SOL);
+    const r = await program.account.round.fetch(round1);
+    assert.equal(r.pot.toNumber(), 0.5 * anchor.web3.LAMPORTS_PER_SOL);
+    const e = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(e.activeRound.toNumber(), 1);
+    assert.equal(e.balance.toNumber(), 0.5 * anchor.web3.LAMPORTS_PER_SOL); // 1 SOL left after deposit(2)-withdraw(1); staked 0.5
+  });
+
+  it("rejects an out-of-range block", async () => {
+    try {
+      await program.methods.stake(25, new anchor.BN(anchor.web3.LAMPORTS_PER_SOL))
+        .accounts({ authority: player.publicKey, round: round1 }).signers([player]).rpc();
+      assert.fail("should have thrown");
+    } catch (e:any) { assert.include(e.toString(), "BadBlock"); }
+  });
+
+  it("rejects staking beyond escrow balance", async () => {
+    try {
+      await program.methods.stake(1, new anchor.BN(100 * anchor.web3.LAMPORTS_PER_SOL))
+        .accounts({ authority: player.publicKey, round: round1 }).signers([player]).rpc();
+      assert.fail("should have thrown");
+    } catch (e:any) { assert.include(e.toString(), "InsufficientBalance"); }
+  });
 });
