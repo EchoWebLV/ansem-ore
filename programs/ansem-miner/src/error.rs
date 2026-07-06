@@ -22,4 +22,7 @@ pub enum AnsemError {
     #[msg("Round cannot be canceled (must be past deadline and in Open/Settled state)")] RoundNotCancelable,
     #[msg("Round is not closed")] RoundNotClosed,
     #[msg("No refundable stake for this player in this round")] NothingToRefund,
+    #[msg("Round id is not the current round")] NotCurrentRound,
+    #[msg("Escrow already joined to a round")] RoundAlreadyJoined,
+    #[msg("Miner already reconciled for this round")] AlreadyReconciled,
 }

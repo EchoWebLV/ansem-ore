@@ -7,9 +7,13 @@ pub mod state;
 pub mod instructions;
 
 use instructions::*;
+use ephemeral_rollups_sdk::anchor::ephemeral;
 
 declare_id!("8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz");
 
+// #[ephemeral] auto-injects `process_undelegation` + `InitializeAfterUndelegation`
+// so delegated Round/MinerPosition PDAs can be undelegated back to L1.
+#[ephemeral]
 #[program]
 pub mod ansem_miner {
     use super::*;

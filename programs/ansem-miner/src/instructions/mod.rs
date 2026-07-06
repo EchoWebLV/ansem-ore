@@ -27,3 +27,9 @@ pub use claim::*;
 
 pub mod recovery;
 pub use recovery::*;
+
+pub mod delegation;
+pub use delegation::*;
+
+pub mod round_entry;
+pub use round_entry::*;
