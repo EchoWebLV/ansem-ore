@@ -105,6 +105,10 @@ M2a implements the ER split with a **reconcile-at-commit + up-front-lock** escro
 - **`refund` only unlocks now.** Under reconcile-at-commit, `stake` never debited and a cancelled round is never reconciled, so `refund` credits nothing — it only clears `active_round`. Abandoned *delegated* round recovery: admin force-commits on the ER (undelegate → L1) → L1 `cancel_round` → joiner `refund`s.
 - `PlayerEscrow` gains `reconciled_round: u64`; `MinerPosition` has no `reconciled` field. Verified end-to-end on the two-provider local stack (`tests/ansem-miner-er.ts`, 8/8).
 
+**Authorization (M2a security pass):** `commit_miner` requires the miner's owner to sign (read-only `authority` signer; the miner PDA is derived from it, so an attacker can't force-commit a victim's miner). `commit_round` is admin-only (an attacker can't force-commit a live round mid-staking). ER `stake` requires `escrow.active_round == round.round_id` (enforces join-before-stake and blocks re-staking a round after `reconcile_miner` cleared the lock — which would otherwise dodge the escrow debit via the `reconciled_round` guard).
+
+**Known M2a limitation (admin-trust edge, follow-up):** because the debit now happens at `reconcile_miner` and `refund` no longer credits, a player who was *reconciled* for a round that is then *cancelled* cannot `refund` their debited stake (reconcile cleared `active_round`, and `refund` only unlocks). This is only reachable if the admin cancels a SETTLED+reconciled round instead of completing the (permissionless, always-solvent-once-all-reconciled) swap — an admin anomaly, which M2a's admin-trust model excludes. A full fix (make `refund` credit reconciled players, or forbid cancelling a reconciled round) is deferred.
+
 VRF (`request_settle`/`settle_callback`) and session keys are **M2b/M2c**, not M2a — M2a keeps M1's admin-injected `settle`.
 
 ### Swap adapter (the devnet/mainnet seam)

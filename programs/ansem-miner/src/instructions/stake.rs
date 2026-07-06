@@ -41,11 +41,18 @@ pub fn stake_handler(ctx: Context<Stake>, block: u8, amount: u64) -> Result<()> 
     let min_stake = ctx.accounts.config.min_stake;
     let max_stake_per_round = ctx.accounts.config.max_stake_per_round;
     let escrow_balance = ctx.accounts.escrow.balance;
+    let escrow_active_round = ctx.accounts.escrow.active_round;
 
     let round = &mut ctx.accounts.round;
     let miner = &mut ctx.accounts.miner;
 
     require!(round.state == STATE_OPEN, AnsemError::RoundNotOpen);
+    // Must have joined THIS round on L1 first (soft check against the read-only
+    // escrow clone). Beyond enforcing join-before-stake, this closes a
+    // self-inflicted under-debit: once reconcile_miner clears active_round, a
+    // player cannot re-stake into the same round and dodge the escrow debit
+    // (reconciled_round would skip the second debit).
+    require!(escrow_active_round == round.round_id, AnsemError::NotCurrentRound);
     let now = Clock::get()?.unix_timestamp;
     require!(now < round.deadline_ts, AnsemError::RoundEnded);
     require!(amount >= min_stake, AnsemError::StakeTooSmall);

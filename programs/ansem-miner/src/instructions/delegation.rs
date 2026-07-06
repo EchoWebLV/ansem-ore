@@ -9,7 +9,8 @@ use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder};
 
 use crate::constants::*;
-use crate::state::{MinerPosition, Round};
+use crate::error::AnsemError;
+use crate::state::{Config, MinerPosition, Round};
 
 // ---- Task 2: delegate_round (L1) ----
 // Hands the already-inited Round PDA to the delegation program so staking can
@@ -78,6 +79,15 @@ pub fn delegate_miner_handler(ctx: Context<DelegateMiner>) -> Result<()> {
 pub struct CommitRound<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
+    // AUTHORIZATION: admin-only (the round manager, consistent with M2a's
+    // admin-trust model — admin also injects settle randomness). config is a
+    // read-only clone on the ER. Without this, commit_round is permissionless
+    // and an attacker could force-commit (undelegate) a live round mid-staking,
+    // ending it for every player. `payer` is the ER fee payer, so admin-as-payer
+    // is writable-safe.
+    #[account(seeds = [CONFIG_SEED], bump = config.config_bump,
+        constraint = config.admin == payer.key() @ AnsemError::Unauthorized)]
+    pub config: Account<'info, Config>,
     #[account(mut, seeds = [ROUND_SEED, round.round_id.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Account<'info, Round>,
 }
@@ -105,7 +115,14 @@ pub fn commit_round_handler(ctx: Context<CommitRound>) -> Result<()> {
 pub struct CommitMiner<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    #[account(mut, seeds = [MINER_SEED, miner.authority.as_ref()], bump = miner.bump)]
+    // AUTHORIZATION: the miner's owner must sign. A READ-ONLY signer (not mut)
+    // so it doesn't trip the ER's InvalidWritableAccount (only delegated/
+    // fee-payer accounts may be writable there); the miner PDA is derived from
+    // authority.key(), so a victim's miner + attacker signer fails ConstraintSeeds.
+    // Without this, commit_miner is permissionless: an attacker could force-commit
+    // a victim's miner mid-round (truncating their staking) then force-reconcile it.
+    pub authority: Signer<'info>,
+    #[account(mut, seeds = [MINER_SEED, authority.key().as_ref()], bump = miner.bump)]
     pub miner: Account<'info, MinerPosition>,
 }
 

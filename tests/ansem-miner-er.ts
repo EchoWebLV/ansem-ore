@@ -286,7 +286,7 @@ describe("ansem-miner (ER)", () => {
     // (writable again) carrying the ER's final pot. Payer is the ER fee payer
     // (admin) — a non-fee-payer writable signer would trip InvalidWritableAccount.
     const sigR = await ephemeralProgram.methods.commitRound()
-      .accounts({ payer: admin.publicKey, round: round1Pda })
+      .accounts({ payer: admin.publicKey, config: configPda, round: round1Pda })
       .rpc({ skipPreflight: true, commitment: "confirmed" });
     await GetCommitmentSignature(sigR, erConnection);
 
@@ -294,11 +294,27 @@ describe("ansem-miner (ER)", () => {
     const roundL1 = await program.account.round.fetch(round1Pda); // now our-program-owned
     assert.equal(roundL1.pot.toString(), STAKE_AMT.toString(), "committed pot landed on L1");
 
+    // SECURITY REGRESSION: an attacker must NOT be able to commit the victim's
+    // miner (the miner PDA is derived from the authority *signer*, so a wrong
+    // signer fails ConstraintSeeds). Without the authority check this force-
+    // commit would truncate the victim's staking mid-round.
+    const attacker = Keypair.generate();
+    let griefBlocked = false;
+    try {
+      await ephemeralProgram.methods.commitMiner()
+        .accounts({ payer: admin.publicKey, authority: attacker.publicKey, miner: minerPda })
+        .signers([attacker])
+        .rpc({ skipPreflight: true, commitment: "confirmed" });
+    } catch { griefBlocked = true; }
+    assert.isTrue(griefBlocked, "attacker must not commit a victim's miner");
+
     // commit_miner = commit AND undelegate: the block_stake snapshot flushes to
     // L1 and the miner returns to our program (so reconcile_miner/claim can read
-    // it as a normal Account). It is re-delegated next round.
+    // it as a normal Account). Authorized by the miner owner (player). It is
+    // re-delegated next round.
     const sigM = await ephemeralProgram.methods.commitMiner()
-      .accounts({ payer: admin.publicKey, miner: minerPda })
+      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
+      .signers([player])
       .rpc({ skipPreflight: true, commitment: "confirmed" });
     await GetCommitmentSignature(sigM, erConnection);
 
@@ -384,7 +400,7 @@ describe("ansem-miner (ER)", () => {
 
     // Recovery step 1: admin force-commits on the ER -> round 2 undelegates to L1.
     const sig = await ephemeralProgram.methods.commitRound()
-      .accounts({ payer: admin.publicKey, round: round2Pda })
+      .accounts({ payer: admin.publicKey, config: configPda, round: round2Pda })
       .rpc({ skipPreflight: true, commitment: "confirmed" });
     await GetCommitmentSignature(sig, erConnection);
     await awaitOwnerIs(provider.connection, round2Pda, program.programId.toBase58());
