@@ -16,6 +16,12 @@ pub struct Config {
     pub min_stake: u64,
     pub max_stake_per_round: u64,
     pub mock_rate: u64,
+    // Sum of all PlayerEscrow.balance across every player. Tracks the
+    // lamports in `pot_vault` that are owed back to depositors (idle escrow
+    // not currently staked into any round's pot) so that execute_swap_mock
+    // can verify it isn't sweeping funds that belong to escrow rather than
+    // to the round being swapped. See stake.rs / escrow.rs for updates.
+    pub total_escrow_balance: u64,
     pub config_bump: u8,
     pub pot_vault_bump: u8,
     pub treasury_bump: u8,

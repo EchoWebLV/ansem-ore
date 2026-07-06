@@ -59,6 +59,7 @@ pub fn handler(ctx: Context<Initialize>) -> Result<()> {
     c.min_stake = DEFAULT_MIN_STAKE;
     c.max_stake_per_round = DEFAULT_MAX_STAKE_PER_ROUND;
     c.mock_rate = DEFAULT_MOCK_RATE;
+    c.total_escrow_balance = 0;
     c.config_bump = ctx.bumps.config;
     c.pot_vault_bump = ctx.bumps.pot_vault;
     c.treasury_bump = ctx.bumps.treasury;

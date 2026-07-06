@@ -10,7 +10,7 @@ pub struct Deposit<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    #[account(seeds = [CONFIG_SEED], bump = config.config_bump)]
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.config_bump)]
     pub config: Account<'info, Config>,
 
     #[account(
@@ -44,6 +44,9 @@ pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
     }
     e.balance = e.balance.checked_add(amount).ok_or(AnsemError::Overflow)?;
     e.deposited_total = e.deposited_total.checked_add(amount).ok_or(AnsemError::Overflow)?;
+
+    let cfg = &mut ctx.accounts.config;
+    cfg.total_escrow_balance = cfg.total_escrow_balance.checked_add(amount).ok_or(AnsemError::Overflow)?;
     Ok(())
 }
 
@@ -52,7 +55,7 @@ pub struct Withdraw<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    #[account(seeds = [CONFIG_SEED], bump = config.config_bump)]
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.config_bump)]
     pub config: Account<'info, Config>,
 
     #[account(
@@ -89,5 +92,8 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     )?;
     e.balance -= amount;
     e.withdrawn_total = e.withdrawn_total.checked_add(amount).ok_or(AnsemError::Overflow)?;
+
+    let cfg = &mut ctx.accounts.config;
+    cfg.total_escrow_balance = cfg.total_escrow_balance.checked_sub(amount).ok_or(AnsemError::Overflow)?;
     Ok(())
 }

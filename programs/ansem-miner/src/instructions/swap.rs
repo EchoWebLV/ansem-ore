@@ -59,6 +59,19 @@ pub fn handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     let fee = (pot as u128 * cfg.fee_bps as u128 / 10_000u128) as u64;
     let net = pot - fee;
 
+    // Solvency check: pot_vault is a single commingled PDA holding both idle
+    // PlayerEscrow balances and every round's (unswapped) pot. Draining this
+    // round's `pot` lamports out to treasury must never dip into lamports
+    // still owed to depositors (total_escrow_balance) or to other rounds
+    // that haven't swapped yet. We can't separately account "other rounds'
+    // pots" without a per-round vault, but we CAN guarantee this swap never
+    // touches escrow-owed funds, and that pot_vault actually holds at least
+    // `pot` lamports for the amount we are about to move.
+    let pot_vault_lamports = ctx.accounts.pot_vault.lamports();
+    require!(pot_vault_lamports >= cfg.total_escrow_balance, AnsemError::Insolvent);
+    let available_for_pots = pot_vault_lamports - cfg.total_escrow_balance;
+    require!(available_for_pots >= pot, AnsemError::Insolvent);
+
     // Simulate the sale: move the entire pot lamports out of pot_vault into treasury.
     let pv_bump = cfg.pot_vault_bump;
     let pv_seeds: &[&[u8]] = &[POT_VAULT_SEED, &[pv_bump]];

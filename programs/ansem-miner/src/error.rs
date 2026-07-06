@@ -17,4 +17,5 @@ pub enum AnsemError {
     #[msg("Swap mode mismatch")] WrongSwapMode,
     #[msg("Unauthorized")] Unauthorized,
     #[msg("MinerPosition round mismatch")] MinerRoundMismatch,
+    #[msg("Pot vault lamports insufficient to cover escrow liabilities plus this round's pot")] Insolvent,
 }
