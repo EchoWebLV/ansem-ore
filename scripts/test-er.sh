@@ -137,6 +137,13 @@ echo "ER ready."
 case "$TEST_FILE" in *vrf*)
   command -v vrf-oracle >/dev/null 2>&1 || { echo "ERROR: vrf-oracle not on PATH (npm i -g @magicblock-labs/ephemeral-validator)"; exit 1; }
   echo "VRF suite: vrf-oracle found; the test manages its lifecycle." ;;
+*session*)
+  # M2c: createSessionV2 CPIs the gum session program KeyspM2ss…, which
+  # mb-test-validator bundles at genesis (like DLP/VRF). Cheap guard so a missing
+  # bundle fails loudly here rather than deep in the suite. No oracle needed.
+  solana program show KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5 >/dev/null 2>&1 \
+    && echo "Session suite: gum program KeyspM2ss… present (bundled at genesis); no oracle." \
+    || { echo "ERROR: gum session program KeyspM2ss… not present on base"; exit 1; } ;;
 *)
   echo "Non-VRF suite: no oracle." ;;
 esac

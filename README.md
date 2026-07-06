@@ -101,11 +101,23 @@ TEST_FILE=tests/ansem-miner-vrf.ts bash scripts/test-er.sh   # ephemeral-VRF e2e
 
 The pin is `ephemeral-vrf-sdk =0.3.0` (matches the installed `vrf-oracle 0.3.0`; the crate is yanked, so the exact lock entry is seeded from the working reference example). The VRF suite spawns the base oracle itself, up only for the request→callback window.
 
+## M2c: session keys (implemented)
+
+M2c makes ER staking **gasless and popup-free**: a browser mints one **`SessionTokenV2`** on L1 (a single wallet approval, via the gum session program `KeyspM2ss…`), then signs a burst of `stake` calls with an ephemeral session key — no wallet popup per tile.
+
+- **`stake` is the only session-gated instruction.** It gains `#[derive(Accounts, Session)]` + `#[session_auth_or(...)]`: session-signed ⇒ a valid `SessionTokenV2` (the gate PDA-binds `target_program` + `session_signer` + `authority` and checks `now < valid_until`); else the fallback ⇒ the signer must be the miner's wallet. `miner`/`escrow` are seeded on `miner.authority` (the wallet), not on the signer, so a session-key signer resolves the correct PDA.
+- **Containment.** `deposit`/`withdraw`/`claim` stay wallet-only, so a leaked session key can never move value **out** of escrow — its blast radius is at most one round's `max_stake_per_round`, and it expires (≤ 7 days). `top_up=false`: the ephemeral key stays at 0 lamports and is never the fee payer (a funded relayer/validator pays on the ER).
+
+```bash
+TEST_FILE=tests/ansem-miner-session.ts bash scripts/test-er.sh   # session-key e2e + security boundary, 2/2
+```
+
+Test 1 proves a stake signed **only** by the session key (the wallet never signs) mines ANSEM end-to-end. Test 2 is the L1 security matrix (the gate is layer-agnostic): valid-session + wallet stakes pass; **expired** token, **foreign-program** token, and session-key **withdraw** all rejected. The pin is `session-keys =3.1.1` (feature `no-entrypoint`); the gum program is bundled by `mb-test-validator` at genesis (no preload/clone).
+
 ## Deferred milestones
 
 Not built in this repository yet — tracked for later work:
 
-- **M2c**: session keys (gasless, popup-free ER staking without per-tx wallet approval).
 - **M3**: Devnet deployment and Metaplex token metadata for the ANSEM mint.
 - **M4**: The Next.js frontend.
 
