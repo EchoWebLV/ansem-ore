@@ -295,5 +295,22 @@ describe("ansem-miner (M2c session keys)", () => {
     );
     const escAfter = await program.account.playerEscrow.fetch(escrowPda);
     assert.equal(escAfter.balance.toString(), escBefore.balance.toString(), "session key could not withdraw escrow SOL");
+
+    // (6) RECONCILE-DRAIN GUARD: an ATTACKER wallet-signing into the VICTIM's miner
+    // with NO token is rejected by the session_auth_or fallback (require
+    // miner.authority == authority). Without this, writing a victim's block_stake
+    // would drain the victim's escrow at reconcile (the debit reads the committed
+    // miner snapshot). attacker is a non-fee-payer signer, so needs no lamports.
+    const attacker = Keypair.generate();
+    const before6 = await readBlk();
+    await expectThrows(stakeL1(attacker, null), "attacker wallet-signed stake into victim miner");
+    assert.equal((await readBlk()).toString(), before6.toString(), "attacker could not inflate victim's stake (no token)");
+
+    // (7) TOKEN IS SIGNER-BOUND: an attacker who steals the victim's VALID token but
+    // signs with their own key is rejected — is_valid recomputes the PDA with
+    // session_signer = attacker, which mismatches the token (minted for `good`).
+    const before7 = await readBlk();
+    await expectThrows(stakeL1(attacker, goodTok), "stolen token used by wrong signer");
+    assert.equal((await readBlk()).toString(), before7.toString(), "a leaked token can't be used by a different signer");
   });
 });

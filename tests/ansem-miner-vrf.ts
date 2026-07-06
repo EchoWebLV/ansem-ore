@@ -176,7 +176,7 @@ describe("ansem-miner (M2b VRF)", () => {
       const m: any = await ephemeralProgram.account.minerPosition.fetch(minerPda).catch(() => null);
       if (m && m.blockStake[STAKE_BLOCK].toString() === STAKE_AMT.toString()) break;
       await erRpcTolerant(() => ephemeralProgram.methods.stake(STAKE_BLOCK, STAKE_AMT)
-        .accounts({ authority: player.publicKey, config: configPda, round: roundPda, miner: minerPda, escrow: escrowPda })
+        .accounts({ authority: player.publicKey, config: configPda, round: roundPda, miner: minerPda, escrow: escrowPda, sessionToken: null })
         .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
       await sleep(2000);
     }

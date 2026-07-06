@@ -275,7 +275,7 @@ describe("ansem-miner (ER)", () => {
       await erRpcTolerant(() => ephemeralProgram.methods.stake(STAKE_BLOCK, STAKE_AMT)
         .accounts({
           authority: player.publicKey, config: configPda,
-          round: round1Pda, miner: minerPda, escrow: escrowPda,
+          round: round1Pda, miner: minerPda, escrow: escrowPda, sessionToken: null,
         })
         .signers([player])
         .rpc({ skipPreflight: true, commitment: "confirmed" }));
