@@ -1,0 +1,18 @@
+.superpowers/
+
+# Solana / Anchor
+target/
+test-ledger/
+.anchor/
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+.next/
+
+# Env / keys
+.env
+.env.local
+*.keypair.json
+wallet-keypair.json
