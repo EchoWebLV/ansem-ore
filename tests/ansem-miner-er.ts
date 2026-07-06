@@ -76,6 +76,10 @@ const [minerPda] = PublicKey.findProgramAddressSync(
   [enc("miner"), player.publicKey.toBuffer()],
   program.programId
 );
+const [potVaultPda] = PublicKey.findProgramAddressSync(
+  [enc("pot_vault")],
+  program.programId
+);
 
 describe("ansem-miner (ER)", () => {
   before("L1 prelude: initialize, fund player, create round 1, init miner", async () => {
@@ -136,5 +140,35 @@ describe("ansem-miner (ER)", () => {
       await awaitOwner(provider.connection, minerPda), DLP_PROGRAM_ID,
       "miner should be owned by the delegation program"
     );
+  });
+
+  it("task 4: join_round locks the escrow against withdrawal (no debit)", async () => {
+    const before = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(before.activeRound.toNumber(), 0, "precondition: not yet joined");
+
+    await program.methods.joinRound(new anchor.BN(ROUND_ID))
+      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda })
+      .signers([player]).rpc();
+
+    const after = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(after.activeRound.toNumber(), ROUND_ID, "escrow locked to this round");
+    assert.equal(
+      after.balance.toString(), before.balance.toString(),
+      "join_round must NOT debit escrow (debit is relocated to reconcile_miner)"
+    );
+
+    // withdraw is now locked by the active_round guard.
+    let withdrawFailed = false;
+    try {
+      await program.methods.withdraw(new anchor.BN(1))
+        .accounts({
+          authority: player.publicKey, config: configPda,
+          escrow: escrowPda, potVault: potVaultPda,
+        })
+        .signers([player]).rpc();
+    } catch (e) {
+      withdrawFailed = /WithdrawLocked/.test(e.toString());
+    }
+    assert.isTrue(withdrawFailed, "withdraw must be locked while joined to a round");
   });
 });
