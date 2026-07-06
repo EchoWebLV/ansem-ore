@@ -12,14 +12,16 @@ pub struct ExecuteSwapMock<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
+    // Box'd to keep try_accounts under the 4KB BPF stack frame (anchor 1.0 +
+    // the extra jackpot vault accounts overflow it otherwise).
     #[account(mut, seeds = [CONFIG_SEED], bump = config.config_bump)]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
 
     #[account(mut, seeds = [ROUND_SEED, round.round_id.to_le_bytes().as_ref()], bump = round.bump)]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
 
     #[account(mut, address = config.ansem_mint)]
-    pub ansem_mint: Account<'info, Mint>,
+    pub ansem_mint: Box<Account<'info, Mint>>,
 
     /// CHECK: mint authority PDA
     #[account(seeds = [MINT_AUTH_SEED], bump = config.mint_auth_bump)]
@@ -34,7 +36,7 @@ pub struct ExecuteSwapMock<'info> {
         associated_token::mint = ansem_mint,
         associated_token::authority = vault_authority
     )]
-    pub payout_vault: Account<'info, TokenAccount>,
+    pub payout_vault: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: small jackpot authority PDA (owns the small jackpot vault)
     #[account(seeds = [JACKPOT_SM_AUTH_SEED], bump = config.small_jackpot_auth_bump)]
@@ -42,7 +44,7 @@ pub struct ExecuteSwapMock<'info> {
 
     /// Read-only: its balance is snapshotted into round.small_jackpot_pool.
     #[account(associated_token::mint = ansem_mint, associated_token::authority = small_jackpot_authority)]
-    pub small_jackpot_vault: Account<'info, TokenAccount>,
+    pub small_jackpot_vault: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: big jackpot authority PDA (owns the big jackpot vault)
     #[account(seeds = [JACKPOT_BIG_AUTH_SEED], bump = config.big_jackpot_auth_bump)]
@@ -50,7 +52,7 @@ pub struct ExecuteSwapMock<'info> {
 
     /// Read-only: its balance is snapshotted into round.big_jackpot_pool.
     #[account(associated_token::mint = ansem_mint, associated_token::authority = big_jackpot_authority)]
-    pub big_jackpot_vault: Account<'info, TokenAccount>,
+    pub big_jackpot_vault: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: SOL pot vault PDA
     #[account(mut, seeds = [POT_VAULT_SEED], bump = config.pot_vault_bump)]
@@ -108,7 +110,7 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     let pv_seeds: &[&[u8]] = &[POT_VAULT_SEED, &[pot_vault_bump]];
     system_program::transfer(
         CpiContext::new_with_signer(
-            ctx.accounts.system_program.to_account_info(),
+            ctx.accounts.system_program.key(),
             SolTransfer {
                 from: ctx.accounts.pot_vault.to_account_info(),
                 to: ctx.accounts.treasury.to_account_info(),
@@ -123,7 +125,7 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     let ma_seeds: &[&[u8]] = &[MINT_AUTH_SEED, &[mint_auth_bump]];
     token::mint_to(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.token_program.key(),
             MintTo {
                 mint: ctx.accounts.ansem_mint.to_account_info(),
                 to: ctx.accounts.payout_vault.to_account_info(),

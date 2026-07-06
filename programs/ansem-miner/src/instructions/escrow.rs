@@ -29,7 +29,7 @@ pub struct Deposit<'info> {
 pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
     system_program::transfer(
         CpiContext::new(
-            ctx.accounts.system_program.to_account_info(),
+            ctx.accounts.system_program.key(),
             Transfer {
                 from: ctx.accounts.authority.to_account_info(),
                 to: ctx.accounts.pot_vault.to_account_info(),
@@ -81,7 +81,7 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     let seeds: &[&[u8]] = &[POT_VAULT_SEED, &[bump]];
     system_program::transfer(
         CpiContext::new_with_signer(
-            ctx.accounts.system_program.to_account_info(),
+            ctx.accounts.system_program.key(),
             Transfer {
                 from: ctx.accounts.pot_vault.to_account_info(),
                 to: ctx.accounts.authority.to_account_info(),

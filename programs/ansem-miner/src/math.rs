@@ -1,11 +1,12 @@
-use anchor_lang::solana_program::keccak;
+use solana_keccak_hasher::hashv;
 
 use crate::constants::GRID_SIZE;
 
 /// Per-square payout multiplier in basis points, uniform in [min_bps, max_bps].
 pub fn multiplier_bps(randomness: &[u8; 32], square: u8, min_bps: u16, max_bps: u16) -> u16 {
-    let h = keccak::hashv(&[randomness, &[square]]);
-    let x = u16::from_le_bytes([h.0[0], h.0[1]]);
+    let h = hashv(&[randomness, &[square]]);
+    let b = h.as_ref();
+    let x = u16::from_le_bytes([b[0], b[1]]);
     let range = (max_bps - min_bps) as u32 + 1;
     min_bps + (x as u32 % range) as u16
 }
@@ -41,15 +42,16 @@ pub fn payout(player_weight: u128, total_weight: u128, proceeds: u64) -> u64 {
 /// jackpot tiers use distinct domains so their hits are uncorrelated).
 pub fn jackpot_hit(randomness: &[u8; 32], odds: u32, domain: &[u8]) -> bool {
     if odds == 0 { return false; }
-    let h = keccak::hashv(&[randomness, domain]);
-    let x = u32::from_le_bytes([h.0[0], h.0[1], h.0[2], h.0[3]]);
+    let h = hashv(&[randomness, domain]);
+    let b = h.as_ref();
+    let x = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
     x % odds == 0
 }
 
 /// Winning square in [0, GRID_SIZE). `domain` separates the two tiers' squares.
 pub fn jackpot_block(randomness: &[u8; 32], domain: &[u8]) -> u8 {
-    let h = keccak::hashv(&[randomness, domain]);
-    (h.0[0] as usize % GRID_SIZE) as u8
+    let h = hashv(&[randomness, domain]);
+    (h.as_ref()[0] as usize % GRID_SIZE) as u8
 }
 
 #[cfg(test)]

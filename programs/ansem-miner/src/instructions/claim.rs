@@ -87,7 +87,7 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
         let va_seeds: &[&[u8]] = &[VAULT_AUTH_SEED, &[va_bump]];
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.payout_vault.to_account_info(),
                     to: ctx.accounts.player_ata.to_account_info(),
@@ -115,7 +115,7 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
                 let sj_seeds: &[&[u8]] = &[JACKPOT_SM_AUTH_SEED, &[sj_bump]];
                 token::transfer(
                     CpiContext::new_with_signer(
-                        ctx.accounts.token_program.to_account_info(),
+                        ctx.accounts.token_program.key(),
                         Transfer {
                             from: ctx.accounts.small_jackpot_vault.to_account_info(),
                             to: ctx.accounts.player_ata.to_account_info(),
@@ -141,7 +141,7 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
                 let bj_seeds: &[&[u8]] = &[JACKPOT_BIG_AUTH_SEED, &[bj_bump]];
                 token::transfer(
                     CpiContext::new_with_signer(
-                        ctx.accounts.token_program.to_account_info(),
+                        ctx.accounts.token_program.key(),
                         Transfer {
                             from: ctx.accounts.big_jackpot_vault.to_account_info(),
                             to: ctx.accounts.player_ata.to_account_info(),

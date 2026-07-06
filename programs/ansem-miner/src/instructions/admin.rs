@@ -62,7 +62,7 @@ pub fn seed_small_jackpot(ctx: Context<SeedSmallJackpot>, amount: u64) -> Result
     let seeds: &[&[u8]] = &[MINT_AUTH_SEED, &[bump]];
     token::mint_to(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.token_program.key(),
             MintTo {
                 mint: ctx.accounts.ansem_mint.to_account_info(),
                 to: ctx.accounts.small_jackpot_vault.to_account_info(),
@@ -103,7 +103,7 @@ pub fn seed_big_jackpot(ctx: Context<SeedBigJackpot>, amount: u64) -> Result<()>
     let seeds: &[&[u8]] = &[MINT_AUTH_SEED, &[bump]];
     token::mint_to(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.token_program.key(),
             MintTo {
                 mint: ctx.accounts.ansem_mint.to_account_info(),
                 to: ctx.accounts.big_jackpot_vault.to_account_info(),
