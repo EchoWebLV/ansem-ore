@@ -95,4 +95,8 @@ pub mod ansem_miner {
     pub fn join_round(ctx: Context<JoinRound>, round_id: u64) -> Result<()> {
         instructions::round_entry::join_round_handler(ctx, round_id)
     }
+
+    pub fn reconcile_miner(ctx: Context<ReconcileMiner>, round_id: u64) -> Result<()> {
+        instructions::round_entry::reconcile_miner_handler(ctx, round_id)
+    }
 }

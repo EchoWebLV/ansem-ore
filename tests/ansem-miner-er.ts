@@ -34,6 +34,22 @@ async function awaitOwner(
   throw new Error(`account ${pubkey.toBase58()} not found after ${tries} tries`);
 }
 
+// Poll an ER-side account fetch until `pred` holds (handles ER read lag right
+// after a confirmed ER write).
+async function awaitEr<T>(
+  fetchFn: () => Promise<T>, pred: (v: T) => boolean, tries = 25
+): Promise<T> {
+  let last: T | undefined;
+  for (let i = 0; i < tries; i++) {
+    try {
+      last = await fetchFn();
+      if (pred(last)) return last;
+    } catch (_) { /* account may not be readable on the ER yet */ }
+    await sleep(300);
+  }
+  throw new Error(`ER predicate not satisfied after ${tries} tries (last=${JSON.stringify(last)})`);
+}
+
 // Base-layer (L1) provider + program — from ANCHOR_PROVIDER_URL/ANCHOR_WALLET.
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
@@ -63,6 +79,8 @@ const [configPda] = PublicKey.findProgramAddressSync([enc("config")], program.pr
 
 // Shared lifecycle state for the incremental (round 1) tests.
 const ROUND_ID = 1;
+const STAKE_BLOCK = 0;
+const STAKE_AMT = new anchor.BN(0.5 * anchor.web3.LAMPORTS_PER_SOL);
 const [round1Pda] = PublicKey.findProgramAddressSync(
   [enc("round"), roundSeed(ROUND_ID)],
   program.programId
@@ -170,5 +188,38 @@ describe("ansem-miner (ER)", () => {
       withdrawFailed = /WithdrawLocked/.test(e.toString());
     }
     assert.isTrue(withdrawFailed, "withdraw must be locked while joined to a round");
+  });
+
+  it("task 5: stake runs on the ER (delegated round/miner updated; L1 escrow untouched)", async () => {
+    const escrowBefore = await program.account.playerEscrow.fetch(escrowPda); // L1
+
+    // First real ER transaction: player stakes into the delegated round/miner.
+    await ephemeralProgram.methods.stake(STAKE_BLOCK, STAKE_AMT)
+      .accounts({
+        authority: player.publicKey, config: configPda,
+        round: round1Pda, miner: minerPda, escrow: escrowPda,
+      })
+      .signers([player])
+      .rpc({ skipPreflight: true, commitment: "confirmed" });
+
+    // ER-side: the delegated miner reflects the stake.
+    const miner = await awaitEr(
+      () => ephemeralProgram.account.minerPosition.fetch(minerPda),
+      (m: any) => m.blockStake[STAKE_BLOCK].toString() === STAKE_AMT.toString()
+    );
+    assert.equal(miner.roundId.toNumber(), ROUND_ID, "miner tagged to this round");
+    assert.equal(miner.reconciled, false, "reconciled reset false on new round");
+
+    // ER-side: the delegated round pot grew by the stake.
+    const round = await ephemeralProgram.account.round.fetch(round1Pda);
+    assert.equal(round.pot.toString(), STAKE_AMT.toString(), "round pot == stake");
+    assert.equal(round.blockSol[STAKE_BLOCK].toString(), STAKE_AMT.toString());
+
+    // L1-side: escrow balance is UNTOUCHED (debit relocated to reconcile_miner).
+    const escrowAfter = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(
+      escrowAfter.balance.toString(), escrowBefore.balance.toString(),
+      "ER stake must not debit L1 escrow"
+    );
   });
 });

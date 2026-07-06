@@ -2,9 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::constants::*;
 use crate::error::AnsemError;
-use crate::state::{
-    Config, MinerPosition, PlayerEscrow, Round, STATE_CLOSED, STATE_OPEN, STATE_SETTLED,
-};
+use crate::state::{Config, PlayerEscrow, Round, STATE_CLOSED, STATE_OPEN, STATE_SETTLED};
 
 // ---------------------------------------------------------------------------
 // cancel_round (admin escape hatch)
@@ -58,28 +56,28 @@ pub fn cancel_round_handler(ctx: Context<CancelRound>) -> Result<()> {
 // ---------------------------------------------------------------------------
 // refund (permissionless, per-player)
 //
-// For a Closed round, return the player's own staked lamports back into their
-// PlayerEscrow accounting so they can withdraw/stake again. Pure accounting: the
-// SOL never left the commingled pot_vault (stake only moved it from the escrow
-// tranche into the round's pot tranche), so we only reverse the bookkeeping —
-// no lamport or token transfer, and nothing moves to any external sink. The
-// dead round's `pot` is intentionally left stale (it is never swapped).
+// Release a Closed round's withdraw-lock for the calling player. Under the
+// M2a reconcile-at-commit escrow model, `stake` (on the ER) never debits
+// escrow — the debit happens only in `reconcile_miner`, which runs on a
+// *committed* round. A Closed (cancelled) round is never committed and thus
+// never reconciled, so no lamports were ever moved out of the player's escrow
+// tranche: there is NOTHING to credit back. refund therefore only clears
+// escrow.active_round so the player can withdraw/stake again.
+//
+// This also frees a join-without-stake player (joined the round, round then
+// cancelled before they staked): they hold the lock but have no stake, so the
+// gate is escrow.active_round — NOT miner.round_id — which is why the miner
+// account is not needed here. Pure accounting: no lamport/token transfer, no
+// external sink. The dead round's `pot` is intentionally left stale.
 // ---------------------------------------------------------------------------
 #[derive(Accounts)]
 #[instruction(round_id: u64)]
 pub struct Refund<'info> {
     pub authority: Signer<'info>,
 
-    #[account(mut, seeds = [CONFIG_SEED], bump = config.config_bump)]
-    pub config: Account<'info, Config>,
-
     #[account(seeds = [ROUND_SEED, round_id.to_le_bytes().as_ref()], bump = round.bump,
         constraint = round.round_id == round_id @ AnsemError::MinerRoundMismatch)]
     pub round: Account<'info, Round>,
-
-    #[account(mut, seeds = [MINER_SEED, authority.key().as_ref()], bump = miner.bump,
-        constraint = miner.authority == authority.key() @ AnsemError::Unauthorized)]
-    pub miner: Account<'info, MinerPosition>,
 
     #[account(mut, seeds = [ESCROW_SEED, authority.key().as_ref()], bump = escrow.bump,
         constraint = escrow.authority == authority.key() @ AnsemError::Unauthorized)]
@@ -89,28 +87,14 @@ pub struct Refund<'info> {
 pub fn refund_handler(ctx: Context<Refund>, round_id: u64) -> Result<()> {
     require!(ctx.accounts.round.state == STATE_CLOSED, AnsemError::RoundNotClosed);
 
-    let miner = &mut ctx.accounts.miner;
     let escrow = &mut ctx.accounts.escrow;
-
-    // The player must have an unrefunded, unclaimed stake in exactly this round.
-    require!(miner.round_id == round_id, AnsemError::MinerRoundMismatch);
+    // The player must be locked to exactly this round (they joined it). A second
+    // refund fails here because active_round is set to 0 below.
     require!(escrow.active_round == round_id, AnsemError::NothingToRefund);
 
-    let stake: u64 = miner.block_stake.iter().copied().sum();
-    require!(stake > 0, AnsemError::NothingToRefund);
-
-    // Reverse the stake-time accounting: lamports return from the round's pot
-    // tranche to the player's idle escrow tranche (both inside pot_vault).
-    escrow.balance = escrow.balance.checked_add(stake).ok_or(AnsemError::Overflow)?;
-    ctx.accounts.config.total_escrow_balance = ctx
-        .accounts
-        .config
-        .total_escrow_balance
-        .checked_add(stake)
-        .ok_or(AnsemError::Overflow)?;
-
-    // Clear the active round and mark this round resolved for the player so a
-    // second refund (or a claim) cannot double-pay.
+    // No credit: in the reconcile-at-commit model `stake` never debited escrow,
+    // and a Closed round is never reconciled, so there is nothing to reverse —
+    // refund only releases the withdraw-lock.
     escrow.active_round = 0;
     escrow.last_claimed_round = round_id;
     Ok(())

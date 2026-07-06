@@ -104,6 +104,8 @@ describe("ansem-miner", () => {
     [enc("round"), new anchor.BN(1).toArrayLike(Buffer, "le", 8)], program.programId)[0];
 
   it("stakes on two squares", async () => {
+    // join_round sets the withdraw-lock (no debit); stake no longer touches escrow.
+    await joinOnce(1, player);
     await program.methods.stake(3, new anchor.BN(0.3 * anchor.web3.LAMPORTS_PER_SOL))
       .accounts({ authority: player.publicKey, round: round1 }).signers([player]).rpc();
     await program.methods.stake(14, new anchor.BN(0.2 * anchor.web3.LAMPORTS_PER_SOL))
@@ -115,8 +117,11 @@ describe("ansem-miner", () => {
     const r = await program.account.round.fetch(round1);
     assert.equal(r.pot.toNumber(), 0.5 * anchor.web3.LAMPORTS_PER_SOL);
     const e = await program.account.playerEscrow.fetch(escrowPda);
-    assert.equal(e.activeRound.toNumber(), 1);
-    assert.equal(e.balance.toNumber(), 0.5 * anchor.web3.LAMPORTS_PER_SOL); // 1 SOL left after deposit(2)-withdraw(1); staked 0.5
+    assert.equal(e.activeRound.toNumber(), 1); // locked by join_round
+    // Escrow is NOT debited at stake time under reconcile-at-commit: balance
+    // stays 1 SOL (deposit 2 - withdraw 1); the 0.5 staked is debited only at
+    // reconcile_miner, which this abandoned round never reaches (it's cancelled).
+    assert.equal(e.balance.toNumber(), anchor.web3.LAMPORTS_PER_SOL);
   });
 
   it("rejects an out-of-range block", async () => {
@@ -129,7 +134,9 @@ describe("ansem-miner", () => {
 
   it("rejects staking beyond escrow balance", async () => {
     try {
-      await program.methods.stake(1, new anchor.BN(100 * anchor.web3.LAMPORTS_PER_SOL))
+      // prior staked 0.5 + 2 SOL = 2.5 > balance 1.0 (but < 100 SOL cap, so this
+      // trips the soft budget check, not StakeTooLarge).
+      await program.methods.stake(1, new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
         .accounts({ authority: player.publicKey, round: round1 }).signers([player]).rpc();
       assert.fail("should have thrown");
     } catch (e:any) { assert.include(e.toString(), "InsufficientBalance"); }
@@ -191,6 +198,30 @@ describe("ansem-miner", () => {
     throw new Error("round never became settleable after polling");
   }
 
+  // M2a escrow lifecycle helpers. Under reconcile-at-commit, a round's L1
+  // escrow flow is: join_round (lock, NO debit) -> stake(s) -> reconcile_miner
+  // (debit from the committed block_stake, release the lock). In production the
+  // stake(s) run on the ER and reconcile runs on L1 after commit; on base we
+  // call them directly so these game-logic tests exercise the *real* accounting
+  // (stake no longer debits escrow itself). Call joinOnce once per player/round
+  // before their first stake, and reconcile once per player before the swap.
+  async function joinOnce(roundId: number, p: anchor.web3.Keypair) {
+    const [esc] = PublicKey.findProgramAddressSync(
+      [enc("escrow"), p.publicKey.toBuffer()], program.programId);
+    await program.methods.joinRound(new anchor.BN(roundId))
+      .accounts({ authority: p.publicKey, config: configPda, escrow: esc })
+      .signers([p]).rpc();
+  }
+  async function reconcile(p: anchor.web3.Keypair) {
+    const [esc] = PublicKey.findProgramAddressSync(
+      [enc("escrow"), p.publicKey.toBuffer()], program.programId);
+    const [mnr] = PublicKey.findProgramAddressSync(
+      [enc("miner"), p.publicKey.toBuffer()], program.programId);
+    const roundId = (await program.account.playerEscrow.fetch(esc)).activeRound.toNumber();
+    await program.methods.reconcileMiner(new anchor.BN(roundId))
+      .accounts({ config: configPda, escrow: esc, miner: mnr }).rpc();
+  }
+
   it("cancels an abandoned round 1 and refunds the staker (escape hatch)", async () => {
     // round 1 (15s duration) was staked by `player` and never settled — the
     // classic wedge. Wait out its deadline, then admin cancels it (Open + past
@@ -216,18 +247,22 @@ describe("ansem-miner", () => {
     assert.equal(rClosed.state, 5); // STATE_CLOSED
     assert.isTrue((await program.account.config.fetch(configPda)).currentRoundFinalized);
 
-    // player staked 0.5 SOL on round 1 (0.3 + 0.2); refund returns it to escrow.
+    // player joined + staked 0.5 SOL on round 1 (0.3 + 0.2). Under reconcile-at-
+    // commit, stake never debited escrow, and this abandoned round is never
+    // reconciled — so refund only RELEASES the withdraw-lock; it credits nothing
+    // (balance and total_escrow_balance are unchanged by refund).
     const eBefore = await program.account.playerEscrow.fetch(escrowPda);
     assert.equal(eBefore.activeRound.toNumber(), 1);
+    assert.equal(eBefore.balance.toNumber(), anchor.web3.LAMPORTS_PER_SOL); // never debited
     const teBefore = (await program.account.config.fetch(configPda)).totalEscrowBalance.toNumber();
     await program.methods.refund(new anchor.BN(1))
       .accounts({ authority: player.publicKey, round: round1 }).signers([player]).rpc();
     const eAfter = await program.account.playerEscrow.fetch(escrowPda);
-    assert.equal(eAfter.balance.toNumber(), anchor.web3.LAMPORTS_PER_SOL); // 0.5 -> 1.0 SOL
-    assert.equal(eAfter.activeRound.toNumber(), 0);
+    assert.equal(eAfter.balance.toNumber(), anchor.web3.LAMPORTS_PER_SOL); // unchanged (no credit)
+    assert.equal(eAfter.activeRound.toNumber(), 0); // lock released
     assert.equal(eAfter.lastClaimedRound.toNumber(), 1);
     const teAfter = (await program.account.config.fetch(configPda)).totalEscrowBalance.toNumber();
-    assert.equal(teAfter - teBefore, 0.5 * anchor.web3.LAMPORTS_PER_SOL);
+    assert.equal(teAfter - teBefore, 0); // refund moves no escrow accounting
 
     // double refund is rejected (nothing left to refund)
     try {
@@ -282,7 +317,7 @@ describe("ansem-miner", () => {
   const p2 = anchor.web3.Keypair.generate();
 
   it("mock-swaps a settled round's pot into ANSEM", async () => {
-    const { pda } = await freshInstantRound(3);
+    const { id, pda } = await freshInstantRound(3);
     // Use a second fresh player to avoid the unclaimed-round guard from the
     // earlier player (player already staked round1 and hasn't claimed it).
     const sig = await provider.connection.requestAirdrop(p2.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
@@ -290,8 +325,11 @@ describe("ansem-miner", () => {
     await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
       .accounts({ authority: p2.publicKey }).signers([p2]).rpc();
     await program.methods.initMiner().accounts({ authority: p2.publicKey }).signers([p2]).rpc();
+    await joinOnce(id, p2);
     await program.methods.stake(5, new anchor.BN(anchor.web3.LAMPORTS_PER_SOL))
       .accounts({ authority: p2.publicKey, round: pda }).signers([p2]).rpc();
+    // reconcile debits escrow from block_stake — required or the swap is Insolvent.
+    await reconcile(p2);
     await settleAfterDeadline(pda, Buffer.alloc(32, 3));
 
     await program.methods.executeSwapMock().accounts(swapAccounts(pda)).rpc();
@@ -361,8 +399,10 @@ describe("ansem-miner", () => {
     await program.methods.initMiner().accounts({ authority: pA.publicKey }).signers([pA]).rpc();
 
     const roundA = await freshInstantRound(4);
+    await joinOnce(roundA.id, pA);
     await program.methods.stake(2, new anchor.BN(0.6 * anchor.web3.LAMPORTS_PER_SOL))
       .accounts({ authority: pA.publicKey, round: roundA.pda }).signers([pA]).rpc();
+    await reconcile(pA);
 
     await settleAfterDeadline(roundA.pda, Buffer.alloc(32, 7));
 
@@ -415,12 +455,14 @@ describe("ansem-miner", () => {
       await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
     }
     const { id, pda } = await freshInstantRound(4);
+    for (const p of players) await joinOnce(id, p);
     // varied stakes across squares
     await program.methods.stake(0, new anchor.BN(0.3e9)).accounts({ authority: players[0].publicKey, round: pda }).signers([players[0]]).rpc();
     await program.methods.stake(1, new anchor.BN(0.2e9)).accounts({ authority: players[0].publicKey, round: pda }).signers([players[0]]).rpc();
     await program.methods.stake(1, new anchor.BN(0.5e9)).accounts({ authority: players[1].publicKey, round: pda }).signers([players[1]]).rpc();
     await program.methods.stake(7, new anchor.BN(0.1e9)).accounts({ authority: players[1].publicKey, round: pda }).signers([players[1]]).rpc();
     await program.methods.stake(7, new anchor.BN(0.9e9)).accounts({ authority: players[2].publicKey, round: pda }).signers([players[2]]).rpc();
+    for (const p of players) await reconcile(p);
 
     await settleAfterDeadline(pda, Buffer.alloc(32, 42));
     await program.methods.executeSwapMock().accounts(swapAccounts(pda)).rpc();
@@ -466,10 +508,12 @@ describe("ansem-miner", () => {
     // Sole staker stakes both winning squares (dedup if they coincide) so both
     // tiers pay; sole staker => main payout == full proceeds regardless.
     const blocks = smallBlock === bigBlock ? [smallBlock] : [smallBlock, bigBlock];
+    await joinOnce(id, p);
     for (const b of blocks) {
       await program.methods.stake(b, new anchor.BN(0.5e9))
         .accounts({ authority: p.publicKey, round: pda }).signers([p]).rpc();
     }
+    await reconcile(p);
 
     await settleAfterDeadline(pda, rnd);
     await program.methods.executeSwapMock().accounts(swapAccounts(pda)).rpc();
@@ -515,10 +559,14 @@ describe("ansem-miner", () => {
     const rnd = Buffer.alloc(32, 5);
     const smallBlock = computeJackpotBlock(rnd, "jkblock_sm");
     // both stake the SAME amount on the SAME winning square
+    await joinOnce(id, pa);
+    await joinOnce(id, pb);
     await program.methods.stake(smallBlock, new anchor.BN(1e9))
       .accounts({ authority: pa.publicKey, round: pda }).signers([pa]).rpc();
     await program.methods.stake(smallBlock, new anchor.BN(1e9))
       .accounts({ authority: pb.publicKey, round: pda }).signers([pb]).rpc();
+    await reconcile(pa);
+    await reconcile(pb);
 
     await settleAfterDeadline(pda, rnd);
     await program.methods.executeSwapMock().accounts(swapAccounts(pda)).rpc();
@@ -578,9 +626,11 @@ describe("ansem-miner", () => {
     // initMiner
     await program.methods.initMiner().accounts({ authority: fresh.publicKey }).signers([fresh]).rpc();
 
-    // stake (sole staker on this round)
+    // join_round (lock) -> stake (sole staker) -> reconcile_miner (debit)
+    await joinOnce(id, fresh);
     await program.methods.stake(11, new anchor.BN(stakeAmount))
       .accounts({ authority: fresh.publicKey, round: roundPda }).signers([fresh]).rpc();
+    await reconcile(fresh);
 
     // settle (admin, injected randomness) — poll past the deadline
     await settleAfterDeadline(roundPda, Buffer.alloc(32, 21));

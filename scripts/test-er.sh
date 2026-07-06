@@ -74,6 +74,13 @@ pkill -f "solana-test-validator" 2>/dev/null || true
 pkill -f "ephemeral-validator" 2>/dev/null || true
 sleep 1
 
+# Purge BOTH on-disk stores. `--reset` on the ephemeral-validator does NOT clear
+# magicblock-test-storage/ (its accountsdb + rocksdb), so a delegated account
+# (e.g. a Round PDA) from a PRIOR run gets served STALE on the ER — masking the
+# freshly created account on base and, for time-gated logic, replaying a long-
+# expired deadline. Nuke both so every run starts from a true genesis.
+rm -rf "$REPO_ROOT/test-ledger" "$REPO_ROOT/magicblock-test-storage" 2>/dev/null || true
+
 solana config set --url http://127.0.0.1:8899 >/dev/null 2>&1
 
 echo "Starting base validator (mb-test-validator, program preloaded at genesis)..."

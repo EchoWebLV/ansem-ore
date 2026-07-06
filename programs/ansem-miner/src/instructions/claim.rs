@@ -156,9 +156,11 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
     }
 
     // NOTE: claim intentionally does NOT touch Config.total_escrow_balance —
-    // the staked SOL already left escrow (and total_escrow_balance) at stake
-    // time, and claim only ever moves ANSEM (payout_vault/jackpot_vault),
-    // never SOL/escrow lamports.
+    // the staked SOL already left escrow (and total_escrow_balance) at
+    // reconcile_miner time (M2a reconcile-at-commit), and claim only ever moves
+    // ANSEM (payout_vault/jackpot_vault), never SOL/escrow lamports.
+    // active_round was already cleared by reconcile_miner; re-zeroing it here is
+    // redundant-but-harmless (keeps claim correct if ever called pre-reconcile).
     escrow.last_claimed_round = round_id;
     escrow.active_round = 0;
     Ok(())
