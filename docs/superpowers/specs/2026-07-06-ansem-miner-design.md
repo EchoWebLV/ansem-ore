@@ -109,7 +109,13 @@ M2a implements the ER split with a **reconcile-at-commit + up-front-lock** escro
 
 **Known M2a limitation (admin-trust edge, follow-up):** because the debit now happens at `reconcile_miner` and `refund` no longer credits, a player who was *reconciled* for a round that is then *cancelled* cannot `refund` their debited stake (reconcile cleared `active_round`, and `refund` only unlocks). This is only reachable if the admin cancels a SETTLED+reconciled round instead of completing the (permissionless, always-solvent-once-all-reconciled) swap — an admin anomaly, which M2a's admin-trust model excludes. A full fix (make `refund` credit reconciled players, or forbid cancelling a reconciled round) is deferred.
 
-VRF (`request_settle`/`settle_callback`) and session keys are **M2b/M2c**, not M2a — M2a keeps M1's admin-injected `settle`.
+Session keys are **M2c**, not M2a. VRF (`request_settle`/`settle_callback`) shipped in **M2b** (below); M2a kept M1's admin-injected `settle`.
+
+### M2b VRF settle (as-built) — supersedes the "ER" placement in §3/§4 for settle
+
+Real MagicBlock ephemeral VRF replaces admin-injected randomness. `request_settle` (admin-gated; `Open` + past-deadline → `VrfPending`) fires `create_request_randomness_ix`; `settle_callback` (authorized *only* by the injected `VRF_PROGRAM_IDENTITY` signer; one-shot `require!(state == VrfPending)`) writes the drawn randomness, rolls both jackpot tiers with the M1 math, and sets `Settled`. M1 admin `settle` is retained as a devnet/test fallback (mainnet gates it out).
+
+**Settle runs on L1 (post-commit), NOT in the ER — a deliberate change from §4's ER placement.** An in-ER VRF request must write the oracle queue, but the local `ephemeral-validator` does not delegate that queue to itself, so the ER's Magic finalizer rejects the write (`InvalidWritableAccount`) regardless of lifecycle (`ephemeral`/`replica`) or oracle state — the foundation's unresolved risk §7.4, now confirmed. Since settle is a rare per-round event that needs no ER speed, the flow is `stake (ER) → commit (undelegate) → request_settle (L1) → base oracle → settle_callback (L1) → reconcile → swap → claim`. On L1 the queue is an ordinary writable account and the base oracle fulfills the request (the standard VRF path). The program code is unchanged — only the invocation moved from ER to L1. **Liveness:** `cancel_round` now also accepts a past-deadline `VrfPending` round, so a request the oracle never fulfills can't strand the game/escrow. **Pin:** `ephemeral-vrf-sdk =0.3.0` (matches `vrf-oracle 0.3.0`; yanked, so the lock entry is seeded from the reference example). **Follow-up:** in-ER settle is possible on managed MagicBlock infra (devnet/mainnet) where the ER's VRF queue is delegated to the validator — not needed for the mechanic.
 
 ### Swap adapter (the devnet/mainnet seam)
 One program-level interface, two modes set in `Config.swap_mode`:

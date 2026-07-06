@@ -82,13 +82,29 @@ Run the two-provider local stack (base `mb-test-validator` + `ephemeral-validato
 bash scripts/test-er.sh          # tests/ansem-miner-er.ts, 8/8
 ```
 
-VRF and session keys are **not** in M2a — real ephemeral VRF is **M2b**, session keys are **M2c**.
+Session keys are **not** in M2a — they are **M2c**.
+
+## M2b: ephemeral VRF settle (implemented)
+
+M2b replaces the *source* of settle randomness with a real **MagicBlock ephemeral VRF** draw — no admin-chosen randomness. Two new instructions:
+
+- **`request_settle(client_seed)`** (admin-gated): on a past-deadline `Open` round, fires `create_request_randomness_ix` to the VRF oracle queue and sets `VrfPending`. The `client_seed` is mixed with `round_id` so each round draws independently.
+- **`settle_callback(randomness)`**: the VRF oracle CPIs here, proven by an injected `VRF_PROGRAM_IDENTITY` signer (the *only* authorizer). A one-shot `require!(state == VrfPending)` guard blocks replay. It writes the drawn randomness + rolls both jackpot tiers (the M1 jackpot math, reused verbatim) and sets `Settled`.
+
+The M1 admin `settle` is kept as a devnet/test fallback (mainnet gates it out); both paths produce identical `Settled` state.
+
+**Settle runs on L1, after commit** — not inside the ER. Settle is a once-per-round event that doesn't need the ER hot path, and the local `ephemeral-validator` doesn't delegate the VRF oracle queue to itself, so an in-ER request writing that queue is rejected (`InvalidWritableAccount`). On L1 the queue is an ordinary writable account and the base oracle fulfills the request — the standard, proven VRF path. The ER still owns the staking hot path; only the rare settle draw is on L1. A `VrfPending` round the oracle never fulfills is recoverable: `cancel_round` accepts it (past-deadline → `Closed` → `refund`).
+
+```bash
+TEST_FILE=tests/ansem-miner-vrf.ts bash scripts/test-er.sh   # ephemeral-VRF e2e, 2/2
+```
+
+The pin is `ephemeral-vrf-sdk =0.3.0` (matches the installed `vrf-oracle 0.3.0`; the crate is yanked, so the exact lock entry is seeded from the working reference example). The VRF suite spawns the base oracle itself, up only for the request→callback window.
 
 ## Deferred milestones
 
 Not built in this repository yet — tracked for later work:
 
-- **M2b**: real MagicBlock ephemeral VRF for `settle` (`request_settle` / `settle_callback` replacing the injected-randomness admin path).
 - **M2c**: session keys (gasless, popup-free ER staking without per-tx wallet approval).
 - **M3**: Devnet deployment and Metaplex token metadata for the ANSEM mint.
 - **M4**: The Next.js frontend.
