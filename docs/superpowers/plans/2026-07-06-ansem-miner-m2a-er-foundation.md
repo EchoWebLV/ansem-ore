@@ -436,6 +436,8 @@ Wire into `lib.rs`:
 
 **Change summary:** `escrow`/`config` are read-only clones in the ER, so `stake` must not write them. Remove both decrement lines and the `active_round` read/write; keep the block_stake reset, cap checks, and distribution. Add a **soft** budget check `prior + amount <= escrow.balance` (against the clone). Reset `miner.reconciled = false` on new-round entry.
 
+> **Forward-compat (Private ER / sealed-bid rounds — deferred):** do **not** emit per-square stake amounts or player positions via public `msg!` logs in this handler (the code below already emits none — keep it that way). ANSEM Miner targets transparent ER for M2; a later per-account privacy toggle (`set_privacy` on an `EphemeralPermission`, MagicBlock TEE-backed PER) could hide live per-square stakes until the deadline for a sealed-bid feel, then reveal on commit. Costs nothing now, and means flipping privacy on later needs no rework here. See the "Privacy (PER) — deferred" note in the design spec.
+
 - [ ] **Step 1: Write the failing ER test (stake writes delegated state, escrow untouched)**
 
 ```ts
