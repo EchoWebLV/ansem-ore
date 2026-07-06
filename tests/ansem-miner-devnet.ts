@@ -442,4 +442,88 @@ describe("ansem-miner (M3 devnet)", () => {
     assert.isAbove(minted, 0, "player mined ANSEM via a real-VRF-settled devnet round");
     console.log(`   ✓ mined ${minted} ANSEM via the full VRF-settled devnet flow`);
   });
+
+  it("phase 4: full e2e — session-key ER stake -> VRF settle -> claim (gasless, wallet never signs the stake)", async function () {
+    this.timeout(600000);
+    const player = Keypair.generate();
+    const [escrowPda] = PublicKey.findProgramAddressSync([enc("escrow"), player.publicKey.toBuffer()], program.programId);
+    const [minerPda] = PublicKey.findProgramAddressSync([enc("miner"), player.publicKey.toBuffer()], program.programId);
+    const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
+    const STAKE = new anchor.BN(0.02 * anchor.web3.LAMPORTS_PER_SOL);
+
+    await ensureInitialized();
+    await fundFromAdmin(player.publicKey, 0.1 * anchor.web3.LAMPORTS_PER_SOL);
+    await l1Send(() => program.methods.deposit(new anchor.BN(0.05 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: player.publicKey }).signers([player]).rpc());
+    await program.methods.initMiner().accounts({ authority: player.publicKey }).signers([player]).rpc()
+      .catch((e: any) => { if (!/already in use/.test(String(e))) throw e; });
+
+    // Mint a SessionTokenV2 on L1 against the live devnet gum program (one wallet approval).
+    const gum = new SessionTokenManager(new anchor.Wallet(player), provider.connection).program;
+    const sessionKp = Keypair.generate();
+    const [tokenPda] = PublicKey.findProgramAddressSync(
+      [enc("session_token_v2"), program.programId.toBuffer(), sessionKp.publicKey.toBuffer(), player.publicKey.toBuffer()], gum.programId);
+    await l1Send(() => gum.methods.createSessionV2(false, new anchor.BN(Math.floor(Date.now() / 1000) + 900), null)
+      .accounts({ sessionToken: tokenPda, sessionSigner: sessionKp.publicKey, feePayer: player.publicKey, authority: player.publicKey, targetProgram: program.programId })
+      .signers([sessionKp]).rpc());
+    const { id, pda: roundPda } = await createFreshRound(90);
+
+    await l1Send(() => program.methods.delegateRound(new anchor.BN(id))
+      .accounts({ payer: admin.publicKey, round: roundPda })
+      .remainingAccounts(validatorMeta).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, roundPda, DLP_PROGRAM_ID);
+    await l1Send(() => program.methods.delegateMiner()
+      .accounts({ payer: player.publicKey, miner: minerPda })
+      .remainingAccounts(validatorMeta).signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, minerPda, DLP_PROGRAM_ID);
+    await l1Send(() => program.methods.joinRound(new anchor.BN(id))
+      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc());
+    await awaitJoined(escrowPda, id);
+
+    // ER stake signed ONLY by the ephemeral session key — the player wallet never
+    // signs the stake (the gasless headline). authority = sessionKp; token supplied.
+    for (let i = 0; i < 8; i++) {
+      const m: any = await ephemeralProgram.account.minerPosition.fetch(minerPda).catch(() => null);
+      if (m && m.blockStake[0].toString() === STAKE.toString()) break;
+      await erRpcTolerant(() => ephemeralProgram.methods.stake(0, STAKE)
+        .accounts({ authority: sessionKp.publicKey, config: configPda, round: roundPda, miner: minerPda, escrow: escrowPda, sessionToken: tokenPda })
+        .signers([sessionKp]).rpc({ skipPreflight: true, commitment: "confirmed" }));
+      await sleep(2500);
+    }
+    await awaitEr(() => ephemeralProgram.account.minerPosition.fetch(minerPda),
+      (m: any) => m.blockStake[0].toString() === STAKE.toString(), 15);
+    console.log("   ✓ ER stake signed ONLY by the session key (wallet never signed the stake)");
+
+    await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
+      .accounts({ payer: admin.publicKey, config: configPda, round: roundPda }).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, roundPda, program.programId.toBase58());
+    await erRpcTolerant(() => ephemeralProgram.methods.commitMiner()
+      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
+      .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
+
+    for (let i = 0; i < 90; i++) {
+      const r: any = await program.account.round.fetch(roundPda).catch(() => null);
+      if (r && r.state !== 0) break;
+      try {
+        await program.methods.requestSettle(9)
+          .accounts({ payer: admin.publicKey, round: roundPda, config: configPda, oracleQueue: VRF_BASE_QUEUE })
+          .rpc({ commitment: "confirmed" });
+      } catch (e: any) {
+        if (!/RoundNotEnded|BadRoundState|Blockhash not found|429|rate limited|Too Many Requests|not confirmed|block height/i.test(String(e))) throw e;
+      }
+      await sleep(2000);
+    }
+    const settled: any = await awaitEr(() => program.account.round.fetch(roundPda), (r: any) => r.state === 2, 300);
+    assert.notDeepEqual([...settled.randomness], new Array(32).fill(0), "oracle drew nonzero randomness");
+
+    await l1Send(() => program.methods.reconcileMiner(new anchor.BN(id))
+      .accounts({ config: configPda, escrow: escrowPda, miner: minerPda }).rpc());
+    await l1Send(() => program.methods.executeSwapMock().accounts(swapAccounts(roundPda)).rpc());
+    await l1Send(() => program.methods.claim(new anchor.BN(id))
+      .accounts(claimAccounts(player.publicKey, playerAta, roundPda)).signers([player]).rpc());
+    const minted = await awaitEr(async () => Number((await getAccount(provider.connection, playerAta)).amount), (a: number) => a > 0, 25);
+    assert.isAbove(minted, 0, "player mined ANSEM via the full gasless session->VRF devnet flow");
+    console.log(`   ✓ E2E: session-key stake -> VRF settle -> mined ${minted} ANSEM on devnet`);
+  });
 });
