@@ -25,4 +25,8 @@ pub mod ansem_miner {
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         instructions::escrow::withdraw(ctx, amount)
     }
+
+    pub fn create_round(ctx: Context<CreateRound>) -> Result<()> {
+        instructions::round::handler(ctx)
+    }
 }

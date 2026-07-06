@@ -47,4 +47,17 @@ describe("ansem-miner", () => {
     const e = await program.account.playerEscrow.fetch(escrowPda);
     assert.equal(e.balance.toNumber(), anchor.web3.LAMPORTS_PER_SOL);
   });
+
+  it("creates round 1", async () => {
+    const [round1] = PublicKey.findProgramAddressSync(
+      [enc("round"), new anchor.BN(1).toArrayLike(Buffer, "le", 8)], program.programId);
+    await program.methods.createRound()
+      .accounts({ payer: admin.publicKey, round: round1 }).rpc();
+    const cfg = await program.account.config.fetch(configPda);
+    assert.equal(cfg.currentRoundId.toNumber(), 1);
+    const r = await program.account.round.fetch(round1);
+    assert.equal(r.roundId.toNumber(), 1);
+    assert.equal(r.state, 0);
+    assert.isAbove(r.deadlineTs.toNumber(), Math.floor(Date.now()/1000));
+  });
 });
