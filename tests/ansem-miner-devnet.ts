@@ -8,8 +8,8 @@ import { assert } from "chai";
 
 // ANSEM Miner — M3 devnet smoke. Reuses the proven flow (mirrors ansem-miner-vrf.ts)
 // but adapted for DEVNET: idempotent (no genesis reset), player funded by transfer
-// (devnet airdrop is throttled), a FRESH round-id per run, the hosted MagicBlock ER
-// router, and the real permissioned VRF oracle. All endpoints come from
+// (devnet airdrop is throttled), a FRESH round-id per run, a regional MagicBlock ER
+// endpoint (NOT the router), and the real permissioned VRF oracle. All endpoints from
 // scripts/devnet-env.sh via process.env — `source` it before running.
 
 const DLP_PROGRAM_ID = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
@@ -59,10 +59,12 @@ anchor.setProvider(provider);
 const program = anchor.workspace.AnsemMiner as Program<AnsemMiner>;
 const admin = provider.wallet as anchor.Wallet;
 
-// ER provider — the hosted MagicBlock devnet router (auto-routes per-tx by delegation).
+// ER provider — a SPECIFIC regional MagicBlock devnet ER endpoint (NOT the router:
+// ER writes through devnet-router.magicblock.app fail "Blockhash not found"). Must
+// match the region of the validator we delegate to (VALIDATOR). Set via devnet-env.sh.
 const erConnection = new Connection(
-  process.env.EPHEMERAL_PROVIDER_ENDPOINT || "https://devnet-router.magicblock.app",
-  { wsEndpoint: process.env.EPHEMERAL_WS_ENDPOINT || "wss://devnet-router.magicblock.app", commitment: "confirmed" }
+  process.env.EPHEMERAL_PROVIDER_ENDPOINT || "https://devnet-us.magicblock.app",
+  { wsEndpoint: process.env.EPHEMERAL_WS_ENDPOINT || "wss://devnet-us.magicblock.app", commitment: "confirmed" }
 );
 const erProvider = new anchor.AnchorProvider(erConnection, anchor.Wallet.local(), { commitment: "confirmed" });
 const ephemeralProgram = new Program<AnsemMiner>(program.idl, erProvider);
@@ -122,11 +124,24 @@ function nextRoundPda(id: number): PublicKey {
 async function createFreshRound(durationSecs = 25): Promise<{ id: number; pda: PublicKey }> {
   const cfg0: any = await program.account.config.fetch(configPda);
   if (!cfg0.currentRoundFinalized && cfg0.currentRoundId.toNumber() > 0) {
-    const curPda = nextRoundPda(cfg0.currentRoundId.toNumber());
-    const r: any = await program.account.round.fetch(curPda).catch(() => null);
-    if (r && r.state !== 4 && r.state !== 5) { // not Claimable/Closed → cancelable
-      console.log(`   self-heal: cancelling stranded round ${cfg0.currentRoundId} (state=${r.state})`);
-      await retryPastDeadline(() => program.methods.cancelRound().accounts({ admin: admin.publicKey, round: curPda }).rpc(), "self-heal cancel");
+    const curId = cfg0.currentRoundId.toNumber();
+    const curPda = nextRoundPda(curId);
+    const info = await provider.connection.getAccountInfo(curPda, "confirmed");
+    if (info) {
+      // A prior ER run may have left the round DELEGATED (DLP-owned) — commit +
+      // undelegate it back to L1 before it can be cancelled (M2a task-9 pattern).
+      if (info.owner.toBase58() === DLP_PROGRAM_ID) {
+        console.log(`   self-heal: committing delegated stranded round ${curId} back to L1`);
+        await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
+          .accounts({ payer: admin.publicKey, config: configPda, round: curPda })
+          .rpc({ skipPreflight: true, commitment: "confirmed" }));
+        await awaitOwnerIs(provider.connection, curPda, program.programId.toBase58());
+      }
+      const r: any = await program.account.round.fetch(curPda).catch(() => null);
+      if (r && r.state !== 4 && r.state !== 5) { // not Claimable/Closed → cancelable
+        console.log(`   self-heal: cancelling stranded round ${curId} (state=${r.state})`);
+        await retryPastDeadline(() => program.methods.cancelRound().accounts({ admin: admin.publicKey, round: curPda }).rpc(), "self-heal cancel");
+      }
     }
   }
   await program.methods.setRoundDuration(new anchor.BN(durationSecs)).accounts({ admin: admin.publicKey }).rpc();
@@ -147,7 +162,7 @@ async function awaitJoined(escrowPda: PublicKey, id: number) {
 // The on-chain (validator) clock LAGS real wall-clock on devnet, so a deadline-gated
 // call (settle / cancel_round) is rejected even after local Date.now() passes the
 // deadline. Retry the actual instruction until the validator clock catches up.
-async function retryPastDeadline(fn: () => Promise<any>, label: string, tries = 45): Promise<void> {
+async function retryPastDeadline(fn: () => Promise<any>, label: string, tries = 110): Promise<void> {
   for (let i = 0; i < tries; i++) {
     try { await fn(); return; }
     catch (e: any) {
@@ -157,6 +172,20 @@ async function retryPastDeadline(fn: () => Promise<any>, label: string, tries = 
     }
   }
   await fn(); // final attempt surfaces the real error if it still fails
+}
+
+// Retry a base-L1 send on PRE-send transient RPC failures ONLY (blockhash-fetch
+// 429 / rate-limit from the dev-tier endpoint). Safe from double-execution: the
+// tx never left the client. Does NOT retry post-send/confirmation failures.
+async function l1Send(fn: () => Promise<any>, tries = 6): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    try { await fn(); return; }
+    catch (e: any) {
+      const s = String(e);
+      if (i === tries - 1 || !/failed to get recent blockhash|getLatestBlockhash|429|rate limited|Too Many Requests/i.test(s)) throw e;
+      await sleep(2000 * (i + 1));
+    }
+  }
 }
 
 describe("ansem-miner (M3 devnet)", () => {
@@ -172,8 +201,8 @@ describe("ansem-miner (M3 devnet)", () => {
     const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
 
     await ensureInitialized();
-    await fundFromAdmin(player.publicKey, 0.8 * anchor.web3.LAMPORTS_PER_SOL);
-    await program.methods.deposit(new anchor.BN(0.5 * anchor.web3.LAMPORTS_PER_SOL))
+    await fundFromAdmin(player.publicKey, 0.1 * anchor.web3.LAMPORTS_PER_SOL);
+    await program.methods.deposit(new anchor.BN(0.05 * anchor.web3.LAMPORTS_PER_SOL))
       .accounts({ authority: player.publicKey }).signers([player]).rpc();
 
     const { id, pda: roundPda } = await createFreshRound();
@@ -184,7 +213,7 @@ describe("ansem-miner (M3 devnet)", () => {
     await program.methods.joinRound(new anchor.BN(id))
       .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc();
     await awaitJoined(escrowPda, id);
-    await program.methods.stake(0, new anchor.BN(0.3 * anchor.web3.LAMPORTS_PER_SOL))
+    await program.methods.stake(0, new anchor.BN(0.02 * anchor.web3.LAMPORTS_PER_SOL))
       .accounts({ authority: player.publicKey, config: configPda, round: roundPda, miner: minerPda, escrow: escrowPda, sessionToken: null })
       .signers([player]).rpc();
 
@@ -214,8 +243,8 @@ describe("ansem-miner (M3 devnet)", () => {
     const [minerPda] = PublicKey.findProgramAddressSync([enc("miner"), player.publicKey.toBuffer()], program.programId);
 
     await ensureInitialized();
-    await fundFromAdmin(player.publicKey, 0.8 * anchor.web3.LAMPORTS_PER_SOL);
-    await program.methods.deposit(new anchor.BN(0.5 * anchor.web3.LAMPORTS_PER_SOL))
+    await fundFromAdmin(player.publicKey, 0.1 * anchor.web3.LAMPORTS_PER_SOL);
+    await program.methods.deposit(new anchor.BN(0.05 * anchor.web3.LAMPORTS_PER_SOL))
       .accounts({ authority: player.publicKey }).signers([player]).rpc();
     await program.methods.initMiner().accounts({ authority: player.publicKey }).signers([player]).rpc()
       .catch((e: any) => { if (!/already in use/.test(String(e))) throw e; });
@@ -234,7 +263,7 @@ describe("ansem-miner (M3 devnet)", () => {
     };
     const nowSec = () => Math.floor(Date.now() / 1000);
     const sessionStake = (authority: Keypair, roundPda: PublicKey, tokenPda: PublicKey) =>
-      program.methods.stake(0, new anchor.BN(0.25 * anchor.web3.LAMPORTS_PER_SOL))
+      program.methods.stake(0, new anchor.BN(0.02 * anchor.web3.LAMPORTS_PER_SOL))
         .accounts({ authority: authority.publicKey, config: configPda, round: roundPda, miner: minerPda, escrow: escrowPda, sessionToken: tokenPda })
         .signers([authority]).rpc();
 
@@ -265,5 +294,69 @@ describe("ansem-miner (M3 devnet)", () => {
     // Finalize: cancel once the validator clock passes the deadline, refund the lock.
     await retryPastDeadline(() => program.methods.cancelRound().accounts({ admin: admin.publicKey, round: roundPda }).rpc(), "cancel");
     await program.methods.refund(new anchor.BN(id)).accounts({ authority: player.publicKey, round: roundPda }).signers([player]).rpc();
+  });
+
+  it("phase 2: ER stake via the devnet ER -> commit round-trip to L1", async function () {
+    this.timeout(360000);
+    const player = Keypair.generate();
+    const [escrowPda] = PublicKey.findProgramAddressSync([enc("escrow"), player.publicKey.toBuffer()], program.programId);
+    const [minerPda] = PublicKey.findProgramAddressSync([enc("miner"), player.publicKey.toBuffer()], program.programId);
+    const STAKE = new anchor.BN(0.02 * anchor.web3.LAMPORTS_PER_SOL);
+
+    await ensureInitialized();
+    await fundFromAdmin(player.publicKey, 0.1 * anchor.web3.LAMPORTS_PER_SOL);
+    await program.methods.deposit(new anchor.BN(0.05 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: player.publicKey }).signers([player]).rpc();
+    await program.methods.initMiner().accounts({ authority: player.publicKey }).signers([player]).rpc()
+      .catch((e: any) => { if (!/already in use/.test(String(e))) throw e; });
+    const { id, pda: roundPda } = await createFreshRound(120);
+
+    // Delegate round + miner to the ER (validator identity from env VALIDATOR).
+    await l1Send(() => program.methods.delegateRound(new anchor.BN(id))
+      .accounts({ payer: admin.publicKey, round: roundPda })
+      .remainingAccounts(validatorMeta).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, roundPda, DLP_PROGRAM_ID); // poll until delegation propagates
+    console.log("   ✓ round delegated to DLP");
+    await l1Send(() => program.methods.delegateMiner()
+      .accounts({ payer: player.publicKey, miner: minerPda })
+      .remainingAccounts(validatorMeta).signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, minerPda, DLP_PROGRAM_ID);
+    console.log("   ✓ miner delegated to DLP");
+
+    await l1Send(() => program.methods.joinRound(new anchor.BN(id))
+      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc());
+    await awaitJoined(escrowPda, id);
+
+    // Stake in the ER via the US regional endpoint (cold first-write can clone-lag → idempotent retry).
+    for (let i = 0; i < 8; i++) {
+      const m: any = await ephemeralProgram.account.minerPosition.fetch(minerPda).catch(() => null);
+      if (m && m.blockStake[0].toString() === STAKE.toString()) break;
+      await erRpcTolerant(() => ephemeralProgram.methods.stake(0, STAKE)
+        .accounts({ authority: player.publicKey, config: configPda, round: roundPda, miner: minerPda, escrow: escrowPda, sessionToken: null })
+        .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
+      await sleep(2500);
+    }
+    await awaitEr(() => ephemeralProgram.account.minerPosition.fetch(minerPda),
+      (m: any) => m.blockStake[0].toString() === STAKE.toString(), 15);
+    console.log("   ✓ stake executed inside the devnet ER (US regional endpoint)");
+
+    // Commit round + miner back to L1 (commit-and-undelegate).
+    await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
+      .accounts({ payer: admin.publicKey, config: configPda, round: roundPda })
+      .rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, roundPda, program.programId.toBase58());
+    await erRpcTolerant(() => ephemeralProgram.methods.commitMiner()
+      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
+      .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
+
+    const round: any = await program.account.round.fetch(roundPda);
+    assert.equal(round.state, 0, "committed round is OPEN on L1");
+    assert.equal(round.pot.toString(), STAKE.toString(), "ER-committed pot landed on L1");
+    console.log("   ✓ round + miner committed back to L1 (owner = program, pot present)");
+
+    // Finalize: cancel past deadline, refund the lock.
+    await retryPastDeadline(() => program.methods.cancelRound().accounts({ admin: admin.publicKey, round: roundPda }).rpc(), "cancel");
+    await program.methods.refund(new anchor.BN(id)).accounts({ authority: player.publicKey, round: roundPda }).signers([player]).rpc().catch(() => {});
   });
 });
