@@ -285,4 +285,62 @@ describe("ansem-miner", () => {
       PublicKey.findProgramAddressSync([enc("escrow"), idle.publicKey.toBuffer()], program.programId)[0]);
     assert.equal(eIdleFinal.balance.toNumber(), 0);
   });
+
+  // Task 10 quality-review fix (round 2): the Insolvent guard in
+  // execute_swap_mock (swap.rs) is unreachable through any sequence of the
+  // program's real public instructions - deposit/withdraw/stake keep
+  // pot_vault's lamports exactly in lockstep with
+  // total_escrow_balance + Σ(unswapped round.pot), by construction. So the
+  // only way to prove the guard actually fires (rather than being dead code)
+  // is to force pot_vault into a genuinely under-collateralized state and
+  // then call execute_swap_mock against it. debugDrainPotVault is an
+  // admin-only, test-only instruction that does exactly that: it siphons
+  // lamports out of pot_vault without touching total_escrow_balance or any
+  // round.pot, simulating an external drain / future bug. This asserts the
+  // swap reverts with Insolvent when the vault can no longer cover the
+  // round's pot.
+  it("rejects execute_swap_mock when pot_vault is drained below solvency (Insolvent)", async () => {
+    const p3 = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(p3.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+    await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: p3.publicKey }).signers([p3]).rpc();
+    await program.methods.initMiner().accounts({ authority: p3.publicKey }).signers([p3]).rpc();
+
+    const { pda } = await freshInstantRound(3);
+    await program.methods.stake(7, new anchor.BN(anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: p3.publicKey, round: pda }).signers([p3]).rpc();
+    await sleep(3500);
+    await program.methods.settle([...Buffer.alloc(32, 11)])
+      .accounts({ admin: admin.publicKey, round: pda }).rpc();
+
+    // Drain pot_vault down to just below what's needed to cover
+    // total_escrow_balance + this round's pot, bypassing all normal
+    // accounting (deposit/withdraw/stake are untouched by this call).
+    const cfg = await program.account.config.fetch(configPda);
+    const r = await program.account.round.fetch(pda);
+    const required = cfg.totalEscrowBalance.toNumber() + r.pot.toNumber();
+    const potVaultLamports = await provider.connection.getBalance(potVault);
+    const drainAmount = potVaultLamports - required + 1; // leave it 1 lamport short
+    assert.isAbove(drainAmount, 0, "test setup: pot_vault must have a drainable surplus");
+
+    const sink = anchor.web3.Keypair.generate();
+    await program.methods.debugDrainPotVault(new anchor.BN(drainAmount))
+      .accounts({ admin: admin.publicKey, potVault, sink: sink.publicKey }).rpc();
+
+    const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
+    try {
+      await program.methods.executeSwapMock().accounts({
+        payer: admin.publicKey, round: pda, ansemMint,
+        mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault, potVault, treasury,
+      }).rpc();
+      assert.fail("should have thrown Insolvent");
+    } catch (e: any) {
+      assert.include(e.toString(), "Insolvent");
+    }
+
+    // Round must remain SETTLED (not CLAIMABLE) since the swap reverted.
+    const rAfter = await program.account.round.fetch(pda);
+    assert.equal(rAfter.state, 2); // STATE_SETTLED
+  });
 });
