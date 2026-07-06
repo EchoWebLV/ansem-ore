@@ -49,7 +49,7 @@ pub struct ExecuteSwapMock<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
+pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     let cfg = &ctx.accounts.config;
     require!(cfg.swap_mode == SWAP_MODE_MOCK, AnsemError::WrongSwapMode);
     let round = &mut ctx.accounts.round;
@@ -57,7 +57,9 @@ pub fn handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
 
     let pot = round.pot;
     let fee = (pot as u128 * cfg.fee_bps as u128 / 10_000u128) as u64;
-    let net = pot - fee;
+    // defensive: fee is <= pot only while fee_bps <= 10_000 (no setter exists in
+    // M1, but any future set_fee_bps MUST bound fee_bps <= 10_000).
+    let net = pot.checked_sub(fee).ok_or(AnsemError::Overflow)?;
 
     // Solvency check: pot_vault is a single commingled PDA holding both idle
     // PlayerEscrow balances and every round's (unswapped) pot. Draining this

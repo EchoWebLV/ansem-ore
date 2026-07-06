@@ -55,7 +55,7 @@ pub struct Claim<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
+pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
     let cfg = &ctx.accounts.config;
     let round = &ctx.accounts.round;
     require!(round.state == STATE_CLAIMABLE, AnsemError::BadRoundState);

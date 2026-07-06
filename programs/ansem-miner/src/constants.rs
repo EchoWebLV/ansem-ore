@@ -1,5 +1,3 @@
-use anchor_lang::prelude::*;
-
 pub const GRID_SIZE: usize = 25;
 pub const ANSEM_DECIMALS: u8 = 6;
 pub const LAMPORTS_PER_SOL: u64 = 1_000_000_000;

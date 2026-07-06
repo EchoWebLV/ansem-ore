@@ -28,7 +28,7 @@ pub struct Stake<'info> {
     pub escrow: Account<'info, PlayerEscrow>,
 }
 
-pub fn handler(ctx: Context<Stake>, block: u8, amount: u64) -> Result<()> {
+pub fn stake_handler(ctx: Context<Stake>, block: u8, amount: u64) -> Result<()> {
     require!((block as usize) < GRID_SIZE, AnsemError::BadBlock);
 
     let min_stake = ctx.accounts.config.min_stake;

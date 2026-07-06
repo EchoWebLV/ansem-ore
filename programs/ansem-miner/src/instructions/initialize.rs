@@ -48,7 +48,7 @@ pub struct Initialize<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
-pub fn handler(ctx: Context<Initialize>) -> Result<()> {
+pub fn initialize_handler(ctx: Context<Initialize>) -> Result<()> {
     let c = &mut ctx.accounts.config;
     c.admin = ctx.accounts.admin.key();
     c.ansem_mint = ctx.accounts.ansem_mint.key();

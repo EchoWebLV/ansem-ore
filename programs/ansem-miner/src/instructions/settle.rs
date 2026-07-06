@@ -19,7 +19,7 @@ pub struct Settle<'info> {
     pub round: Account<'info, Round>,
 }
 
-pub fn handler(ctx: Context<Settle>, randomness: [u8; 32]) -> Result<()> {
+pub fn settle_handler(ctx: Context<Settle>, randomness: [u8; 32]) -> Result<()> {
     let cfg = &ctx.accounts.config;
     let round = &mut ctx.accounts.round;
     require!(round.state == STATE_OPEN, AnsemError::BadRoundState);

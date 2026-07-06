@@ -21,7 +21,7 @@ pub struct CreateRound<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<CreateRound>) -> Result<()> {
+pub fn create_round_handler(ctx: Context<CreateRound>) -> Result<()> {
     let cfg = &mut ctx.accounts.config;
     let new_id = cfg.current_round_id.checked_add(1).ok_or(AnsemError::Overflow)?;
     cfg.current_round_id = new_id;

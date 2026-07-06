@@ -17,7 +17,7 @@ pub struct InitMiner<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<InitMiner>) -> Result<()> {
+pub fn init_miner_handler(ctx: Context<InitMiner>) -> Result<()> {
     let m = &mut ctx.accounts.miner;
     m.authority = ctx.accounts.authority.key();
     m.round_id = 0;

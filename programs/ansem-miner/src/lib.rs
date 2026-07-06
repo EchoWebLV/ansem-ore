@@ -15,7 +15,7 @@ pub mod ansem_miner {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        instructions::initialize::handler(ctx)
+        instructions::initialize::initialize_handler(ctx)
     }
 
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
@@ -27,19 +27,19 @@ pub mod ansem_miner {
     }
 
     pub fn create_round(ctx: Context<CreateRound>) -> Result<()> {
-        instructions::round::handler(ctx)
+        instructions::round::create_round_handler(ctx)
     }
 
     pub fn init_miner(ctx: Context<InitMiner>) -> Result<()> {
-        instructions::miner::handler(ctx)
+        instructions::miner::init_miner_handler(ctx)
     }
 
     pub fn stake(ctx: Context<Stake>, block: u8, amount: u64) -> Result<()> {
-        instructions::stake::handler(ctx, block, amount)
+        instructions::stake::stake_handler(ctx, block, amount)
     }
 
     pub fn settle(ctx: Context<Settle>, randomness: [u8; 32]) -> Result<()> {
-        instructions::settle::handler(ctx, randomness)
+        instructions::settle::settle_handler(ctx, randomness)
     }
 
     pub fn set_round_duration(ctx: Context<SetParams>, secs: i64) -> Result<()> {
@@ -55,10 +55,10 @@ pub mod ansem_miner {
     }
 
     pub fn execute_swap_mock(ctx: Context<ExecuteSwapMock>) -> Result<()> {
-        instructions::swap::handler(ctx)
+        instructions::swap::execute_swap_mock_handler(ctx)
     }
 
     pub fn claim(ctx: Context<Claim>, round_id: u64) -> Result<()> {
-        instructions::claim::handler(ctx, round_id)
+        instructions::claim::claim_handler(ctx, round_id)
     }
 }
