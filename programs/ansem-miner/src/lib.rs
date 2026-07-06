@@ -81,4 +81,13 @@ pub mod ansem_miner {
     pub fn refund(ctx: Context<Refund>, round_id: u64) -> Result<()> {
         instructions::recovery::refund_handler(ctx, round_id)
     }
+
+    // ---- M2a: ER delegation lifecycle ----
+    pub fn delegate_round(ctx: Context<DelegateRound>, round_id: u64) -> Result<()> {
+        instructions::delegation::delegate_round_handler(ctx, round_id)
+    }
+
+    pub fn delegate_miner(ctx: Context<DelegateMiner>) -> Result<()> {
+        instructions::delegation::delegate_miner_handler(ctx)
+    }
 }
