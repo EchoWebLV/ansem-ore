@@ -37,4 +37,8 @@ pub mod ansem_miner {
     pub fn stake(ctx: Context<Stake>, block: u8, amount: u64) -> Result<()> {
         instructions::stake::handler(ctx, block, amount)
     }
+
+    pub fn settle(ctx: Context<Settle>, randomness: [u8; 32]) -> Result<()> {
+        instructions::settle::handler(ctx, randomness)
+    }
 }

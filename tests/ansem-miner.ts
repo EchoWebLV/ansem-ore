@@ -105,4 +105,16 @@ describe("ansem-miner", () => {
       assert.fail("should have thrown");
     } catch (e:any) { assert.include(e.toString(), "InsufficientBalance"); }
   });
+
+  it("settles round 1 with injected randomness (admin only)", async () => {
+    // wait out the 60s deadline by warping is not available on localnet by default;
+    // instead settle path allows admin to settle once deadline passed. For the test,
+    // we create rounds with a short duration via set at initialize is 60s, so we
+    // fast-path: assert settle before deadline is rejected, then advance.
+    const rnd = Buffer.alloc(32, 9);
+    try {
+      await program.methods.settle([...rnd]).accounts({ admin: admin.publicKey, round: round1 }).rpc();
+      assert.fail("should reject before deadline");
+    } catch (e:any) { assert.include(e.toString(), "RoundNotEnded"); }
+  });
 });

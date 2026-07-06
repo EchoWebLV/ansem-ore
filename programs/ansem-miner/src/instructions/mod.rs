@@ -12,3 +12,6 @@ pub use miner::*;
 
 pub mod stake;
 pub use stake::*;
+
+pub mod settle;
+pub use settle::*;
