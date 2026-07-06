@@ -24,4 +24,27 @@ describe("ansem-miner", () => {
     assert.equal(cfg.feeBps, 100);
     assert.equal(cfg.swapMode, 0);
   });
+
+  const player = anchor.web3.Keypair.generate();
+  const [escrowPda] = PublicKey.findProgramAddressSync(
+    [enc("escrow"), player.publicKey.toBuffer()], program.programId);
+  const [potVault] = PublicKey.findProgramAddressSync([enc("pot_vault")], program.programId);
+
+  it("funds a player then deposits into escrow", async () => {
+    const sig = await provider.connection.requestAirdrop(player.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+    await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: player.publicKey }).signers([player]).rpc();
+    const e = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(e.balance.toNumber(), 2 * anchor.web3.LAMPORTS_PER_SOL);
+    const potLamports = await provider.connection.getBalance(potVault);
+    assert.isAtLeast(potLamports, 2 * anchor.web3.LAMPORTS_PER_SOL);
+  });
+
+  it("withdraws part of the escrow", async () => {
+    await program.methods.withdraw(new anchor.BN(anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: player.publicKey }).signers([player]).rpc();
+    const e = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(e.balance.toNumber(), anchor.web3.LAMPORTS_PER_SOL);
+  });
 });
