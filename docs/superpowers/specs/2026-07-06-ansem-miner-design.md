@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-ANSEM Miner is an ORE-v2-style grid game on Solana. Players stake SOL on a 5×5 grid during short rounds; at settlement the round's entire SOL pool is converted into **$ANSEM** and dealt back to players at a randomized rate between **−20% and +20%** of par, decided per square by verifiable randomness. A rare **jackpot square** pays extra ANSEM from an externally funded jackpot vault. The grid hot path runs in a **MagicBlock Ephemeral Rollup (ER)** for gasless, popup-free, ~50ms staking; all value (SOL custody, ANSEM payouts) settles on Solana L1.
+ANSEM Miner is an ORE-v2-style grid game on Solana. Players stake SOL on a 5×5 grid during short rounds; at settlement the round's entire SOL pool is converted into **$ANSEM** and dealt back to players at a randomized rate between **−20% and +20%** of par, decided per square by verifiable randomness. Rare **jackpot squares** (two tiers — a frequent small one at 1/100 and a rare big one at 1/625) pay extra ANSEM from externally funded jackpot vaults. Players "mine" ANSEM by staking into rounds — the game never mints its own token supply for payouts (it swaps real SOL for real ANSEM), so it is *mining*, not *minting*. The grid hot path runs in a **MagicBlock Ephemeral Rollup (ER)** for gasless, popup-free, ~50ms staking; all value (SOL custody, ANSEM payouts) settles on Solana L1.
 
 The game is a **gamified swap**: it never mints real ANSEM, holds no price risk, and needs no bankroll. Each round distributes exactly the ANSEM the round's swap produced (solvency by construction). Only the jackpot is externally funded (by us, or ideally an airdrop from Ansem to the jackpot wallet).
 
@@ -28,7 +28,7 @@ The game is a **gamified swap**: it never mints real ANSEM, holds no price risk,
 ### Core loop
 1. **Deposit** (L1, one wallet popup): player funds their `PlayerEscrow` with SOL — a session budget covering many rounds.
 2. **Stake** (ER, gasless, no popup): during a round (default **60s**), player clicks squares to place SOL amounts (+0.01 / +0.1 / +1 / MAX, multi-tile) against their escrow budget.
-3. **Settle** (ER → L1): after the deadline, VRF draws randomness → per-square multipliers in **[0.8×, 1.2×]** and a **1/625** jackpot roll → round state commits back to L1.
+3. **Settle** (ER → L1): after the deadline, VRF draws randomness → per-square multipliers in **[0.8×, 1.2×]** plus two independent jackpot rolls (small **1/100**, big **1/625**) → round state commits back to L1.
 4. **Swap** (L1): the round's SOL pool minus protocol fee (default **100 bps**) is converted to ANSEM — mock mint at a fixed rate on devnet, batched Jupiter swap by a keeper on mainnet.
 5. **Claim** (L1): each player claims ANSEM = their stake-weighted, multiplier-adjusted share of the round's actual swap proceeds (+ jackpot share if their square hit).
 
@@ -45,11 +45,22 @@ payout(p)      = swap_proceeds × weight(p) / total_weight
 - Effective multiplier = `m(s) / stake-weighted-mean(m)`, so the advertised ±20% band flexes slightly at the edges. Documented, accepted.
 - All math in `u128` intermediates; remainder dust (< 25 lamport-units of ANSEM) accrues to the treasury.
 
-### Jackpot
-- Independent VRF roll per round: hit probability **1/625** (tunable).
-- On hit, VRF also picks the jackpot square; its stakers split **10% of the jackpot vault** (tunable `jackpot_bps`) pro-rata by their stake on that square, paid at claim from the jackpot vault ATA.
-- Jackpot vault is a plain token account owned by a program PDA; anyone can top it up (us, or an Ansem airdrop). If empty, jackpot hits pay zero and the round is otherwise normal.
-- If the jackpot square has zero stake, nothing is paid; the vault carries over.
+### Jackpot (two tiers)
+Two **independent** jackpots roll every round, each with its own vault, odds, square, and payout %:
+- **Small jackpot** — hit probability **1/100** (`small_jackpot_odds`), pays `small_jackpot_bps` (default **10%**) of the **small** jackpot vault. Frequent, modest.
+- **Big jackpot** — hit probability **1/625** (`big_jackpot_odds`), pays `big_jackpot_bps` (default **10%**) of the **big** jackpot vault. Rare, chunky (the vault people chase; funded/seeded larger).
+
+Each tier is rolled independently from the round's randomness (distinct keccak domains), so a round can hit neither, either, or both, on the same or different squares. On a hit, the tier's winning-square stakers split its payout pro-rata by their stake on that square, paid at claim from that tier's vault ATA.
+
+**Snapshot-and-conserve (solvency of the jackpot pool):** the payout pool for each tier is computed **once**, at the moment the round becomes claimable (`execute_swap_mock`), as `vault.amount × tier_bps / 10_000`, and frozen into the `Round` (`small_jackpot_pool` / `big_jackpot_pool`). Every claimant divides against that *fixed* snapshot — never the live vault balance — so payout is a pure function of stake share and independent of claim order. (This mirrors how `swap_proceeds` is snapshotted for the main payout. Reading the live balance per-claim was the M1-audit "order-dependent underpayment" bug.) Top-ups (`seed_*_jackpot`) that land after a round's swap accrue to *future* rounds' snapshots, not the already-frozen one.
+
+- Both jackpot vaults are created at `initialize` (program-PDA-owned ATAs) so they always exist; anyone can top them up (us, or an Ansem airdrop). If a tier's vault is empty, its hits pay zero and the round is otherwise normal.
+- If a tier's winning square has zero stake, nothing is paid; the vault carries over.
+
+### Round-lifecycle safety (M1 hardening)
+`create_round` is **gated on the previous round being finalized** (`Config.current_round_finalized`, set true when a round reaches Claimable via swap or Closed via cancel). This forbids opening round N+1 while round N is still Open/Settled, so a mis-ordered or abandoned settle cannot silently strand a growing set of stakers. Because that gate would otherwise let a single un-settleable round *halt the game*, there is a paired **escape hatch**:
+- **`cancel_round`** (admin, past-deadline only, Open/Settled → Closed): marks an abandoned round dead and re-arms `current_round_finalized` so the game can resume. Bounded by the existing M1 admin-trust model (admin already supplies settle randomness); moves no funds.
+- **`refund`** (permissionless, per-player, Closed rounds only): pure accounting — returns the player's own staked lamports from their round position back into their `PlayerEscrow.balance` (and `total_escrow_balance`), clears `active_round`, and marks the round refunded (`last_claimed_round`) against double-refund. Moves nothing to any external sink — it only unlocks the player's own funds. No lamport/token transfer occurs (the SOL is already sitting in the commingled `PotVault`; only the accounting is reversed).
 
 ### Tunable parameters (in `Config`, admin-settable)
 | Param | Default | Notes |
@@ -57,8 +68,10 @@ payout(p)      = swap_proceeds × weight(p) / total_weight
 | `round_duration_secs` | 60 | gated on `Clock::get().unix_timestamp`, never ER slots |
 | `fee_bps` | 100 | skimmed from pot before swap, to treasury |
 | `multiplier_min/max_bps` | 8000 / 12000 | the ±20% band |
-| `jackpot_odds` | 625 | 1-in-N per round |
-| `jackpot_bps` | 1000 | % of jackpot vault paid per hit |
+| `small_jackpot_odds` | 100 | small tier: 1-in-N per round |
+| `small_jackpot_bps` | 1000 | % of small jackpot vault paid per hit |
+| `big_jackpot_odds` | 625 | big tier: 1-in-N per round |
+| `big_jackpot_bps` | 1000 | % of big jackpot vault paid per hit |
 | `min_stake_lamports` | 10_000_000 (0.01 SOL) | dust guard |
 | `max_stake_per_round` | 100 SOL | per player; anti-whale + escrow sanity |
 | `mock_rate` (devnet) | 2_800 ANSEM/SOL | fixed devnet swap rate |
@@ -102,8 +115,8 @@ A permissionless `force_undelegate` crank mirrors the settle crank so a crashed 
 Program: `ansem_miner`. Anchor 1.0.x line, pinned to the versions in `magicblock-engine-examples` (see §10).
 
 ### Accounts
-- **`Config`** (singleton, L1): admin, `swap_mode`, `er_validator: Pubkey` (pinned ER validator identity; devnet `MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57`), ANSEM mint address, payout/jackpot/treasury vault addresses & bumps, `current_round_id`, all §2 params. Never delegated; never written in the same tx as a delegated account.
-- **`Round`** (delegatable; seeds `[b"round", round_id.to_le_bytes()]`): `round_id`, `deadline_ts: i64`, `block_sol: [u64; 25]`, `pot`, `state` (Open → VrfPending → Settled → Swapping → Claimable → Closed), `randomness: [u8; 32]`, `jackpot_hit: bool`, `jackpot_block: u8`, `swap_proceeds: u64`. `total_weight = Σ_s block_sol[s] × m(s)` is derivable from the Round alone — recomputed in `claim`, no cross-player scan needed. Created on L1 **before** delegation (cannot init inside the ER). Typed `UncheckedAccount` in the `#[delegate]` accounts struct with `#[account(mut, del)]`; call `round.exit(&crate::ID)?` before commit bundles.
+- **`Config`** (singleton, L1): admin, `swap_mode`, `er_validator: Pubkey` (pinned ER validator identity; devnet `MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57`), ANSEM mint address, payout/small-jackpot/big-jackpot/treasury vault addresses & bumps, `current_round_id`, `current_round_finalized: bool` (round-lifecycle gate, see §2), `total_escrow_balance`, all §2 params. Never delegated; never written in the same tx as a delegated account.
+- **`Round`** (delegatable; seeds `[b"round", round_id.to_le_bytes()]`): `round_id`, `deadline_ts: i64`, `block_sol: [u64; 25]`, `pot`, `state` (Open → VrfPending → Settled → Swapping → Claimable → Closed), `randomness: [u8; 32]`, per-tier jackpot fields `small_jackpot_hit/block/pool` + `big_jackpot_hit/block/pool` (`*_pool` are the u64 snapshots frozen at swap time), `swap_proceeds: u64`. `total_weight = Σ_s block_sol[s] × m(s)` is derivable from the Round alone — recomputed in `claim`, no cross-player scan needed. Created on L1 **before** delegation (cannot init inside the ER). Typed `UncheckedAccount` in the `#[delegate]` accounts struct with `#[account(mut, del)]`; call `round.exit(&crate::ID)?` before commit bundles.
 - **`MinerPosition`** (delegatable; **persistent per player**, seeds `[b"miner", authority]`): `authority: Pubkey`, `round_id: u64`, `block_stake: [u64; 25]`. No `claimed` flag here — L1 `claim` cannot write a delegated account; claim state lives in `PlayerEscrow.last_claimed_round` (L1). Stays delegated across rounds; **committed** (not undelegated) at settle, so L1 `claim` reads the committed snapshot (delegation-owned account: deserialize via `UncheckedAccount` + PDA re-derivation, since `Account<T>`'s owner check would reject it). Reset in place at the player's first stake of a new round (zero stakes, bump `round_id`); **reset is gated in ER `stake()` on the escrow clone showing the prior round claimed** — so unclaimed winnings can never be overwritten.
 - **`PlayerEscrow`** (L1, never delegated; seeds `[b"escrow", authority]`): accounting only — `balance`, `deposited_total`, `withdrawn_total`, `last_claimed_round`. Physical lamports live in `PotVault`; escrow tracks each player's share. The player's session budget: ER `stake()` reads it as a **readonly cloned account** to enforce `Σ block_stake ≤ balance`. **Withdraw guard:** withdrawals are rejected while the player has stakes in any round newer than `last_claimed_round` (prevents a stale ER clone from authorizing an overdraft; deposits-only staleness is safe — a late-appearing deposit merely delays staking).
 - **`PotVault`** (L1 PDA): the single physical SOL vault. `deposit` moves lamports here (crediting `PlayerEscrow.balance`); `claim` debits the player's committed stake total from their escrow accounting; `begin_swap`/`execute_swap_mock` withdraws exactly the round's committed pot minus fee; `withdraw` pays out per escrow accounting. Invariant: `PotVault` lamports ≥ Σ escrow balances − Σ committed-but-unswapped stakes at all times.
@@ -113,13 +126,16 @@ Program: `ansem_miner`. Anchor 1.0.x line, pinned to the versions in `magicblock
 | Ix | Layer | Signer | Notes |
 |---|---|---|---|
 | `initialize` | L1 | admin | Config, vaults, (devnet) mock mint + metadata |
-| `create_round` / `delegate_round` | L1 | permissionless crank | init then delegate to `Config.er_validator` |
+| `create_round` / `delegate_round` | L1 | permissionless crank | gated on `Config.current_round_finalized`; init then delegate to `Config.er_validator` |
+| `cancel_round` | L1 | admin | past-deadline Open/Settled → Closed; re-arms `current_round_finalized` (abandoned-round escape hatch) |
+| `refund(round_id)` | L1 | **real wallet** | Closed rounds only; returns player's own stake to escrow accounting; no external transfer |
 | `init_miner` / `delegate_miner` | L1 | player (first time only) | persistent MinerPosition |
 | `deposit(amount)` | L1 | **real wallet** | fund PlayerEscrow (the one popup) |
 | `withdraw(amount)` | L1 | **real wallet** | subject to withdraw guard |
 | `stake(block: u8, amount: u64)` | **ER** | session key **or** wallet | the only session-gated ix; validates `block < 25`, min/max stake, escrow budget vs readonly clone, round Open + before deadline |
 | `request_settle` | ER | permissionless crank | after `deadline_ts`; fires VRF request, sets VrfPending |
-| `settle_callback(randomness)` | ER | **VRF identity only** | stores randomness, rolls jackpot (odds 1/625) + jackpot square, sets Settled |
+| `settle_callback(randomness)` | ER | **VRF identity only** | stores randomness, rolls both jackpot tiers (small 1/100, big 1/625) + their squares, sets Settled |
+| `seed_small_jackpot` / `seed_big_jackpot(amount)` | L1 | admin | top up a tier's jackpot vault (mock-mint on devnet; real ANSEM transfer on mainnet) |
 | `commit_round` | ER | permissionless crank | `MagicIntentBundleBuilder ….commit_and_undelegate()` on Round (+ commit MinerPositions) |
 | `execute_swap_mock` | L1 | permissionless crank | devnet only: mint mock ANSEM to payout vault, set `swap_proceeds`, Claimable |
 | `begin_swap` / `record_swap` | L1 | keeper (mainnet) | balance-delta-measured proceeds; `swap_timeout_refund` escape hatch |
@@ -143,8 +159,9 @@ Program: `ansem_miner`. Anchor 1.0.x line, pinned to the versions in `magicblock
 
 From one `randomness: [u8; 32]`:
 - `m(s) = 8000 + (u16::from_le(keccak(randomness ‖ s)[0..2]) % 4001)` for each square `s` — deterministic, recomputable by anyone from committed state.
-- `jackpot_hit = random_u32_with_range(randomness ‖ "jackpot", 0, jackpot_odds) == 0`.
-- `jackpot_block = random_u8_with_range(randomness ‖ "jkblock", 0, 24)`.
+- `small_jackpot_hit = keccak(randomness ‖ "jackpot_sm")[0..4] as u32 % small_jackpot_odds == 0`; `small_jackpot_block = keccak(randomness ‖ "jkblock_sm")[0] % 25`.
+- `big_jackpot_hit = keccak(randomness ‖ "jackpot_big")[0..4] as u32 % big_jackpot_odds == 0`; `big_jackpot_block = keccak(randomness ‖ "jkblock_big")[0] % 25`.
+- The two tiers use **distinct keccak domains**, so their hits and squares are independent.
 
 Settlement is therefore **async** (request → oracle callback), which is why `settle_round` is split into `request_settle` + `settle_callback`.
 
