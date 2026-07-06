@@ -42,6 +42,8 @@
 
 **Goal of phase:** Produce a verified sBPF-v3 `.so` and prove the entire local suite (40 tests) passes on it. If the local validator cannot execute v3, STOP here.
 
+> **DISCOVERED DURING EXECUTION (resolved):** The base `mb-test-validator` runs v3 (M1 19/19), but `ephemeral-validator` **0.12.0** could NOT clone a v3 program into the ER (`Cloner error … InvalidAccountData`), failing M2a 4/8. Root cause = ER version: devnet runs **0.13.3**; upgrading the local ER (`npm i -g @magicblock-labs/ephemeral-validator@0.13.3`) fixed it — M2a 8/8 on v3, and it closes the local-vs-devnet ER fidelity gap. **v3 requires ephemeral-validator ≥ 0.13.3.** Full v3 gate then green: unit 9 / M1 19 / M2a 8 / M2b 2 / M2c 2 = **40/40**.
+
 ### Task 0.1: Teach the local harness to build the v3 binary
 
 **Files:**

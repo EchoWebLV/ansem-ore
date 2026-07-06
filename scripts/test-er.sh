@@ -72,6 +72,10 @@ UPGRADE_AUTH="$(solana address -k "$WALLET")"
 # and `anchor build` injects its own --tools-version (v1.52) so it can't take a
 # second one via passthrough — hence v3 builds the .so directly with cargo-build-sbf
 # pinned to v1.54. IDL/types are interface-stable, so no regen is needed for v3.
+# ER NOTE: running a v3 program through the ER requires ephemeral-validator
+# >=0.13.3 — 0.12.0's account-cloner fails to load a v3 program into the rollup
+# (Cloner error / InstructionError InvalidAccountData), breaking the ER hot path.
+# 0.13.3 clones v3 fine AND matches the MagicBlock devnet ER version.
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
   ARCH="${ARCH:-v0}"
   echo "Building program (arch=$ARCH)..."
