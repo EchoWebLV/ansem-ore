@@ -8,6 +8,35 @@
 
 ---
 
+> ## ⚠️ CORRECTION (M2 task-0 de-risk, 2026-07-06) — READ FIRST, SUPERSEDES §1, §2c, §4
+>
+> The original grounding was against **crates.io-latest sources (ER SDK 0.15.5, vrf-sdk 0.4.1)**, but the **actually-installed tooling and the working reference examples use older, version-matched pins.** Verified on this machine:
+> - **Installed oracle:** `vrf-oracle 0.3.0` (`ephemeral-validator@0.12.0` pins every `@magicblock-labs/vrf-oracle-*` to **0.3.0**; `vrf-oracle --version` → `vrf-oracle 0.3.0`).
+> - **Every VRF example** (`roll-dice/roll-dice-delegated`, `rewards-delegated-vrf`) pins **`ephemeral-rollups-sdk = "0.14.3"` (feature `anchor` only) + standalone `ephemeral-vrf-sdk = "0.3.0"` (feature `anchor`) + `anchor-lang = "1.0.2"`** — resolved & checksummed in their `Cargo.lock`.
+>
+> **Decision — pin M2 to the example versions, NOT the crates.io-latest ones:**
+> ```toml
+> anchor-lang = { version = "=1.0.2", features = ["init-if-needed"] }   # already done (task-0)
+> anchor-spl  = "=1.0.2"
+> solana-keccak-hasher = { version = "3", features = ["sha3"] }         # M1 keccak, keep
+> ephemeral-rollups-sdk = { version = "=0.14.3", features = ["anchor"] }         # delegate/commit/ephemeral — NO "vrf" feature
+> ephemeral-vrf-sdk     = { version = "=0.3.0",  features = ["anchor"] }         # standalone, matches oracle 0.3.0
+> session-keys          = { version = "=3.1.1",  features = ["no-entrypoint"] }  # unchanged (verify separately)
+> ```
+> **Why this resolves §7.2's HIGH risk:** vrf-sdk **0.4.1 deprecates the global `VRF_PROGRAM_IDENTITY` in favor of a *scoped* identity** (`scoped_vrf_identity(&crate::ID)`) and the scoped `create_request_scoped_randomness_ix`/`#[vrf_callback]` path — which a **0.3.0 oracle does not fulfill** (rounds would hang in `STATE_VRF_PENDING`). Matching vrf-sdk to the oracle at **0.3.0** removes the skew entirely.
+>
+> **Corrected APIs (supersede the code in §2c and §4):**
+> - **VRF request (§4a):** use `ephemeral_vrf_sdk::instructions::create_request_randomness_ix(RequestRandomnessParams { payer, oracle_queue, callback_program_id: ID, callback_discriminator: instruction::<Callback>::DISCRIMINATOR.to_vec(), caller_seed: [seed;32], accounts_metas: Some(vec![SerializableAccountMeta{..}]), callback_args: Some(vec![..]), ..Default::default() })` then `ctx.accounts.invoke_signed_vrf(&payer.to_account_info(), &ix)?;`. Request-side Accounts struct carries `#[vrf]` + a `#[account(mut)] oracle_queue: UncheckedAccount`. **NOT** `create_request_scoped_randomness_ix`.
+> - **VRF callback (§4b):** a **plain `#[derive(Accounts)]`** (no `#[vrf_callback]`) whose auth guard is the **global** injected-signer check `#[account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)] pub vrf_program_identity: Signer<'info>`. Callback fn signature: `(ctx, randomness: [u8;32], <trailing callback_args…>)`.
+> - **Commit/undelegate (§2c):** 0.14.3 uses the **builder**, not the 5-arg free fn:
+>   `MagicIntentBundleBuilder::new(payer_ai, magic_context_ai, magic_program_ai).commit_and_undelegate(&[account_info, …]).build_and_invoke()?;` (import `ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder`; `#[commit]` injects `magic_context` + `magic_program`). For commit-only (MinerPosition), use the builder's commit-only method.
+> - **Delegate (§2b):** unchanged in shape — `#[delegate]`, field `#[account(mut, del, seeds=[…], bump)] pub <x>: UncheckedAccount`, handler `ctx.accounts.delegate_<field>(&signer, &[seeds], DelegateConfig{ validator: …, ..Default::default() })?;`.
+> - **package.json (§1b):** keep `@coral-xyz/anchor@^0.32.1`; the TS `@magicblock-labs/ephemeral-rollups-sdk` should track **0.14.x** to match the Rust 0.14.3 (not ^0.15.5).
+>
+> Everything else in the doc (lifecycle, ER/L1 split rule §2d, session design §3, escrow relocation §6, test-stack §5) stands. The **plan is written against THIS correction block.**
+
+---
+
 ---
 
 # ANSEM Miner — M2 Foundation (Ephemeral Rollups + VRF + Sessions)
@@ -414,7 +443,7 @@ Ranked by blast radius.
 
 1. **[BLOCKER] anchor-lang 0.31.1 → 1.0.2 migration cost.** Everything downstream assumes the bump. Must be resolved *first*. Risk: 0.31→1.0 account-macro / error-type churn across all M1 instruction files. Mitigation: the examples run identical shapes on 1.0.2, so it's a version bump not a redesign — but budget a full compile-and-fix pass and re-run the M1 test suite before any M2 code lands. *Decision needed:* upgrade (recommended) vs. `anchor-compat` pinning (fights the `anchor-modern` guard — discouraged).
 
-2. **[HIGH] vrf-oracle 0.3.0 vs scoped discriminators (10/11).** `#[vrf]` emits scoped requests by default; a 0.3.0 oracle predating scoped identities may only fulfill legacy `3`/`8`. If unfulfilled, `settle_callback` never fires and rounds hang in `STATE_VRF_PENDING`. Mitigation: verify the installed 0.3.0 oracle's supported discriminators *before* building §4; if unsupported, upgrade the oracle or fall back to deprecated global-identity request + guard (vrf-sdk report §"Version coupling"). Resolve during M2 plan, not after.
+2. **[RESOLVED — task-0 de-risk] vrf-oracle 0.3.0 vs scoped discriminators.** ✅ **Resolved by pinning vrf-sdk to `=0.3.0` (matching the installed `vrf-oracle 0.3.0`) and using the non-scoped `create_request_randomness_ix` + global `VRF_PROGRAM_IDENTITY` guard** — the exact path both reference examples use against this oracle. The scoped `0.4.1` path (which the original §4 code assumed) is what would have hung in `STATE_VRF_PENDING`; we do not use it. See the CORRECTION block at the top of this doc.
 
 3. **[HIGH] Escrow-debit relocation correctness (§6.3).** Moving the escrow decrement off the ER `stake` path to an L1 boundary is the highest-risk *logic* change — get the accounting wrong and either players over-stake (escrow under-debited) or the solvency check false-trips. Needs a dedicated design decision (up-front debit vs. L1 reconcile-at-commit) and its own test coverage on both providers. Recommend design (b) reconcile-at-commit for symmetry with the committed-snapshot model.
 
