@@ -64,10 +64,23 @@ command -v ephemeral-validator >/dev/null 2>&1 || { echo "ERROR: ephemeral-valid
 [ -f "$WALLET" ] || { echo "ERROR: wallet $WALLET missing"; exit 1; }
 UPGRADE_AUTH="$(solana address -k "$WALLET")"
 
-# 1. Build (unless reusing) — produces the sBPF-v3 .so we preload at genesis.
+# 1. Build (unless reusing) — produces the sBPF .so we preload at genesis.
+# ARCH selects the sBPF version (default v0; ARCH=v3 = mainnet-aligned build).
+# NOTE: `anchor build`/`cargo build-sbf` emit sBPF **v0 by default**; v3 is opt-in
+# (verified: ELF e_flags 0x0 for v0, 0x3 for v3). The v3 sysroot ships only in
+# platform-tools **v1.54** (the v1.52 rustup toolchain lacks sbpfv3-solana-solana),
+# and `anchor build` injects its own --tools-version (v1.52) so it can't take a
+# second one via passthrough — hence v3 builds the .so directly with cargo-build-sbf
+# pinned to v1.54. IDL/types are interface-stable, so no regen is needed for v3.
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
-  echo "Building program (anchor build)..."
-  anchor build || { echo "ERROR: anchor build failed"; exit 1; }
+  ARCH="${ARCH:-v0}"
+  echo "Building program (arch=$ARCH)..."
+  if [ "$ARCH" = "v0" ]; then
+    anchor build || { echo "ERROR: anchor build failed"; exit 1; }
+  else
+    cargo build-sbf --arch "$ARCH" --tools-version v1.54 \
+      || { echo "ERROR: cargo build-sbf --arch $ARCH failed"; exit 1; }
+  fi
 fi
 [ -f "$SO_PATH" ] || { echo "ERROR: $SO_PATH missing — build first or unset SKIP_BUILD"; exit 1; }
 
