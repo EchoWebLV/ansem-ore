@@ -105,9 +105,16 @@ solana airdrop 1000 "$UPGRADE_AUTH" >/dev/null 2>&1 || true
 solana program show "$PROGRAM_ID" >/dev/null 2>&1 || { echo "ERROR: our program not preloaded"; tail -40 "$LOG_DIR/base.log"; exit 1; }
 solana program show DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh >/dev/null 2>&1 || { echo "ERROR: DLP not cloned by mb-test-validator"; exit 1; }
 
-echo "Starting ephemeral-validator (ER)..."
+# ER write policy (see `ephemeral-validator --help`): `ephemeral` = clone all,
+# write ONLY delegated accounts. That's what we want — the VRF SETTLE runs on L1
+# (post-commit), not in the ER, so the ER only ever writes delegated round/miner.
+# (An in-ER VRF request would write the oracle queue, a read-only cloned account,
+# which the ER's Magic finalizer rejects — InvalidWritableAccount — because the
+# local ER doesn't delegate that queue to itself. Hence settle-on-L1.)
+ER_LIFECYCLE="${ER_LIFECYCLE:-ephemeral}"
+echo "Starting ephemeral-validator (ER, lifecycle=$ER_LIFECYCLE)..."
 RUST_LOG=info ephemeral-validator \
-  --no-tui --lifecycle ephemeral \
+  --no-tui --lifecycle "$ER_LIFECYCLE" \
   --remotes http://127.0.0.1:8899 --remotes ws://127.0.0.1:8900 \
   --listen 127.0.0.1:7799 --reset \
   > "$LOG_DIR/ephemeral.log" 2>&1 < /dev/null &
@@ -121,28 +128,18 @@ for i in $(seq 1 60); do
 done
 echo "ER ready."
 
-# ---- VRF oracles (M2b). TWO instances: one subscribed to base, one to the ER.
-# The ER-side oracle is what fulfills our in-ER request_settle → settle_callback.
-# The oracle has no port to probe; we just confirm the process stays alive.
-# Skip with SKIP_VRF=1 for non-VRF suites (M1/M2a don't need it). ----
-if [ "${SKIP_VRF:-0}" = "1" ]; then
-  echo "Skipping VRF oracles (SKIP_VRF=1)."
-else
-  command -v vrf-oracle >/dev/null 2>&1 || { echo "ERROR: vrf-oracle not on PATH (npm i -g @magicblock-labs/ephemeral-validator) — or set SKIP_VRF=1"; exit 1; }
-  echo "Starting base VRF oracle..."
-  VRF_ORACLE_SKIP_PREFLIGHT=true RPC_URL=http://127.0.0.1:8899 WEBSOCKET_URL=ws://127.0.0.1:8900 RUST_LOG=info \
-    vrf-oracle > "$LOG_DIR/vrf-base.log" 2>&1 < /dev/null &
-  VRF_PID=$!
-  sleep 2
-  kill -0 $VRF_PID 2>/dev/null || { echo "base VRF oracle died:"; tail -40 "$LOG_DIR/vrf-base.log"; exit 1; }
-  echo "Starting ER VRF oracle..."
-  VRF_ORACLE_SKIP_PREFLIGHT=true RPC_URL=http://127.0.0.1:7799 WEBSOCKET_URL=ws://127.0.0.1:7800 RUST_LOG=info \
-    vrf-oracle > "$LOG_DIR/vrf-er.log" 2>&1 < /dev/null &
-  VRF_ER_PID=$!
-  sleep 2
-  kill -0 $VRF_ER_PID 2>/dev/null || { echo "ER VRF oracle died:"; tail -40 "$LOG_DIR/vrf-er.log"; exit 1; }
-  echo "VRF oracles running (base $VRF_PID, ER $VRF_ER_PID)."
-fi
+# ---- VRF oracle (M2b). The VRF SUITE OWNS THE ORACLE LIFECYCLE (spawns it from
+# the test, up ONLY for the request→callback window). Running the oracle for the
+# whole suite starves the ER on this single machine (base + ER + oracle + node all
+# competing) and makes the cold-account stake/commit txs actually fail — so the
+# script does NOT start it. Here we only verify it's installed for the VRF suite;
+# cleanup() already pkills any stray vrf-oracle by name as a safety net. ----
+case "$TEST_FILE" in *vrf*)
+  command -v vrf-oracle >/dev/null 2>&1 || { echo "ERROR: vrf-oracle not on PATH (npm i -g @magicblock-labs/ephemeral-validator)"; exit 1; }
+  echo "VRF suite: vrf-oracle found; the test manages its lifecycle." ;;
+*)
+  echo "Non-VRF suite: no oracle." ;;
+esac
 
 # Env the two-provider test harness reads (matches magicblock examples).
 export PROVIDER_ENDPOINT=http://127.0.0.1:8899
@@ -152,8 +149,9 @@ export EPHEMERAL_WS_ENDPOINT=ws://127.0.0.1:7800
 export ANCHOR_PROVIDER_URL=$PROVIDER_ENDPOINT
 export ANCHOR_WALLET=$WALLET
 export VALIDATOR=mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev
-# VRF queue the local ER oracle services (index-1 delegated queue), NOT the SDK
-# default 5hBR571… — the test passes this as request_settle's oracle_queue.
+# VRF queues for the local oracle identity paywJiVATr…: index-0 on base, index-1
+# on the ER. M2b settles on L1, so the test uses the BASE queue.
+export VRF_BASE_QUEUE=GKE6d7iv8kCBrsxr78W3xVdjGLLLJnxsGiuzrsZCGEvb
 export VRF_EPHEMERAL_QUEUE=Sc9MJUngNbQXSXGP3F67KvKwVnhaYn6kcioxXNVowYT
 
 if [ "${SETUP_ONLY:-0}" = "1" ]; then

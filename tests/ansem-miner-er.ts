@@ -66,6 +66,19 @@ async function awaitEr<T>(
   throw new Error(`ER predicate not satisfied after ${tries} tries (last=${JSON.stringify(last)})`);
 }
 
+// Send an ER tx tolerating a confirm-layer flake — mb-test-validator + the ER's
+// aperture RPC can make anchor's sendAndConfirm throw a mangled "Unknown action
+// 'undefined'" (getTransaction on the ER returns null, so anchor re-throws the
+// raw confirm error) even though the tx LANDED. Caller confirms via state polling.
+// A NON-flake error (real anchor/program error) still throws.
+async function erRpcTolerant(send: () => Promise<string>): Promise<void> {
+  try { await send(); }
+  catch (e: any) {
+    const s = String(e);
+    if (!/Unknown action|not confirmed|block height exceeded|Invalid response|failed to get|timeout|Blockhash not found/i.test(s)) throw e;
+  }
+}
+
 // Base-layer (L1) provider + program — from ANCHOR_PROVIDER_URL/ANCHOR_WALLET.
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
@@ -253,18 +266,26 @@ describe("ansem-miner (ER)", () => {
     const escrowBefore = await program.account.playerEscrow.fetch(escrowPda); // L1
 
     // First real ER transaction: player stakes into the delegated round/miner.
-    await ephemeralProgram.methods.stake(STAKE_BLOCK, STAKE_AMT)
-      .accounts({
-        authority: player.publicKey, config: configPda,
-        round: round1Pda, miner: minerPda, escrow: escrowPda,
-      })
-      .signers([player])
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
+    // This is the cold ER write (clones config/escrow + references the freshly-
+    // delegated round/miner) and can lag on a loaded machine, so retry
+    // idempotently (check-before → never double-stakes).
+    for (let i = 0; i < 6; i++) {
+      const m: any = await ephemeralProgram.account.minerPosition.fetch(minerPda).catch(() => null);
+      if (m && m.blockStake[STAKE_BLOCK].toString() === STAKE_AMT.toString()) break;
+      await erRpcTolerant(() => ephemeralProgram.methods.stake(STAKE_BLOCK, STAKE_AMT)
+        .accounts({
+          authority: player.publicKey, config: configPda,
+          round: round1Pda, miner: minerPda, escrow: escrowPda,
+        })
+        .signers([player])
+        .rpc({ skipPreflight: true, commitment: "confirmed" }));
+      await sleep(2000);
+    }
 
     // ER-side: the delegated miner reflects the stake.
     const miner = await awaitEr(
       () => ephemeralProgram.account.minerPosition.fetch(minerPda),
-      (m: any) => m.blockStake[STAKE_BLOCK].toString() === STAKE_AMT.toString()
+      (m: any) => m.blockStake[STAKE_BLOCK].toString() === STAKE_AMT.toString(), 10
     );
     assert.equal(miner.roundId.toNumber(), ROUND_ID, "miner tagged to this round");
 
