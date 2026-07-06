@@ -70,26 +70,20 @@ pub struct ReconcileMiner<'info> {
     // Declared before `miner` so the miner PDA seeds can reference its authority.
     #[account(mut, seeds = [ESCROW_SEED, escrow.authority.as_ref()], bump = escrow.bump)]
     pub escrow: Account<'info, PlayerEscrow>,
-    /// CHECK: the committed (post commit_miner) MinerPosition snapshot for
-    /// `escrow`'s authority. It is an UncheckedAccount — NOT `Account<Miner>` —
-    /// because after commit-only the miner is still DLP-owned on L1, so Anchor's
-    /// owner check would reject it. We only READ it (manual try_deserialize);
-    /// we never write it (a program cannot mutate an account it doesn't own).
-    /// The seeds constraint pins it to the correct PDA for this escrow.
-    #[account(seeds = [MINER_SEED, escrow.authority.as_ref()], bump)]
-    pub miner: UncheckedAccount<'info>,
+    // The committed snapshot: commit_miner undelegates the miner back to our
+    // program at round end, so it is our-program-owned here and reads as a
+    // normal (read-only) Account. reconcile never writes it — the per-round
+    // guard lives on escrow.reconciled_round.
+    #[account(seeds = [MINER_SEED, escrow.authority.as_ref()], bump = miner.bump)]
+    pub miner: Account<'info, MinerPosition>,
 }
 
 pub fn reconcile_miner_handler(ctx: Context<ReconcileMiner>, round_id: u64) -> Result<()> {
     // Only a genuine joiner of THIS round (join_round set active_round).
     require!(ctx.accounts.escrow.active_round == round_id, AnsemError::NotCurrentRound);
 
-    // Read the committed snapshot without an owner check (miner may be DLP-owned).
-    let (staked, staked_this_round) = {
-        let data = ctx.accounts.miner.try_borrow_data()?;
-        let miner = MinerPosition::try_deserialize(&mut &data[..])?;
-        (miner.block_stake.iter().sum::<u64>(), miner.round_id == round_id)
-    };
+    let staked: u64 = ctx.accounts.miner.block_stake.iter().sum();
+    let staked_this_round = ctx.accounts.miner.round_id == round_id;
 
     // Debit only if this player actually staked this round AND hasn't already
     // been reconciled for it (guards the re-join → re-reconcile double-debit).

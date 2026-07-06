@@ -91,10 +91,13 @@ pub fn commit_round_handler(ctx: Context<CommitRound>) -> Result<()> {
     Ok(())
 }
 
-// ---- Task 6: commit_miner (ER) — commit ONLY ----
-// Flushes the MinerPosition's block_stake snapshot to L1 (for reconcile_miner /
-// claim to read) but keeps it DELEGATED — the persistent miner stays in the ER
-// for the next round's staking. Pure commit → no `miner.exit()`.
+// ---- Task 6: commit_miner (ER) — commit AND undelegate ----
+// Flushes the MinerPosition's block_stake snapshot to L1 AND returns ownership
+// to our program so reconcile_miner and claim can read it as a normal
+// `Account<MinerPosition>` (a committed-but-still-delegated account is DLP-owned
+// on L1, which anchor's owner check rejects). The persistent miner is simply
+// re-delegated (delegate_miner) at the start of each new round — cheap, and it
+// keeps the L1 read path idiomatic. Pure commit → no `miner.exit()`.
 #[commit]
 #[derive(Accounts)]
 pub struct CommitMiner<'info> {
@@ -110,7 +113,7 @@ pub fn commit_miner_handler(ctx: Context<CommitMiner>) -> Result<()> {
         ctx.accounts.magic_context.to_account_info(),
         ctx.accounts.magic_program.to_account_info(),
     )
-    .commit(&[ctx.accounts.miner.to_account_info()])
+    .commit_and_undelegate(&[ctx.accounts.miner.to_account_info()])
     .build_and_invoke()?;
     Ok(())
 }

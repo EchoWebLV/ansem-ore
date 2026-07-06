@@ -3,6 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { Connection, PublicKey, Keypair } from "@solana/web3.js";
 import { GetCommitmentSignature } from "@magicblock-labs/ephemeral-rollups-sdk";
+import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
 import { assert } from "chai";
 
 // ANSEM Miner — Ephemeral Rollup integration suite (M2a).
@@ -114,12 +115,55 @@ const [potVaultPda] = PublicKey.findProgramAddressSync(
   program.programId
 );
 
+// Settle / swap / claim PDAs (mirrors tests/ansem-miner.ts) for the e2e tail.
+const [ansemMint] = PublicKey.findProgramAddressSync([enc("ansem_mint")], program.programId);
+const [vaultAuth] = PublicKey.findProgramAddressSync([enc("vault_auth")], program.programId);
+const [mintAuth] = PublicKey.findProgramAddressSync([enc("mint_auth")], program.programId);
+const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.programId);
+const [smallJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_sm_auth")], program.programId);
+const [bigJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_big_auth")], program.programId);
+const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
+const smallJackpotVault = getAssociatedTokenAddressSync(ansemMint, smallJackpotAuth, true);
+const bigJackpotVault = getAssociatedTokenAddressSync(ansemMint, bigJackpotAuth, true);
+const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
+
+const swapAccounts = () => ({
+  payer: admin.publicKey, round: round1Pda, ansemMint,
+  mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault,
+  smallJackpotAuthority: smallJackpotAuth, smallJackpotVault,
+  bigJackpotAuthority: bigJackpotAuth, bigJackpotVault,
+  potVault: potVaultPda, treasury,
+});
+const claimAccounts = () => ({
+  authority: player.publicKey, round: round1Pda, ansemMint, vaultAuthority: vaultAuth,
+  smallJackpotAuthority: smallJackpotAuth, bigJackpotAuthority: bigJackpotAuth,
+  payoutVault, smallJackpotVault, bigJackpotVault, playerAta,
+});
+
+// Settle round 1 once its (undelegated, on-L1) deadline passes — poll the
+// on-chain check rather than trusting a wall-clock sleep (validator clock lag).
+async function settleAfterDeadline(rnd: Buffer, tries = 40): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    try {
+      await program.methods.settle([...rnd])
+        .accounts({ admin: admin.publicKey, round: round1Pda }).rpc();
+      return;
+    } catch (e: any) {
+      if (!e.toString().includes("RoundNotEnded")) throw e;
+      await sleep(1500);
+    }
+  }
+  throw new Error("round 1 never became settleable after polling");
+}
+
 describe("ansem-miner (ER)", () => {
   before("L1 prelude: initialize, fund player, create round 1, init miner", async () => {
     // Idempotent-ish: fresh validator each run (scripts/test-er.sh --reset).
     await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
-    // 120s round so it stays OPEN through ER staking in later tasks.
-    await program.methods.setRoundDuration(new anchor.BN(120))
+    // 30s round: long enough to stay OPEN through delegate/join/stake/commit
+    // (staking happens within the first few seconds), short enough that the e2e
+    // tail can wait out the deadline to settle without a long stall.
+    await program.methods.setRoundDuration(new anchor.BN(30))
       .accounts({ admin: admin.publicKey }).rpc();
 
     const sig = await provider.connection.requestAirdrop(
@@ -237,7 +281,7 @@ describe("ansem-miner (ER)", () => {
     );
   });
 
-  it("task 6: commit_round undelegates to L1; commit_miner flushes snapshot, stays delegated", async () => {
+  it("task 6: commit_round + commit_miner both commit-and-undelegate back to L1", async () => {
     // commit_round = commit AND undelegate: Round returns to our program on L1
     // (writable again) carrying the ER's final pot. Payer is the ER fee payer
     // (admin) — a non-fee-payer writable signer would trip InvalidWritableAccount.
@@ -250,22 +294,65 @@ describe("ansem-miner (ER)", () => {
     const roundL1 = await program.account.round.fetch(round1Pda); // now our-program-owned
     assert.equal(roundL1.pot.toString(), STAKE_AMT.toString(), "committed pot landed on L1");
 
-    // commit_miner = commit ONLY: the block_stake snapshot flushes to L1 but the
-    // miner STAYS delegated (DLP-owned) for the next round's ER staking.
+    // commit_miner = commit AND undelegate: the block_stake snapshot flushes to
+    // L1 and the miner returns to our program (so reconcile_miner/claim can read
+    // it as a normal Account). It is re-delegated next round.
     const sigM = await ephemeralProgram.methods.commitMiner()
       .accounts({ payer: admin.publicKey, miner: minerPda })
       .rpc({ skipPreflight: true, commitment: "confirmed" });
     await GetCommitmentSignature(sigM, erConnection);
 
-    // Still delegated on L1.
+    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
+    const minerL1 = await program.account.minerPosition.fetch(minerPda); // our-program-owned
     assert.equal(
-      await awaitOwner(provider.connection, minerPda), DLP_PROGRAM_ID,
-      "miner stays delegated after commit-only"
+      minerL1.blockStake[STAKE_BLOCK].toString(), STAKE_AMT.toString(),
+      "committed miner snapshot on L1"
     );
-    // Committed snapshot is readable on L1. Read block_stake[0] via raw offset
-    // (disc 8 + authority 32 + round_id 8 = 48) since the account is DLP-owned.
-    const minerAcc = await provider.connection.getAccountInfo(minerPda, "confirmed");
-    const blockStake0 = minerAcc!.data.readBigUInt64LE(48 + STAKE_BLOCK * 8);
-    assert.equal(blockStake0.toString(), STAKE_AMT.toString(), "committed miner snapshot on L1");
+  });
+
+  it("task 8: e2e tail — settle -> [swap Insolvent] -> reconcile -> swap -> claim", async () => {
+    // Round 1 is committed+undelegated (task 6) and still OPEN on L1. Settle it
+    // once its deadline passes (M1 admin-injected randomness; real VRF is M2b).
+    await settleAfterDeadline(Buffer.alloc(32, 7));
+    assert.equal((await program.account.round.fetch(round1Pda)).state, 2, "round SETTLED");
+
+    // SOLVENCY GATE: swapping BEFORE reconcile must fail Insolvent —
+    // total_escrow_balance still counts the staked lamports as idle while
+    // round.pot also claims them, so pot_vault can't cover both.
+    let insolvent = false;
+    try {
+      await program.methods.executeSwapMock().accounts(swapAccounts()).rpc();
+    } catch (e: any) {
+      insolvent = /Insolvent/.test(e.toString());
+    }
+    assert.isTrue(insolvent, "pre-reconcile swap must fail Insolvent (the solvency gate)");
+
+    // reconcile_miner reads the committed (DLP-owned) miner snapshot and debits
+    // escrow — this is the real ER-flow exercise of the UncheckedAccount read.
+    const cfgBefore = await program.account.config.fetch(configPda);
+    const escBefore = await program.account.playerEscrow.fetch(escrowPda);
+    await program.methods.reconcileMiner(new anchor.BN(ROUND_ID))
+      .accounts({ config: configPda, escrow: escrowPda, miner: minerPda })
+      .rpc({ skipPreflight: true, commitment: "confirmed" });
+    const cfgAfter = await program.account.config.fetch(configPda);
+    const escAfter = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(
+      escBefore.balance.sub(escAfter.balance).toString(), STAKE_AMT.toString(),
+      "escrow debited by the committed block_stake"
+    );
+    assert.equal(
+      cfgBefore.totalEscrowBalance.sub(cfgAfter.totalEscrowBalance).toString(), STAKE_AMT.toString()
+    );
+    assert.equal(escAfter.activeRound.toNumber(), 0, "withdraw-lock released");
+
+    // Now solvent: the swap succeeds and the round becomes Claimable.
+    await program.methods.executeSwapMock().accounts(swapAccounts()).rpc();
+    assert.equal((await program.account.round.fetch(round1Pda)).state, 4, "round CLAIMABLE");
+
+    // Sole staker claims the full ANSEM proceeds.
+    await program.methods.claim(new anchor.BN(ROUND_ID))
+      .accounts(claimAccounts()).signers([player]).rpc();
+    const ata = await getAccount(provider.connection, playerAta);
+    assert.isAbove(Number(ata.amount), 0, "player received ANSEM proceeds");
   });
 });
