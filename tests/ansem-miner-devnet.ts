@@ -359,4 +359,87 @@ describe("ansem-miner (M3 devnet)", () => {
     await retryPastDeadline(() => program.methods.cancelRound().accounts({ admin: admin.publicKey, round: roundPda }).rpc(), "cancel");
     await program.methods.refund(new anchor.BN(id)).accounts({ authority: player.publicKey, round: roundPda }).signers([player]).rpc().catch(() => {});
   });
+
+  it("phase 3: ER stake -> commit -> request_settle -> real devnet VRF oracle -> Settled -> claim", async function () {
+    this.timeout(600000); // devnet oracle fulfillment latency is unobserved — give it room
+    const player = Keypair.generate();
+    const [escrowPda] = PublicKey.findProgramAddressSync([enc("escrow"), player.publicKey.toBuffer()], program.programId);
+    const [minerPda] = PublicKey.findProgramAddressSync([enc("miner"), player.publicKey.toBuffer()], program.programId);
+    const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
+    const STAKE = new anchor.BN(0.02 * anchor.web3.LAMPORTS_PER_SOL);
+
+    await ensureInitialized();
+    await fundFromAdmin(player.publicKey, 0.1 * anchor.web3.LAMPORTS_PER_SOL);
+    await l1Send(() => program.methods.deposit(new anchor.BN(0.05 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: player.publicKey }).signers([player]).rpc());
+    await program.methods.initMiner().accounts({ authority: player.publicKey }).signers([player]).rpc()
+      .catch((e: any) => { if (!/already in use/.test(String(e))) throw e; });
+    const { id, pda: roundPda } = await createFreshRound(90);
+
+    // Delegate -> join -> ER stake -> commit (same proven Phase-2 flow).
+    await l1Send(() => program.methods.delegateRound(new anchor.BN(id))
+      .accounts({ payer: admin.publicKey, round: roundPda })
+      .remainingAccounts(validatorMeta).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, roundPda, DLP_PROGRAM_ID);
+    await l1Send(() => program.methods.delegateMiner()
+      .accounts({ payer: player.publicKey, miner: minerPda })
+      .remainingAccounts(validatorMeta).signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, minerPda, DLP_PROGRAM_ID);
+    await l1Send(() => program.methods.joinRound(new anchor.BN(id))
+      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc());
+    await awaitJoined(escrowPda, id);
+    for (let i = 0; i < 8; i++) {
+      const m: any = await ephemeralProgram.account.minerPosition.fetch(minerPda).catch(() => null);
+      if (m && m.blockStake[0].toString() === STAKE.toString()) break;
+      await erRpcTolerant(() => ephemeralProgram.methods.stake(0, STAKE)
+        .accounts({ authority: player.publicKey, config: configPda, round: roundPda, miner: minerPda, escrow: escrowPda, sessionToken: null })
+        .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
+      await sleep(2500);
+    }
+    await awaitEr(() => ephemeralProgram.account.minerPosition.fetch(minerPda),
+      (m: any) => m.blockStake[0].toString() === STAKE.toString(), 15);
+    await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
+      .accounts({ payer: admin.publicKey, config: configPda, round: roundPda }).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, roundPda, program.programId.toBase58());
+    await erRpcTolerant(() => ephemeralProgram.methods.commitMiner()
+      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
+      .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
+    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
+    console.log("   ✓ staked in ER + committed to L1; requesting VRF settle on L1");
+
+    // request_settle on L1 (needs Open + past-deadline). Idempotent + tolerant of
+    // clock lag / rate limits: retry until the round leaves Open (-> VrfPending).
+    for (let i = 0; i < 90; i++) {
+      const r: any = await program.account.round.fetch(roundPda).catch(() => null);
+      if (r && r.state !== 0) break;
+      try {
+        // NO skipPreflight: preflight surfaces a clean RoundNotEnded (clock lag)
+        // for the retry regex; with skipPreflight it mangles to "Unknown action".
+        await program.methods.requestSettle(7)
+          .accounts({ payer: admin.publicKey, round: roundPda, config: configPda, oracleQueue: VRF_BASE_QUEUE })
+          .rpc({ commitment: "confirmed" });
+      } catch (e: any) {
+        if (!/RoundNotEnded|BadRoundState|Blockhash not found|429|rate limited|Too Many Requests|not confirmed|block height/i.test(String(e))) throw e;
+      }
+      await sleep(2000);
+    }
+    const pending: any = await program.account.round.fetch(roundPda);
+    assert.notEqual(pending.state, 0, "round left OPEN (request_settle posted the VRF request)");
+    console.log(`   ✓ request_settle posted (state=${pending.state}); awaiting real devnet oracle...`);
+
+    // Wait for the REAL permissioned devnet oracle to fulfill -> Settled (state 2).
+    const settled: any = await awaitEr(() => program.account.round.fetch(roundPda), (r: any) => r.state === 2, 300);
+    assert.notDeepEqual([...settled.randomness], new Array(32).fill(0), "oracle drew nonzero randomness");
+    console.log("   ✓ devnet VRF oracle fulfilled -> round Settled with nonzero randomness");
+
+    // L1 tail: reconcile -> swap -> claim.
+    await l1Send(() => program.methods.reconcileMiner(new anchor.BN(id))
+      .accounts({ config: configPda, escrow: escrowPda, miner: minerPda }).rpc());
+    await l1Send(() => program.methods.executeSwapMock().accounts(swapAccounts(roundPda)).rpc());
+    await l1Send(() => program.methods.claim(new anchor.BN(id))
+      .accounts(claimAccounts(player.publicKey, playerAta, roundPda)).signers([player]).rpc());
+    const minted = await awaitEr(async () => Number((await getAccount(provider.connection, playerAta)).amount), (a: number) => a > 0, 25);
+    assert.isAbove(minted, 0, "player mined ANSEM via a real-VRF-settled devnet round");
+    console.log(`   ✓ mined ${minted} ANSEM via the full VRF-settled devnet flow`);
+  });
 });
