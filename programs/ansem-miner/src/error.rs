@@ -18,4 +18,8 @@ pub enum AnsemError {
     #[msg("Unauthorized")] Unauthorized,
     #[msg("MinerPosition round mismatch")] MinerRoundMismatch,
     #[msg("Pot vault lamports insufficient to cover escrow liabilities plus this round's pot")] Insolvent,
+    #[msg("Previous round must be finalized (claimable or closed) before opening a new one")] PriorRoundNotSettled,
+    #[msg("Round cannot be canceled (must be past deadline and in Open/Settled state)")] RoundNotCancelable,
+    #[msg("Round is not closed")] RoundNotClosed,
+    #[msg("No refundable stake for this player in this round")] NothingToRefund,
 }

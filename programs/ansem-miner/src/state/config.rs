@@ -22,6 +22,14 @@ pub struct Config {
     // can verify it isn't sweeping funds that belong to escrow rather than
     // to the round being swapped. See stake.rs / escrow.rs for updates.
     pub total_escrow_balance: u64,
+    // Round-lifecycle gate: true when the newest round has reached a terminal
+    // state (Claimable via swap, or Closed via cancel_round). create_round
+    // requires this to be true (or current_round_id == 0), forbidding a new
+    // round from opening while the prior one is still Open/Settled. This
+    // serializes rounds so a mis-ordered or abandoned settle cannot silently
+    // strand a growing set of stakers, and keeps the commingled pot_vault
+    // safe (never more than one unswapped pot at a time). See spec §2.
+    pub current_round_finalized: bool,
     pub config_bump: u8,
     pub pot_vault_bump: u8,
     pub treasury_bump: u8,

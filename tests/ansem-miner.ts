@@ -33,6 +33,8 @@ describe("ansem-miner", () => {
     assert.equal(cfg.currentRoundId.toNumber(), 0);
     assert.equal(cfg.feeBps, 100);
     assert.equal(cfg.swapMode, 0);
+    // No round yet => finalized true, so the first create_round is allowed.
+    assert.isTrue(cfg.currentRoundFinalized);
   });
 
   const player = anchor.web3.Keypair.generate();
@@ -59,12 +61,19 @@ describe("ansem-miner", () => {
   });
 
   it("creates round 1", async () => {
+    // Give round 1 a bounded (15s) duration instead of the 60s default so the
+    // "abandoned round" escape-hatch test below can wait out its deadline and
+    // cancel it. The negative tests between here and there run in a few seconds,
+    // well inside the 15s window (deadline still future for the settle-reject).
+    await program.methods.setRoundDuration(new anchor.BN(15)).accounts({ admin: admin.publicKey }).rpc();
     const [round1] = PublicKey.findProgramAddressSync(
       [enc("round"), new anchor.BN(1).toArrayLike(Buffer, "le", 8)], program.programId);
     await program.methods.createRound()
       .accounts({ payer: admin.publicKey, round: round1 }).rpc();
     const cfg = await program.account.config.fetch(configPda);
     assert.equal(cfg.currentRoundId.toNumber(), 1);
+    // Opening a round clears the finalized gate until it reaches a terminal state.
+    assert.isFalse(cfg.currentRoundFinalized);
     const r = await program.account.round.fetch(round1);
     assert.equal(r.roundId.toNumber(), 1);
     assert.equal(r.state, 0);
@@ -154,6 +163,43 @@ describe("ansem-miner", () => {
   // calling settle(), after staking txs have landed.
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  it("cancels an abandoned round 1 and refunds the staker (escape hatch)", async () => {
+    // round 1 (15s duration) was staked by `player` and never settled — the
+    // classic wedge. Wait out its deadline, then admin cancels it (Open + past
+    // deadline -> Closed), which re-arms the create_round gate, and `player`
+    // permissionlessly refunds their staked SOL back into escrow. Pure
+    // accounting: no lamports leave the commingled pot_vault.
+    const r0 = await program.account.round.fetch(round1);
+    const remainingMs = Math.max(0, (r0.deadlineTs.toNumber() - Math.floor(Date.now() / 1000) + 1) * 1000);
+    await sleep(remainingMs);
+
+    await program.methods.cancelRound()
+      .accounts({ admin: admin.publicKey, round: round1 }).rpc();
+    const rClosed = await program.account.round.fetch(round1);
+    assert.equal(rClosed.state, 5); // STATE_CLOSED
+    assert.isTrue((await program.account.config.fetch(configPda)).currentRoundFinalized);
+
+    // player staked 0.5 SOL on round 1 (0.3 + 0.2); refund returns it to escrow.
+    const eBefore = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(eBefore.activeRound.toNumber(), 1);
+    const teBefore = (await program.account.config.fetch(configPda)).totalEscrowBalance.toNumber();
+    await program.methods.refund(new anchor.BN(1))
+      .accounts({ authority: player.publicKey, round: round1 }).signers([player]).rpc();
+    const eAfter = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(eAfter.balance.toNumber(), anchor.web3.LAMPORTS_PER_SOL); // 0.5 -> 1.0 SOL
+    assert.equal(eAfter.activeRound.toNumber(), 0);
+    assert.equal(eAfter.lastClaimedRound.toNumber(), 1);
+    const teAfter = (await program.account.config.fetch(configPda)).totalEscrowBalance.toNumber();
+    assert.equal(teAfter - teBefore, 0.5 * anchor.web3.LAMPORTS_PER_SOL);
+
+    // double refund is rejected (nothing left to refund)
+    try {
+      await program.methods.refund(new anchor.BN(1))
+        .accounts({ authority: player.publicKey, round: round1 }).signers([player]).rpc();
+      assert.fail("should reject double refund");
+    } catch (e: any) { assert.include(e.toString(), "NothingToRefund"); }
+  });
+
   it("creates a zero-duration round that is immediately settleable", async () => {
     const { pda } = await freshInstantRound();
     const rnd = Buffer.alloc(32, 5);
@@ -161,6 +207,11 @@ describe("ansem-miner", () => {
       .accounts({ admin: admin.publicKey, round: pda }).rpc();
     const r = await program.account.round.fetch(pda);
     assert.equal(r.state, 2); // STATE_SETTLED
+
+    // Finalize this settle-only round (no stakers) so the create_round gate is
+    // re-armed for the next round.
+    await program.methods.cancelRound().accounts({ admin: admin.publicKey, round: pda }).rpc();
+    assert.equal((await program.account.round.fetch(pda)).state, 5); // STATE_CLOSED
   });
 
   const [vaultAuth] = PublicKey.findProgramAddressSync([enc("vault_auth")], program.programId);
@@ -268,17 +319,16 @@ describe("ansem-miner", () => {
     } catch (e: any) { assert.include(e.toString(), "AlreadyClaimed"); }
   });
 
-  // Task 10 quality-review fix: pot_vault is a single commingled PDA shared by
-  // every player's idle escrow *and* every round's pot. This test proves
-  // execute_swap_mock cannot drain another player's untouched escrow balance
-  // (or an unswapped round's pot) out to treasury: it runs two rounds
-  // concurrently (round A stakes+settles but is swapped *last*), with a
-  // third player who only deposits (never stakes) and keeps idle escrow
-  // parked in pot_vault the whole time, then asserts pot_vault's lamports
-  // never fall below what's still owed to un-swapped pots + idle escrow.
-  it("keeps pot_vault solvent across interleaved rounds and an idle depositor", async () => {
-    // Idle depositor: funds sit in pot_vault as escrow the whole test and
-    // must never be swept out by someone else's swap.
+  // Solvency: pot_vault is a single commingled PDA shared by every player's
+  // idle escrow *and* the (now serialized) round's pot. The create_round gate
+  // enforces one active round at a time, so this proves the remaining
+  // commingling risk is contained — an idle depositor's parked escrow is never
+  // swept out to treasury by another player's swap. (Concurrent rounds, which
+  // the earlier version of this test exercised, are now forbidden by the
+  // lifecycle gate; per-round vaults for overlapping rounds are deferred to M2.)
+  it("keeps pot_vault solvent: a swap never sweeps idle-depositor escrow", async () => {
+    // Idle depositor: funds sit in pot_vault as escrow the whole test and must
+    // never be swept out by someone else's swap.
     const idle = anchor.web3.Keypair.generate();
     const sig0 = await provider.connection.requestAirdrop(idle.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
     await provider.connection.confirmTransaction(sig0);
@@ -286,55 +336,22 @@ describe("ansem-miner", () => {
     await program.methods.deposit(new anchor.BN(idleAmount))
       .accounts({ authority: idle.publicKey }).signers([idle]).rpc();
 
-    // Round A and Round B run "concurrently": both created and staked before
-    // either is settled/swapped. Round B is swapped first, Round A second,
-    // proving a still-unswapped round's pot is never touched by an earlier
-    // swap and the idle depositor's escrow is never touched by either.
     const pA = anchor.web3.Keypair.generate();
-    const pB = anchor.web3.Keypair.generate();
-    for (const p of [pA, pB]) {
-      const s = await provider.connection.requestAirdrop(p.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
-      await provider.connection.confirmTransaction(s);
-      await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
-        .accounts({ authority: p.publicKey }).signers([p]).rpc();
-      await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
-    }
+    const s = await provider.connection.requestAirdrop(pA.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(s);
+    await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: pA.publicKey }).signers([pA]).rpc();
+    await program.methods.initMiner().accounts({ authority: pA.publicKey }).signers([pA]).rpc();
 
     const roundA = await freshInstantRound(4);
     await program.methods.stake(2, new anchor.BN(0.6 * anchor.web3.LAMPORTS_PER_SOL))
       .accounts({ authority: pA.publicKey, round: roundA.pda }).signers([pA]).rpc();
 
-    const roundB = await freshInstantRound(4);
-    await program.methods.stake(9, new anchor.BN(0.4 * anchor.web3.LAMPORTS_PER_SOL))
-      .accounts({ authority: pB.publicKey, round: roundB.pda }).signers([pB]).rpc();
-
     await sleep(4500);
     await program.methods.settle([...Buffer.alloc(32, 7)])
       .accounts({ admin: admin.publicKey, round: roundA.pda }).rpc();
-    await program.methods.settle([...Buffer.alloc(32, 8)])
-      .accounts({ admin: admin.publicKey, round: roundB.pda }).rpc();
 
     const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
-
-    // Swap B first while A is still unswapped and sitting in the shared vault.
-    await program.methods.executeSwapMock().accounts({
-      payer: admin.publicKey, round: roundB.pda, ansemMint,
-      mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault, potVault, treasury,
-    }).rpc();
-
-    // Invariant: pot_vault lamports must still cover the idle depositor's
-    // escrow balance plus round A's not-yet-swapped pot.
-    const eIdle = await program.account.playerEscrow.fetch(
-      PublicKey.findProgramAddressSync([enc("escrow"), idle.publicKey.toBuffer()], program.programId)[0]);
-    const rAafterBSwap = await program.account.round.fetch(roundA.pda);
-    const potVaultLamportsAfterBSwap = await provider.connection.getBalance(potVault);
-    assert.isAtLeast(
-      potVaultLamportsAfterBSwap,
-      eIdle.balance.toNumber() + rAafterBSwap.pot.toNumber(),
-    );
-
-    // Now swap A. It must still succeed (its pot lamports were never touched
-    // by B's swap) and must not draw on the idle depositor's escrow.
     await program.methods.executeSwapMock().accounts({
       payer: admin.publicKey, round: roundA.pda, ansemMint,
       mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault, potVault, treasury,
@@ -342,14 +359,20 @@ describe("ansem-miner", () => {
 
     const rAfinal = await program.account.round.fetch(roundA.pda);
     assert.equal(rAfinal.state, 4); // CLAIMABLE
-    // pot = 0.6 SOL (600,000,000 lamports); net = pot * 99% (1% fee) =
-    // 594,000,000 lamports; ansem = net * mock_rate(2800e6) / LAMPORTS_PER_SOL
+    // pot = 0.6 SOL; net = pot * 99% (1% fee); ansem = net * mock_rate / 1 SOL
     const potA = 600_000_000;
     const netA = potA * 99 / 100;
     assert.equal(rAfinal.swapProceeds.toNumber(), netA * 2_800_000_000 / 1_000_000_000);
 
-    // The idle depositor can still withdraw their full balance: proof their
-    // escrow lamports were never shipped to treasury by either swap.
+    // Invariant: after the swap, pot_vault still fully covers the idle
+    // depositor's escrow — their parked SOL was never touched.
+    const eIdle = await program.account.playerEscrow.fetch(
+      PublicKey.findProgramAddressSync([enc("escrow"), idle.publicKey.toBuffer()], program.programId)[0]);
+    const potVaultLamports = await provider.connection.getBalance(potVault);
+    assert.isAtLeast(potVaultLamports, eIdle.balance.toNumber());
+
+    // And they can withdraw their full balance: proof the escrow lamports were
+    // never shipped to treasury by the swap.
     const balBefore = await provider.connection.getBalance(idle.publicKey);
     await program.methods.withdraw(new anchor.BN(idleAmount))
       .accounts({ authority: idle.publicKey }).signers([idle]).rpc();

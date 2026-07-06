@@ -61,4 +61,12 @@ pub mod ansem_miner {
     pub fn claim(ctx: Context<Claim>, round_id: u64) -> Result<()> {
         instructions::claim::claim_handler(ctx, round_id)
     }
+
+    pub fn cancel_round(ctx: Context<CancelRound>) -> Result<()> {
+        instructions::recovery::cancel_round_handler(ctx)
+    }
+
+    pub fn refund(ctx: Context<Refund>, round_id: u64) -> Result<()> {
+        instructions::recovery::refund_handler(ctx, round_id)
+    }
 }

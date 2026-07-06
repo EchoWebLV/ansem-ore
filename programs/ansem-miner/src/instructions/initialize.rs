@@ -64,6 +64,8 @@ pub fn initialize_handler(ctx: Context<Initialize>) -> Result<()> {
     c.max_stake_per_round = DEFAULT_MAX_STAKE_PER_ROUND;
     c.mock_rate = DEFAULT_MOCK_RATE;
     c.total_escrow_balance = 0;
+    // No round exists yet; treat as finalized so the first create_round passes.
+    c.current_round_finalized = true;
     c.config_bump = ctx.bumps.config;
     c.pot_vault_bump = ctx.bumps.pot_vault;
     c.treasury_bump = ctx.bumps.treasury;

@@ -12,7 +12,7 @@ pub struct ExecuteSwapMock<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    #[account(seeds = [CONFIG_SEED], bump = config.config_bump)]
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.config_bump)]
     pub config: Account<'info, Config>,
 
     #[account(mut, seeds = [ROUND_SEED, round.round_id.to_le_bytes().as_ref()], bump = round.bump)]
@@ -50,13 +50,21 @@ pub struct ExecuteSwapMock<'info> {
 }
 
 pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
-    let cfg = &ctx.accounts.config;
-    require!(cfg.swap_mode == SWAP_MODE_MOCK, AnsemError::WrongSwapMode);
+    // Copy config scalars up front so we can mutate config (current_round_finalized)
+    // at the end without holding an outstanding immutable borrow of it.
+    let swap_mode = ctx.accounts.config.swap_mode;
+    let fee_bps = ctx.accounts.config.fee_bps;
+    let mock_rate = ctx.accounts.config.mock_rate;
+    let total_escrow_balance = ctx.accounts.config.total_escrow_balance;
+    let pot_vault_bump = ctx.accounts.config.pot_vault_bump;
+    let mint_auth_bump = ctx.accounts.config.mint_auth_bump;
+
+    require!(swap_mode == SWAP_MODE_MOCK, AnsemError::WrongSwapMode);
     let round = &mut ctx.accounts.round;
     require!(round.state == STATE_SETTLED, AnsemError::BadRoundState);
 
     let pot = round.pot;
-    let fee = (pot as u128 * cfg.fee_bps as u128 / 10_000u128) as u64;
+    let fee = (pot as u128 * fee_bps as u128 / 10_000u128) as u64;
     // defensive: fee is <= pot only while fee_bps <= 10_000 (no setter exists in
     // M1, but any future set_fee_bps MUST bound fee_bps <= 10_000).
     let net = pot.checked_sub(fee).ok_or(AnsemError::Overflow)?;
@@ -70,13 +78,12 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     // touches escrow-owed funds, and that pot_vault actually holds at least
     // `pot` lamports for the amount we are about to move.
     let pot_vault_lamports = ctx.accounts.pot_vault.lamports();
-    require!(pot_vault_lamports >= cfg.total_escrow_balance, AnsemError::Insolvent);
-    let available_for_pots = pot_vault_lamports - cfg.total_escrow_balance;
+    require!(pot_vault_lamports >= total_escrow_balance, AnsemError::Insolvent);
+    let available_for_pots = pot_vault_lamports - total_escrow_balance;
     require!(available_for_pots >= pot, AnsemError::Insolvent);
 
     // Simulate the sale: move the entire pot lamports out of pot_vault into treasury.
-    let pv_bump = cfg.pot_vault_bump;
-    let pv_seeds: &[&[u8]] = &[POT_VAULT_SEED, &[pv_bump]];
+    let pv_seeds: &[&[u8]] = &[POT_VAULT_SEED, &[pot_vault_bump]];
     system_program::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.system_program.to_account_info(),
@@ -90,9 +97,8 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     )?;
 
     // Mint ANSEM proceeds to the payout vault.
-    let ansem_out = (net as u128 * cfg.mock_rate as u128 / LAMPORTS_PER_SOL as u128) as u64;
-    let ma_bump = cfg.mint_auth_bump;
-    let ma_seeds: &[&[u8]] = &[MINT_AUTH_SEED, &[ma_bump]];
+    let ansem_out = (net as u128 * mock_rate as u128 / LAMPORTS_PER_SOL as u128) as u64;
+    let ma_seeds: &[&[u8]] = &[MINT_AUTH_SEED, &[mint_auth_bump]];
     token::mint_to(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
@@ -108,5 +114,10 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
 
     round.swap_proceeds = ansem_out;
     round.state = STATE_CLAIMABLE;
+
+    // The round is now finalized (Claimable). Under the create_round
+    // serialization gate the only non-finalized round is always the current
+    // one, so re-arming this flag unblocks the next create_round.
+    ctx.accounts.config.current_round_finalized = true;
     Ok(())
 }

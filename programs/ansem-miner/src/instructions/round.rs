@@ -23,8 +23,14 @@ pub struct CreateRound<'info> {
 
 pub fn create_round_handler(ctx: Context<CreateRound>) -> Result<()> {
     let cfg = &mut ctx.accounts.config;
+    // Serialize rounds: the newest round must be finalized (Claimable/Closed)
+    // before a new one can open. (current_round_id == 0 => no round yet, and
+    // initialize sets current_round_finalized = true, so the first round passes.)
+    require!(cfg.current_round_finalized, AnsemError::PriorRoundNotSettled);
     let new_id = cfg.current_round_id.checked_add(1).ok_or(AnsemError::Overflow)?;
     cfg.current_round_id = new_id;
+    // The new round is Open and therefore not finalized.
+    cfg.current_round_finalized = false;
 
     let now = Clock::get()?.unix_timestamp;
     let r = &mut ctx.accounts.round;

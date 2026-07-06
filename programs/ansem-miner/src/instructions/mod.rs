@@ -24,3 +24,6 @@ pub use swap::*;
 
 pub mod claim;
 pub use claim::*;
+
+pub mod recovery;
+pub use recovery::*;
