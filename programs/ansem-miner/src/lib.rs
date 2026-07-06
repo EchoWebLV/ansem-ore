@@ -91,6 +91,14 @@ pub mod ansem_miner {
         instructions::delegation::delegate_miner_handler(ctx)
     }
 
+    pub fn commit_round(ctx: Context<CommitRound>) -> Result<()> {
+        instructions::delegation::commit_round_handler(ctx)
+    }
+
+    pub fn commit_miner(ctx: Context<CommitMiner>) -> Result<()> {
+        instructions::delegation::commit_miner_handler(ctx)
+    }
+
     // ---- M2a: L1 round-entry accounting ----
     pub fn join_round(ctx: Context<JoinRound>, round_id: u64) -> Result<()> {
         instructions::round_entry::join_round_handler(ctx, round_id)

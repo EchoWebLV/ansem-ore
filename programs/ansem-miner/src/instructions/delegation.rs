@@ -1,10 +1,15 @@
 // ER delegation lifecycle: delegate_round / delegate_miner (L1) + commit_round /
 // commit_miner (ER). Delegation added in tasks 2-3; commits in task 6.
 use anchor_lang::prelude::*;
-use ephemeral_rollups_sdk::anchor::delegate;
+use ephemeral_rollups_sdk::anchor::{commit, delegate};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
+// FoldableIntentBuilder is the trait that provides `build_and_invoke` on the
+// CommitIntentBuilder / CommitAndUndelegateIntentBuilder returned by
+// `.commit()` / `.commit_and_undelegate()` — must be in scope to call it.
+use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder};
 
 use crate::constants::*;
+use crate::state::{MinerPosition, Round};
 
 // ---- Task 2: delegate_round (L1) ----
 // Hands the already-inited Round PDA to the delegation program so staking can
@@ -57,5 +62,55 @@ pub fn delegate_miner_handler(ctx: Context<DelegateMiner>) -> Result<()> {
             ..Default::default()
         },
     )?;
+    Ok(())
+}
+
+// ---- Task 6: commit_round (ER) — commit AND undelegate ----
+// Runs on the ER at round end. `commit_and_undelegate` flushes the Round's final
+// state to L1 AND returns ownership to our program so `settle`/`execute_swap_mock`
+// /`claim` can mutate it on L1. Pure commit (no mutation this ix) → no
+// `round.exit()` needed (that's only for mutate-then-commit in one ix).
+// `#[commit]` injects `magic_context` + `magic_program`.
+#[commit]
+#[derive(Accounts)]
+pub struct CommitRound<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut, seeds = [ROUND_SEED, round.round_id.to_le_bytes().as_ref()], bump = round.bump)]
+    pub round: Account<'info, Round>,
+}
+
+pub fn commit_round_handler(ctx: Context<CommitRound>) -> Result<()> {
+    MagicIntentBundleBuilder::new(
+        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.magic_context.to_account_info(),
+        ctx.accounts.magic_program.to_account_info(),
+    )
+    .commit_and_undelegate(&[ctx.accounts.round.to_account_info()])
+    .build_and_invoke()?;
+    Ok(())
+}
+
+// ---- Task 6: commit_miner (ER) — commit ONLY ----
+// Flushes the MinerPosition's block_stake snapshot to L1 (for reconcile_miner /
+// claim to read) but keeps it DELEGATED — the persistent miner stays in the ER
+// for the next round's staking. Pure commit → no `miner.exit()`.
+#[commit]
+#[derive(Accounts)]
+pub struct CommitMiner<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut, seeds = [MINER_SEED, miner.authority.as_ref()], bump = miner.bump)]
+    pub miner: Account<'info, MinerPosition>,
+}
+
+pub fn commit_miner_handler(ctx: Context<CommitMiner>) -> Result<()> {
+    MagicIntentBundleBuilder::new(
+        ctx.accounts.payer.to_account_info(),
+        ctx.accounts.magic_context.to_account_info(),
+        ctx.accounts.magic_program.to_account_info(),
+    )
+    .commit(&[ctx.accounts.miner.to_account_info()])
+    .build_and_invoke()?;
     Ok(())
 }

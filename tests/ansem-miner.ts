@@ -26,6 +26,13 @@ describe("ansem-miner", () => {
   const [configPda] = PublicKey.findProgramAddressSync([enc("config")], program.programId);
   const [ansemMint] = PublicKey.findProgramAddressSync([enc("ansem_mint")], program.programId);
 
+  // Round window for staking tests. Must comfortably outlast each round's full
+  // pre-swap tx sequence (join_round + all stake() calls, up to ~8 txs for the
+  // multi-player test) even on a loaded machine — otherwise staking races the
+  // deadline and fails RoundEnded. settleAfterDeadline then polls out the rest
+  // of the window, so a generous value only adds a bounded settle wait.
+  const STAKE_WINDOW = 15;
+
   it("initializes config and mock mint", async () => {
     await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
     const cfg = await program.account.config.fetch(configPda);
@@ -317,7 +324,7 @@ describe("ansem-miner", () => {
   const p2 = anchor.web3.Keypair.generate();
 
   it("mock-swaps a settled round's pot into ANSEM", async () => {
-    const { id, pda } = await freshInstantRound(3);
+    const { id, pda } = await freshInstantRound(STAKE_WINDOW);
     // Use a second fresh player to avoid the unclaimed-round guard from the
     // earlier player (player already staked round1 and hasn't claimed it).
     const sig = await provider.connection.requestAirdrop(p2.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
@@ -398,7 +405,7 @@ describe("ansem-miner", () => {
       .accounts({ authority: pA.publicKey }).signers([pA]).rpc();
     await program.methods.initMiner().accounts({ authority: pA.publicKey }).signers([pA]).rpc();
 
-    const roundA = await freshInstantRound(4);
+    const roundA = await freshInstantRound(STAKE_WINDOW);
     await joinOnce(roundA.id, pA);
     await program.methods.stake(2, new anchor.BN(0.6 * anchor.web3.LAMPORTS_PER_SOL))
       .accounts({ authority: pA.publicKey, round: roundA.pda }).signers([pA]).rpc();
@@ -454,7 +461,7 @@ describe("ansem-miner", () => {
         .accounts({ authority: p.publicKey }).signers([p]).rpc();
       await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
     }
-    const { id, pda } = await freshInstantRound(4);
+    const { id, pda } = await freshInstantRound(STAKE_WINDOW);
     for (const p of players) await joinOnce(id, p);
     // varied stakes across squares
     await program.methods.stake(0, new anchor.BN(0.3e9)).accounts({ authority: players[0].publicKey, round: pda }).signers([players[0]]).rpc();
@@ -500,7 +507,7 @@ describe("ansem-miner", () => {
     await provider.connection.confirmTransaction(s);
     await program.methods.deposit(new anchor.BN(2e9)).accounts({ authority: p.publicKey }).signers([p]).rpc();
     await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
-    const { id, pda } = await freshInstantRound(4);
+    const { id, pda } = await freshInstantRound(STAKE_WINDOW);
 
     const rnd = Buffer.alloc(32, 5);
     const smallBlock = computeJackpotBlock(rnd, "jkblock_sm");
@@ -555,7 +562,7 @@ describe("ansem-miner", () => {
       await program.methods.deposit(new anchor.BN(2e9)).accounts({ authority: p.publicKey }).signers([p]).rpc();
       await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
     }
-    const { id, pda } = await freshInstantRound(4);
+    const { id, pda } = await freshInstantRound(STAKE_WINDOW);
     const rnd = Buffer.alloc(32, 5);
     const smallBlock = computeJackpotBlock(rnd, "jkblock_sm");
     // both stake the SAME amount on the SAME winning square
@@ -617,7 +624,7 @@ describe("ansem-miner", () => {
     assert.equal(cfgCheck.admin.toBase58(), admin.publicKey.toBase58());
 
     // createRound
-    const { id, pda: roundPda } = await freshInstantRound(4);
+    const { id, pda: roundPda } = await freshInstantRound(STAKE_WINDOW);
 
     // deposit
     await program.methods.deposit(new anchor.BN(depositAmount))

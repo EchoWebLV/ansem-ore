@@ -70,25 +70,34 @@ pub struct ReconcileMiner<'info> {
     // Declared before `miner` so the miner PDA seeds can reference its authority.
     #[account(mut, seeds = [ESCROW_SEED, escrow.authority.as_ref()], bump = escrow.bump)]
     pub escrow: Account<'info, PlayerEscrow>,
-    // Committed (post commit_miner) snapshot; belongs to `escrow`'s authority.
-    #[account(mut, seeds = [MINER_SEED, escrow.authority.as_ref()], bump = miner.bump)]
-    pub miner: Account<'info, MinerPosition>,
+    /// CHECK: the committed (post commit_miner) MinerPosition snapshot for
+    /// `escrow`'s authority. It is an UncheckedAccount — NOT `Account<Miner>` —
+    /// because after commit-only the miner is still DLP-owned on L1, so Anchor's
+    /// owner check would reject it. We only READ it (manual try_deserialize);
+    /// we never write it (a program cannot mutate an account it doesn't own).
+    /// The seeds constraint pins it to the correct PDA for this escrow.
+    #[account(seeds = [MINER_SEED, escrow.authority.as_ref()], bump)]
+    pub miner: UncheckedAccount<'info>,
 }
 
 pub fn reconcile_miner_handler(ctx: Context<ReconcileMiner>, round_id: u64) -> Result<()> {
-    // Only a genuine joiner of THIS round; also makes the call idempotent
-    // (active_round is set to 0 at the end, so a second call fails here).
+    // Only a genuine joiner of THIS round (join_round set active_round).
     require!(ctx.accounts.escrow.active_round == round_id, AnsemError::NotCurrentRound);
 
-    // Debit only if this player actually staked this round and has not been
-    // reconciled yet (join-without-stake falls through with no debit).
-    let miner = &mut ctx.accounts.miner;
-    if miner.round_id == round_id && !miner.reconciled {
-        let staked: u64 = miner.block_stake.iter().sum();
-        miner.reconciled = true;
+    // Read the committed snapshot without an owner check (miner may be DLP-owned).
+    let (staked, staked_this_round) = {
+        let data = ctx.accounts.miner.try_borrow_data()?;
+        let miner = MinerPosition::try_deserialize(&mut &data[..])?;
+        (miner.block_stake.iter().sum::<u64>(), miner.round_id == round_id)
+    };
 
-        let escrow = &mut ctx.accounts.escrow;
+    // Debit only if this player actually staked this round AND hasn't already
+    // been reconciled for it (guards the re-join → re-reconcile double-debit).
+    // A join-without-stake player falls through with no debit.
+    let escrow = &mut ctx.accounts.escrow;
+    if staked_this_round && escrow.reconciled_round != round_id {
         escrow.balance = escrow.balance.checked_sub(staked).ok_or(AnsemError::Overflow)?;
+        escrow.reconciled_round = round_id;
         let cfg = &mut ctx.accounts.config;
         cfg.total_escrow_balance =
             cfg.total_escrow_balance.checked_sub(staked).ok_or(AnsemError::Overflow)?;

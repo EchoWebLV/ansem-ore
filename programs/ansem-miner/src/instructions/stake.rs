@@ -52,11 +52,11 @@ pub fn stake_handler(ctx: Context<Stake>, block: u8, amount: u64) -> Result<()> 
 
     // New-round entry: reset the persistent miner. The L1 `join_round` already
     // set escrow.active_round and enforced "prior round reconciled/clean", so
-    // the ER path does NOT read/write escrow.active_round.
+    // the ER path does NOT read/write escrow. (Reconciliation is tracked on the
+    // escrow's reconciled_round, set by the L1 reconcile_miner.)
     if miner.round_id != round.round_id {
         miner.block_stake = [0u64; GRID_SIZE];
         miner.round_id = round.round_id;
-        miner.reconciled = false;
     }
 
     // Per-round cap AND soft budget check against the (read-only) escrow clone.

@@ -2,6 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { Connection, PublicKey, Keypair } from "@solana/web3.js";
+import { GetCommitmentSignature } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { assert } from "chai";
 
 // ANSEM Miner — Ephemeral Rollup integration suite (M2a).
@@ -32,6 +33,20 @@ async function awaitOwner(
     await sleep(300);
   }
   throw new Error(`account ${pubkey.toBase58()} not found after ${tries} tries`);
+}
+
+// Poll until an account's owner equals `expected` (commit/undelegate flush to
+// the base layer lags the ER tx).
+async function awaitOwnerIs(
+  conn: Connection, pubkey: PublicKey, expected: string, tries = 40
+): Promise<void> {
+  let last = "?";
+  for (let i = 0; i < tries; i++) {
+    const acc = await conn.getAccountInfo(pubkey, "confirmed");
+    if (acc) { last = acc.owner.toBase58(); if (last === expected) return; }
+    await sleep(400);
+  }
+  throw new Error(`owner of ${pubkey.toBase58()} = ${last}, expected ${expected}`);
 }
 
 // Poll an ER-side account fetch until `pred` holds (handles ER read lag right
@@ -208,7 +223,6 @@ describe("ansem-miner (ER)", () => {
       (m: any) => m.blockStake[STAKE_BLOCK].toString() === STAKE_AMT.toString()
     );
     assert.equal(miner.roundId.toNumber(), ROUND_ID, "miner tagged to this round");
-    assert.equal(miner.reconciled, false, "reconciled reset false on new round");
 
     // ER-side: the delegated round pot grew by the stake.
     const round = await ephemeralProgram.account.round.fetch(round1Pda);
@@ -221,5 +235,37 @@ describe("ansem-miner (ER)", () => {
       escrowAfter.balance.toString(), escrowBefore.balance.toString(),
       "ER stake must not debit L1 escrow"
     );
+  });
+
+  it("task 6: commit_round undelegates to L1; commit_miner flushes snapshot, stays delegated", async () => {
+    // commit_round = commit AND undelegate: Round returns to our program on L1
+    // (writable again) carrying the ER's final pot. Payer is the ER fee payer
+    // (admin) — a non-fee-payer writable signer would trip InvalidWritableAccount.
+    const sigR = await ephemeralProgram.methods.commitRound()
+      .accounts({ payer: admin.publicKey, round: round1Pda })
+      .rpc({ skipPreflight: true, commitment: "confirmed" });
+    await GetCommitmentSignature(sigR, erConnection);
+
+    await awaitOwnerIs(provider.connection, round1Pda, program.programId.toBase58());
+    const roundL1 = await program.account.round.fetch(round1Pda); // now our-program-owned
+    assert.equal(roundL1.pot.toString(), STAKE_AMT.toString(), "committed pot landed on L1");
+
+    // commit_miner = commit ONLY: the block_stake snapshot flushes to L1 but the
+    // miner STAYS delegated (DLP-owned) for the next round's ER staking.
+    const sigM = await ephemeralProgram.methods.commitMiner()
+      .accounts({ payer: admin.publicKey, miner: minerPda })
+      .rpc({ skipPreflight: true, commitment: "confirmed" });
+    await GetCommitmentSignature(sigM, erConnection);
+
+    // Still delegated on L1.
+    assert.equal(
+      await awaitOwner(provider.connection, minerPda), DLP_PROGRAM_ID,
+      "miner stays delegated after commit-only"
+    );
+    // Committed snapshot is readable on L1. Read block_stake[0] via raw offset
+    // (disc 8 + authority 32 + round_id 8 = 48) since the account is DLP-owned.
+    const minerAcc = await provider.connection.getAccountInfo(minerPda, "confirmed");
+    const blockStake0 = minerAcc!.data.readBigUInt64LE(48 + STAKE_BLOCK * 8);
+    assert.equal(blockStake0.toString(), STAKE_AMT.toString(), "committed miner snapshot on L1");
   });
 });
