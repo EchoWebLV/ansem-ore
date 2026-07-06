@@ -33,12 +33,18 @@ pub struct CancelRound<'info> {
 }
 
 pub fn cancel_round_handler(ctx: Context<CancelRound>) -> Result<()> {
+    let current_round_id = ctx.accounts.config.current_round_id;
     let round = &mut ctx.accounts.round;
     // Only a past-deadline round that never reached Claimable can be canceled.
     require!(
         round.state == STATE_OPEN || round.state == STATE_SETTLED,
         AnsemError::RoundNotCancelable
     );
+    // Defense-in-depth: only the current round is ever cancelable. Under M1's
+    // serialization gate this is already implied (older rounds are Claimable/
+    // Closed and fail the state check above), but asserting it explicitly keeps
+    // the invariant enforced when M2's async VRF/crank flow reworks the lifecycle.
+    require!(round.round_id == current_round_id, AnsemError::RoundNotCancelable);
     let now = Clock::get()?.unix_timestamp;
     require!(now >= round.deadline_ts, AnsemError::RoundNotCancelable);
 
