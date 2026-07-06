@@ -15,3 +15,6 @@ pub use stake::*;
 
 pub mod settle;
 pub use settle::*;
+
+pub mod admin;
+pub use admin::*;

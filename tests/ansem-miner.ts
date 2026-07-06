@@ -117,4 +117,29 @@ describe("ansem-miner", () => {
       assert.fail("should reject before deadline");
     } catch (e:any) { assert.include(e.toString(), "RoundNotEnded"); }
   });
+
+  // Task 9b: deterministic time control for tests.
+  // Drives round_duration_secs to 0 for a dedicated round so settle/swap/claim
+  // can be exercised immediately without waiting out a real 60s deadline.
+  // The earlier rounds (e.g. round1) keep the 60s default untouched.
+  async function freshInstantRound(): Promise<{ id: number; pda: PublicKey }> {
+    await program.methods.setRoundDuration(new anchor.BN(0)).accounts({ admin: admin.publicKey }).rpc();
+    const cfgBefore = await program.account.config.fetch(configPda);
+    const nextId = cfgBefore.currentRoundId.toNumber() + 1;
+    const [pda] = PublicKey.findProgramAddressSync(
+      [enc("round"), new anchor.BN(nextId).toArrayLike(Buffer, "le", 8)], program.programId);
+    await program.methods.createRound().accounts({ payer: admin.publicKey, round: pda }).rpc();
+    const cfg = await program.account.config.fetch(configPda);
+    const id = cfg.currentRoundId.toNumber();
+    return { id, pda };
+  }
+
+  it("creates a zero-duration round that is immediately settleable", async () => {
+    const { pda } = await freshInstantRound();
+    const rnd = Buffer.alloc(32, 5);
+    await program.methods.settle([...rnd])
+      .accounts({ admin: admin.publicKey, round: pda }).rpc();
+    const r = await program.account.round.fetch(pda);
+    assert.equal(r.state, 2); // STATE_SETTLED
+  });
 });

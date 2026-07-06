@@ -41,4 +41,8 @@ pub mod ansem_miner {
     pub fn settle(ctx: Context<Settle>, randomness: [u8; 32]) -> Result<()> {
         instructions::settle::handler(ctx, randomness)
     }
+
+    pub fn set_round_duration(ctx: Context<SetParams>, secs: i64) -> Result<()> {
+        instructions::admin::set_round_duration(ctx, secs)
+    }
 }
