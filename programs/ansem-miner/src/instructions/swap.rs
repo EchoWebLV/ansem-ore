@@ -36,6 +36,22 @@ pub struct ExecuteSwapMock<'info> {
     )]
     pub payout_vault: Account<'info, TokenAccount>,
 
+    /// CHECK: small jackpot authority PDA (owns the small jackpot vault)
+    #[account(seeds = [JACKPOT_SM_AUTH_SEED], bump = config.small_jackpot_auth_bump)]
+    pub small_jackpot_authority: UncheckedAccount<'info>,
+
+    /// Read-only: its balance is snapshotted into round.small_jackpot_pool.
+    #[account(associated_token::mint = ansem_mint, associated_token::authority = small_jackpot_authority)]
+    pub small_jackpot_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: big jackpot authority PDA (owns the big jackpot vault)
+    #[account(seeds = [JACKPOT_BIG_AUTH_SEED], bump = config.big_jackpot_auth_bump)]
+    pub big_jackpot_authority: UncheckedAccount<'info>,
+
+    /// Read-only: its balance is snapshotted into round.big_jackpot_pool.
+    #[account(associated_token::mint = ansem_mint, associated_token::authority = big_jackpot_authority)]
+    pub big_jackpot_vault: Account<'info, TokenAccount>,
+
     /// CHECK: SOL pot vault PDA
     #[account(mut, seeds = [POT_VAULT_SEED], bump = config.pot_vault_bump)]
     pub pot_vault: UncheckedAccount<'info>,
@@ -58,6 +74,12 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     let total_escrow_balance = ctx.accounts.config.total_escrow_balance;
     let pot_vault_bump = ctx.accounts.config.pot_vault_bump;
     let mint_auth_bump = ctx.accounts.config.mint_auth_bump;
+    let small_jackpot_bps = ctx.accounts.config.small_jackpot_bps;
+    let big_jackpot_bps = ctx.accounts.config.big_jackpot_bps;
+    // Freeze the jackpot vault balances at the moment the round becomes
+    // claimable; the per-tier payout pool is derived from these snapshots.
+    let small_vault_amount = ctx.accounts.small_jackpot_vault.amount;
+    let big_vault_amount = ctx.accounts.big_jackpot_vault.amount;
 
     require!(swap_mode == SWAP_MODE_MOCK, AnsemError::WrongSwapMode);
     let round = &mut ctx.accounts.round;
@@ -113,6 +135,18 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     )?;
 
     round.swap_proceeds = ansem_out;
+
+    // Snapshot each hit tier's payout pool from its frozen vault balance, so
+    // every claimant divides against this fixed value (order-independent).
+    if round.small_jackpot_hit {
+        round.small_jackpot_pool =
+            (small_vault_amount as u128 * small_jackpot_bps as u128 / 10_000u128) as u64;
+    }
+    if round.big_jackpot_hit {
+        round.big_jackpot_pool =
+            (big_vault_amount as u128 * big_jackpot_bps as u128 / 10_000u128) as u64;
+    }
+
     round.state = STATE_CLAIMABLE;
 
     // The round is now finalized (Claimable). Under the create_round

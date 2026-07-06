@@ -27,8 +27,10 @@ pub fn settle_handler(ctx: Context<Settle>, randomness: [u8; 32]) -> Result<()> 
     require!(now >= round.deadline_ts, AnsemError::RoundNotEnded);
 
     round.randomness = randomness;
-    round.jackpot_hit = math::jackpot_hit(&randomness, cfg.jackpot_odds);
-    round.jackpot_block = math::jackpot_block(&randomness);
+    round.small_jackpot_hit = math::jackpot_hit(&randomness, cfg.small_jackpot_odds, b"jackpot_sm");
+    round.small_jackpot_block = math::jackpot_block(&randomness, b"jkblock_sm");
+    round.big_jackpot_hit = math::jackpot_hit(&randomness, cfg.big_jackpot_odds, b"jackpot_big");
+    round.big_jackpot_block = math::jackpot_block(&randomness, b"jkblock_big");
     round.state = STATE_SETTLED;
     Ok(())
 }

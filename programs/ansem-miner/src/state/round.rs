@@ -17,8 +17,16 @@ pub struct Round {
     pub pot: u64,
     pub state: u8,
     pub randomness: [u8; 32],
-    pub jackpot_hit: bool,
-    pub jackpot_block: u8,
+    // Two independent jackpot tiers. `*_pool` is the payout pool SNAPSHOT frozen
+    // at swap time (vault.amount * tier_bps / 10_000); every claimant divides
+    // against this fixed value, never the live vault balance, so payouts are
+    // order-independent. Mirrors how swap_proceeds is snapshotted. See spec §2.
+    pub small_jackpot_hit: bool,
+    pub small_jackpot_block: u8,
+    pub small_jackpot_pool: u64,
+    pub big_jackpot_hit: bool,
+    pub big_jackpot_block: u8,
+    pub big_jackpot_pool: u64,
     pub swap_proceeds: u64,
     pub bump: u8,
 }

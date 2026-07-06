@@ -37,15 +37,18 @@ pub fn payout(player_weight: u128, total_weight: u128, proceeds: u64) -> u64 {
     ((proceeds as u128 * player_weight) / total_weight) as u64
 }
 
-pub fn jackpot_hit(randomness: &[u8; 32], odds: u32) -> bool {
+/// True with probability ~1/odds. `domain` separates independent rolls (the two
+/// jackpot tiers use distinct domains so their hits are uncorrelated).
+pub fn jackpot_hit(randomness: &[u8; 32], odds: u32, domain: &[u8]) -> bool {
     if odds == 0 { return false; }
-    let h = keccak::hashv(&[randomness, b"jackpot"]);
+    let h = keccak::hashv(&[randomness, domain]);
     let x = u32::from_le_bytes([h.0[0], h.0[1], h.0[2], h.0[3]]);
     x % odds == 0
 }
 
-pub fn jackpot_block(randomness: &[u8; 32]) -> u8 {
-    let h = keccak::hashv(&[randomness, b"jkblock"]);
+/// Winning square in [0, GRID_SIZE). `domain` separates the two tiers' squares.
+pub fn jackpot_block(randomness: &[u8; 32], domain: &[u8]) -> u8 {
+    let h = keccak::hashv(&[randomness, domain]);
     (h.0[0] as usize % GRID_SIZE) as u8
 }
 
@@ -119,14 +122,33 @@ mod tests {
         for i in 0..n {
             let mut r = [0u8; 32];
             r[0..4].copy_from_slice(&i.to_le_bytes());
-            if jackpot_hit(&r, 625) { hits += 1; }
+            if jackpot_hit(&r, 625, b"jackpot_big") { hits += 1; }
         }
         // expect ~32 over 20k; allow wide band
         assert!((10..70).contains(&hits), "hits={hits}");
     }
 
     #[test]
+    fn jackpot_tiers_are_independent() {
+        // The two tiers use distinct keccak domains, so a hit on one does not
+        // imply a hit on the other, and their squares are drawn separately.
+        let mut agree = 0u32;
+        let n = 2_000u32;
+        for i in 0..n {
+            let mut r = [0u8; 32];
+            r[0..4].copy_from_slice(&i.to_le_bytes());
+            let sm = jackpot_block(&r, b"jkblock_sm");
+            let big = jackpot_block(&r, b"jkblock_big");
+            if sm == big { agree += 1; }
+        }
+        // If independent, squares coincide ~1/25 of the time; assert it's not
+        // locked together (which would happen if they shared a domain).
+        assert!(agree < n / 2, "tiers look correlated: agree={agree}/{n}");
+    }
+
+    #[test]
     fn jackpot_block_in_range() {
-        assert!(jackpot_block(&R) < 25);
+        assert!(jackpot_block(&R, b"jkblock_sm") < 25);
+        assert!(jackpot_block(&R, b"jkblock_big") < 25);
     }
 }

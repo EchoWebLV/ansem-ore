@@ -13,42 +13,54 @@ pub struct Claim<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
+    // Accounts are Box'd to keep Claim::try_accounts under the 4KB BPF stack
+    // frame limit (deserializing this many token/state accounts on the stack
+    // overflows it — a silent overflow manifests as bogus CPI privilege errors).
     #[account(seeds = [CONFIG_SEED], bump = config.config_bump)]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
 
     #[account(seeds = [ROUND_SEED, round_id.to_le_bytes().as_ref()], bump = round.bump,
         constraint = round.round_id == round_id @ AnsemError::MinerRoundMismatch)]
-    pub round: Account<'info, Round>,
+    pub round: Box<Account<'info, Round>>,
 
     #[account(mut, seeds = [MINER_SEED, authority.key().as_ref()], bump = miner.bump,
         constraint = miner.authority == authority.key() @ AnsemError::Unauthorized,
         constraint = miner.round_id == round_id @ AnsemError::MinerRoundMismatch)]
-    pub miner: Account<'info, MinerPosition>,
+    pub miner: Box<Account<'info, MinerPosition>>,
 
     #[account(mut, seeds = [ESCROW_SEED, authority.key().as_ref()], bump = escrow.bump,
         constraint = escrow.authority == authority.key() @ AnsemError::Unauthorized)]
-    pub escrow: Account<'info, PlayerEscrow>,
+    pub escrow: Box<Account<'info, PlayerEscrow>>,
 
     #[account(address = config.ansem_mint)]
-    pub ansem_mint: Account<'info, Mint>,
+    pub ansem_mint: Box<Account<'info, Mint>>,
 
     /// CHECK: vault authority PDA
     #[account(seeds = [VAULT_AUTH_SEED], bump = config.vault_auth_bump)]
     pub vault_authority: UncheckedAccount<'info>,
 
-    /// CHECK: jackpot authority PDA
-    #[account(seeds = [JACKPOT_AUTH_SEED], bump = config.jackpot_auth_bump)]
-    pub jackpot_authority: UncheckedAccount<'info>,
+    /// CHECK: small jackpot authority PDA
+    #[account(seeds = [JACKPOT_SM_AUTH_SEED], bump = config.small_jackpot_auth_bump)]
+    pub small_jackpot_authority: UncheckedAccount<'info>,
+
+    /// CHECK: big jackpot authority PDA
+    #[account(seeds = [JACKPOT_BIG_AUTH_SEED], bump = config.big_jackpot_auth_bump)]
+    pub big_jackpot_authority: UncheckedAccount<'info>,
 
     #[account(mut, associated_token::mint = ansem_mint, associated_token::authority = vault_authority)]
-    pub payout_vault: Account<'info, TokenAccount>,
+    pub payout_vault: Box<Account<'info, TokenAccount>>,
 
-    #[account(mut, associated_token::mint = ansem_mint, associated_token::authority = jackpot_authority)]
-    pub jackpot_vault: Account<'info, TokenAccount>,
+    // Both jackpot vaults are created at initialize, so they always exist and a
+    // non-jackpot claim never fails on a missing vault (fixes the audit's DoS).
+    #[account(mut, associated_token::mint = ansem_mint, associated_token::authority = small_jackpot_authority)]
+    pub small_jackpot_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(mut, associated_token::mint = ansem_mint, associated_token::authority = big_jackpot_authority)]
+    pub big_jackpot_vault: Box<Account<'info, TokenAccount>>,
 
     #[account(init_if_needed, payer = authority,
         associated_token::mint = ansem_mint, associated_token::authority = authority)]
-    pub player_ata: Account<'info, TokenAccount>,
+    pub player_ata: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -87,27 +99,55 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
         )?;
     }
 
-    // jackpot payout (additive) if this round hit and the player staked the jackpot square
-    if round.jackpot_hit {
-        let jb = round.jackpot_block as usize;
+    // Jackpot payouts (additive). Each tier pays the player's pro-rata share of
+    // the tier's SNAPSHOTTED pool (frozen at swap time in round.*_jackpot_pool),
+    // never the live vault balance — so a claimant's share depends only on their
+    // stake share, not on claim order (the audit's order-dependence fix).
+    if round.small_jackpot_hit {
+        let jb = round.small_jackpot_block as usize;
         let block_total = round.block_sol[jb];
         let player_on_block = miner.block_stake[jb];
         if block_total > 0 && player_on_block > 0 {
-            let pool = ctx.accounts.jackpot_vault.amount;
-            let payout_pool = (pool as u128 * cfg.jackpot_bps as u128 / 10_000u128) as u64;
-            let share = (payout_pool as u128 * player_on_block as u128 / block_total as u128) as u64;
+            let share =
+                (round.small_jackpot_pool as u128 * player_on_block as u128 / block_total as u128) as u64;
             if share > 0 {
-                let ja_bump = cfg.jackpot_auth_bump;
-                let ja_seeds: &[&[u8]] = &[JACKPOT_AUTH_SEED, &[ja_bump]];
+                let sj_bump = cfg.small_jackpot_auth_bump;
+                let sj_seeds: &[&[u8]] = &[JACKPOT_SM_AUTH_SEED, &[sj_bump]];
                 token::transfer(
                     CpiContext::new_with_signer(
                         ctx.accounts.token_program.to_account_info(),
                         Transfer {
-                            from: ctx.accounts.jackpot_vault.to_account_info(),
+                            from: ctx.accounts.small_jackpot_vault.to_account_info(),
                             to: ctx.accounts.player_ata.to_account_info(),
-                            authority: ctx.accounts.jackpot_authority.to_account_info(),
+                            authority: ctx.accounts.small_jackpot_authority.to_account_info(),
                         },
-                        &[ja_seeds],
+                        &[sj_seeds],
+                    ),
+                    share,
+                )?;
+            }
+        }
+    }
+
+    if round.big_jackpot_hit {
+        let jb = round.big_jackpot_block as usize;
+        let block_total = round.block_sol[jb];
+        let player_on_block = miner.block_stake[jb];
+        if block_total > 0 && player_on_block > 0 {
+            let share =
+                (round.big_jackpot_pool as u128 * player_on_block as u128 / block_total as u128) as u64;
+            if share > 0 {
+                let bj_bump = cfg.big_jackpot_auth_bump;
+                let bj_seeds: &[&[u8]] = &[JACKPOT_BIG_AUTH_SEED, &[bj_bump]];
+                token::transfer(
+                    CpiContext::new_with_signer(
+                        ctx.accounts.token_program.to_account_info(),
+                        Transfer {
+                            from: ctx.accounts.big_jackpot_vault.to_account_info(),
+                            to: ctx.accounts.player_ata.to_account_info(),
+                            authority: ctx.accounts.big_jackpot_authority.to_account_info(),
+                        },
+                        &[bj_seeds],
                     ),
                     share,
                 )?;
