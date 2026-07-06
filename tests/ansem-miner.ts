@@ -60,4 +60,14 @@ describe("ansem-miner", () => {
     assert.equal(r.state, 0);
     assert.isAbove(r.deadlineTs.toNumber(), Math.floor(Date.now()/1000));
   });
+
+  const [minerPda] = PublicKey.findProgramAddressSync(
+    [enc("miner"), player.publicKey.toBuffer()], program.programId);
+
+  it("initializes the persistent miner position", async () => {
+    await program.methods.initMiner().accounts({ authority: player.publicKey }).signers([player]).rpc();
+    const m = await program.account.minerPosition.fetch(minerPda);
+    assert.equal(m.authority.toBase58(), player.publicKey.toBase58());
+    assert.equal(m.roundId.toNumber(), 0);
+  });
 });

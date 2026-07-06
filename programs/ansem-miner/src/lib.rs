@@ -29,4 +29,8 @@ pub mod ansem_miner {
     pub fn create_round(ctx: Context<CreateRound>) -> Result<()> {
         instructions::round::handler(ctx)
     }
+
+    pub fn init_miner(ctx: Context<InitMiner>) -> Result<()> {
+        instructions::miner::handler(ctx)
+    }
 }

@@ -6,3 +6,6 @@ pub use escrow::*;
 
 pub mod round;
 pub use round::*;
+
+pub mod miner;
+pub use miner::*;
