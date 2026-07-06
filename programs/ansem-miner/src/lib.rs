@@ -49,11 +49,4 @@ pub mod ansem_miner {
     pub fn execute_swap_mock(ctx: Context<ExecuteSwapMock>) -> Result<()> {
         instructions::swap::handler(ctx)
     }
-
-    // Test-support seam (M1 only): see instructions/admin.rs for rationale.
-    // Lets integration tests simulate an externally-drained pot_vault so the
-    // Insolvent guard in execute_swap_mock can be proven to actually revert.
-    pub fn debug_drain_pot_vault(ctx: Context<DebugDrainPotVault>, amount: u64) -> Result<()> {
-        instructions::admin::debug_drain_pot_vault(ctx, amount)
-    }
 }
