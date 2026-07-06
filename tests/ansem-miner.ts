@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getAccount, createAssociatedTokenAccountIdempotent } from "@solana/spl-token";
 
 const enc = (s: string) => Buffer.from(s);
 
@@ -157,12 +157,16 @@ describe("ansem-miner", () => {
   const [vaultAuth] = PublicKey.findProgramAddressSync([enc("vault_auth")], program.programId);
   const [mintAuth] = PublicKey.findProgramAddressSync([enc("mint_auth")], program.programId);
   const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.programId);
+  const [jackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_auth")], program.programId);
+
+  // Hoisted to describe-scope (rather than declared inside the swap test) so
+  // the claim tests below can reference the same staker/round.
+  const p2 = anchor.web3.Keypair.generate();
 
   it("mock-swaps a settled round's pot into ANSEM", async () => {
     const { pda } = await freshInstantRound(3);
     // Use a second fresh player to avoid the unclaimed-round guard from the
     // earlier player (player already staked round1 and hasn't claimed it).
-    const p2 = anchor.web3.Keypair.generate();
     const sig = await provider.connection.requestAirdrop(p2.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
     await provider.connection.confirmTransaction(sig);
     await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
@@ -192,6 +196,67 @@ describe("ansem-miner", () => {
     assert.equal(r.swapProceeds.toNumber(), 2_772_000_000);
     const bal = await getAccount(provider.connection, payoutVault);
     assert.equal(Number(bal.amount), 2_772_000_000);
+  });
+
+  it("claims the full proceeds for a sole staker", async () => {
+    // continue from the swap test's round: p2 is the only staker
+    const cfg = await program.account.config.fetch(configPda);
+    const id = cfg.currentRoundId.toNumber();
+    const [pda] = PublicKey.findProgramAddressSync(
+      [enc("round"), new anchor.BN(id).toArrayLike(Buffer, "le", 8)], program.programId);
+    const [p2Escrow] = PublicKey.findProgramAddressSync([enc("escrow"), p2.publicKey.toBuffer()], program.programId);
+    const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
+    const jackpotVault = getAssociatedTokenAddressSync(ansemMint, jackpotAuth, true);
+    const p2Ata = getAssociatedTokenAddressSync(ansemMint, p2.publicKey);
+
+    // claim.rs requires jackpot_vault to already exist (it's a strict
+    // Account<TokenAccount>, not init_if_needed) even though this round never
+    // hits the jackpot; create the empty ATA client-side (test-only setup,
+    // not a program instruction). Task 12 seeds it with real balance via an
+    // admin-only seed_jackpot instruction to exercise the jackpot payout path.
+    await createAssociatedTokenAccountIdempotent(
+      provider.connection, admin.payer, ansemMint, jackpotAuth, { commitment: "confirmed" }, undefined, undefined, true,
+    );
+
+    await program.methods.claim(new anchor.BN(id)).accounts({
+      authority: p2.publicKey,
+      round: pda,
+      ansemMint,
+      vaultAuthority: vaultAuth,
+      jackpotAuthority: jackpotAuth,
+      payoutVault,
+      jackpotVault,
+      playerAta: p2Ata,
+    }).signers([p2]).rpc();
+
+    const bal = await getAccount(provider.connection, p2Ata);
+    assert.equal(Number(bal.amount), 2_772_000_000); // sole staker gets all proceeds
+    const e = await program.account.playerEscrow.fetch(p2Escrow);
+    assert.equal(e.activeRound.toNumber(), 0);
+    assert.equal(e.lastClaimedRound.toNumber(), id);
+  });
+
+  it("rejects a double claim", async () => {
+    const cfg = await program.account.config.fetch(configPda);
+    const id = cfg.currentRoundId.toNumber();
+    const [pda] = PublicKey.findProgramAddressSync(
+      [enc("round"), new anchor.BN(id).toArrayLike(Buffer, "le", 8)], program.programId);
+    const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
+    const jackpotVault = getAssociatedTokenAddressSync(ansemMint, jackpotAuth, true);
+    const p2Ata = getAssociatedTokenAddressSync(ansemMint, p2.publicKey);
+    try {
+      await program.methods.claim(new anchor.BN(id)).accounts({
+        authority: p2.publicKey,
+        round: pda,
+        ansemMint,
+        vaultAuthority: vaultAuth,
+        jackpotAuthority: jackpotAuth,
+        payoutVault,
+        jackpotVault,
+        playerAta: p2Ata,
+      }).signers([p2]).rpc();
+      assert.fail("should reject");
+    } catch (e: any) { assert.include(e.toString(), "AlreadyClaimed"); }
   });
 
   // Task 10 quality-review fix: pot_vault is a single commingled PDA shared by

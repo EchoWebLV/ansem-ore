@@ -21,3 +21,6 @@ pub use admin::*;
 
 pub mod swap;
 pub use swap::*;
+
+pub mod claim;
+pub use claim::*;

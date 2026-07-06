@@ -46,7 +46,15 @@ pub mod ansem_miner {
         instructions::admin::set_round_duration(ctx, secs)
     }
 
+    pub fn set_jackpot_odds(ctx: Context<SetParams>, odds: u32) -> Result<()> {
+        instructions::admin::set_jackpot_odds(ctx, odds)
+    }
+
     pub fn execute_swap_mock(ctx: Context<ExecuteSwapMock>) -> Result<()> {
         instructions::swap::handler(ctx)
+    }
+
+    pub fn claim(ctx: Context<Claim>, round_id: u64) -> Result<()> {
+        instructions::claim::handler(ctx, round_id)
     }
 }

@@ -14,6 +14,7 @@ pub const TREASURY_SEED: &[u8] = b"treasury";
 pub const VAULT_AUTH_SEED: &[u8] = b"vault_auth";
 pub const MINT_AUTH_SEED: &[u8] = b"mint_auth";
 pub const ANSEM_MINT_SEED: &[u8] = b"ansem_mint";
+pub const JACKPOT_AUTH_SEED: &[u8] = b"jackpot_auth";
 
 // Param defaults (see spec §2)
 pub const DEFAULT_ROUND_DURATION_SECS: i64 = 60;

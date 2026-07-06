@@ -16,3 +16,8 @@ pub fn set_round_duration(ctx: Context<SetParams>, secs: i64) -> Result<()> {
     ctx.accounts.config.round_duration_secs = secs;
     Ok(())
 }
+
+pub fn set_jackpot_odds(ctx: Context<SetParams>, odds: u32) -> Result<()> {
+    ctx.accounts.config.jackpot_odds = odds;
+    Ok(())
+}

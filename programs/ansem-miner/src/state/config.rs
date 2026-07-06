@@ -27,4 +27,5 @@ pub struct Config {
     pub treasury_bump: u8,
     pub vault_auth_bump: u8,
     pub mint_auth_bump: u8,
+    pub jackpot_auth_bump: u8,
 }

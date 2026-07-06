@@ -31,6 +31,10 @@ pub struct Initialize<'info> {
     #[account(seeds = [VAULT_AUTH_SEED], bump)]
     pub vault_authority: UncheckedAccount<'info>,
 
+    /// CHECK: jackpot authority PDA (owns the jackpot ANSEM vault); created lazily as an ATA later
+    #[account(seeds = [JACKPOT_AUTH_SEED], bump)]
+    pub jackpot_authority: UncheckedAccount<'info>,
+
     /// CHECK: SOL pot vault PDA (system-owned lamport holder)
     #[account(seeds = [POT_VAULT_SEED], bump)]
     pub pot_vault: UncheckedAccount<'info>,
@@ -65,5 +69,6 @@ pub fn handler(ctx: Context<Initialize>) -> Result<()> {
     c.treasury_bump = ctx.bumps.treasury;
     c.vault_auth_bump = ctx.bumps.vault_authority;
     c.mint_auth_bump = ctx.bumps.mint_authority;
+    c.jackpot_auth_bump = ctx.bumps.jackpot_authority;
     Ok(())
 }
