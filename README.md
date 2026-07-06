@@ -51,11 +51,45 @@ These are intentional seams for this milestone, not bugs:
 - **Claim-before-next-round**: `MinerPosition` is a single persistent account per player, reset in place for each new round. A player who staked round N and has not yet called `claim` for round N cannot `stake` into round N+1 — enforced via `PlayerEscrow.active_round` (see `AnsemError::UnclaimedRound`). This is a deliberate v1 simplification, not a defect.
 - **No ephemeral rollup / session keys**: everything in M1 executes and settles on L1 directly; there is no MagicBlock delegation (`#[delegate]`/`#[commit]`/`#[ephemeral]`) and no session-key flow yet.
 
+## M2a: ER foundation (implemented)
+
+M2a moves the staking hot path into a **MagicBlock Ephemeral Rollup (ER)** while keeping all value on L1, and relocates the escrow debit to a reconcile-at-commit model. It builds on M1 without changing the payout math.
+
+Lifecycle (one round):
+
+```
+L1:  create_round → delegate_round                      (admin, per round)
+L1:  init_miner → delegate_miner                        (per player; re-delegated each round)
+L1:  join_round(round_id)                               (per player: sets active_round lock, NO debit)
+ER:  stake(block, amount)                               (per player, N×; soft budget check, no escrow write)
+ER:  commit_round()   [commit_and_undelegate]           (Round back to L1, writable)
+ER:  commit_miner()   [commit_and_undelegate]           (MinerPosition snapshot back to L1, our-owned)
+L1:  reconcile_miner(round_id)                          (permissionless: debit escrow from committed block_stake; releases lock)
+L1:  settle(randomness) [M1 admin path, unchanged]
+L1:  execute_swap_mock()                                (M1; solvency gate refuses until every staker is reconciled)
+L1:  claim(round_id)   [M1, unchanged]
+```
+
+Key design points:
+- **Escrow relocation (reconcile-at-commit + up-front lock).** `join_round` sets `PlayerEscrow.active_round` (the withdraw-lock) with **no debit**. ER `stake` only writes the delegated Round/MinerPosition (escrow is a read-only clone, soft-checked). The **debit happens on L1 in `reconcile_miner`**, from the committed `block_stake` snapshot, guarded by `PlayerEscrow.reconciled_round` (no double-debit). `reconcile_miner` is the single lock-release point — it frees stakers **and** join-without-stake players.
+- **Solvency is auto-gated.** Between ER staking and reconcile, `total_escrow_balance` still counts the staked lamports as idle while `Round.pot` also claims them, so `execute_swap_mock`'s `pot_vault ≥ total_escrow_balance + pot` check **refuses the swap until every staker is reconciled**. An un-reconciled staker makes the check stricter, never unsafe.
+- **Miner is commit-and-undelegated** (not commit-only) at round end, so it returns to our program on L1 for `reconcile_miner`/`claim` to read as a normal `Account`, and is re-delegated next round.
+- **Abandoned delegated round recovery:** admin force-commits it on the ER (undelegate → L1) → L1 `cancel_round` → the joiner `refund`s to release their lock (`refund` only unlocks now — under reconcile-at-commit a cancelled round was never debited, so there is nothing to credit back).
+
+Run the two-provider local stack (base `mb-test-validator` + `ephemeral-validator`):
+
+```bash
+bash scripts/test-er.sh          # tests/ansem-miner-er.ts, 8/8
+```
+
+VRF and session keys are **not** in M2a — real ephemeral VRF is **M2b**, session keys are **M2c**.
+
 ## Deferred milestones
 
 Not built in this repository yet — tracked for later work:
 
-- **M2**: Ephemeral Rollup (MagicBlock) delegation for low-latency staking, real VRF-based `settle` (`request_settle` / `settle_callback` replacing the injected-randomness admin path), and session keys.
+- **M2b**: real MagicBlock ephemeral VRF for `settle` (`request_settle` / `settle_callback` replacing the injected-randomness admin path).
+- **M2c**: session keys (gasless, popup-free ER staking without per-tx wallet approval).
 - **M3**: Devnet deployment and Metaplex token metadata for the ANSEM mint.
 - **M4**: The Next.js frontend.
 

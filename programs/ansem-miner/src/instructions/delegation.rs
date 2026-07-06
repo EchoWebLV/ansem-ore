@@ -40,8 +40,10 @@ pub fn delegate_round_handler(ctx: Context<DelegateRound>, round_id: u64) -> Res
 }
 
 // ---- Task 3: delegate_miner (L1) ----
-// The persistent MinerPosition is delegated ONCE (after init_miner) and stays
-// delegated across rounds (committed each round, never undelegated — see task 6).
+// The persistent MinerPosition is delegated at the start of each round (it is
+// commit-AND-undelegated back to L1 at round end so reconcile_miner/claim can
+// read it as a normal Account — see task 6). The account itself persists across
+// rounds; only its delegation toggles.
 #[delegate]
 #[derive(Accounts)]
 pub struct DelegateMiner<'info> {

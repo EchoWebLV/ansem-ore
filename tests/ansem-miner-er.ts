@@ -355,4 +355,63 @@ describe("ansem-miner (ER)", () => {
     const ata = await getAccount(provider.connection, playerAta);
     assert.isAbove(Number(ata.amount), 0, "player received ANSEM proceeds");
   });
+
+  it("task 9: recovers an abandoned DELEGATED round (commit-undelegate -> cancel -> refund)", async () => {
+    // Round 1 is finalized (Claimable), so a new round may open. Create round 2
+    // with a short window and delegate it — then abandon it (nobody stakes or
+    // commits). A delegated round can't be cancelled purely from L1 (L1 can't
+    // act on a DLP-owned account), so the documented recovery path is: admin
+    // force-commits it on the ER (undelegate back to L1) -> L1 cancel_round ->
+    // the joiner refunds to release their withdraw-lock.
+    const ROUND2 = 2;
+    const [round2Pda] = PublicKey.findProgramAddressSync(
+      [enc("round"), roundSeed(ROUND2)], program.programId);
+    await program.methods.setRoundDuration(new anchor.BN(4))
+      .accounts({ admin: admin.publicKey }).rpc();
+    await program.methods.createRound()
+      .accounts({ payer: admin.publicKey, round: round2Pda }).rpc();
+    await program.methods.delegateRound(new anchor.BN(ROUND2))
+      .accounts({ payer: admin.publicKey, round: round2Pda })
+      .remainingAccounts(validatorMeta)
+      .rpc({ skipPreflight: true, commitment: "confirmed" });
+    assert.equal(await awaitOwner(provider.connection, round2Pda), DLP_PROGRAM_ID);
+
+    // player (escrow unlocked after claiming round 1) joins, then it's abandoned.
+    await program.methods.joinRound(new anchor.BN(ROUND2))
+      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda })
+      .signers([player]).rpc();
+    assert.equal((await program.account.playerEscrow.fetch(escrowPda)).activeRound.toNumber(), ROUND2);
+
+    // Recovery step 1: admin force-commits on the ER -> round 2 undelegates to L1.
+    const sig = await ephemeralProgram.methods.commitRound()
+      .accounts({ payer: admin.publicKey, round: round2Pda })
+      .rpc({ skipPreflight: true, commitment: "confirmed" });
+    await GetCommitmentSignature(sig, erConnection);
+    await awaitOwnerIs(provider.connection, round2Pda, program.programId.toBase58());
+
+    // Recovery step 2: L1 cancel_round (Open + past deadline -> Closed). The
+    // ~commit round-trip already outlasts the 4s window; poll for clock lag.
+    let closed = false;
+    for (let i = 0; i < 20 && !closed; i++) {
+      try {
+        await program.methods.cancelRound()
+          .accounts({ admin: admin.publicKey, round: round2Pda }).rpc();
+        closed = true;
+      } catch (e: any) {
+        if (!e.toString().includes("RoundNotCancelable")) throw e;
+        await sleep(1000);
+      }
+    }
+    assert.isTrue(closed, "abandoned round 2 should cancel after its deadline");
+    assert.equal((await program.account.round.fetch(round2Pda)).state, 5, "round CLOSED");
+
+    // Recovery step 3: refund releases the joiner's withdraw-lock (no credit —
+    // the round was never reconciled, so nothing was ever debited).
+    const escBefore = await program.account.playerEscrow.fetch(escrowPda);
+    await program.methods.refund(new anchor.BN(ROUND2))
+      .accounts({ authority: player.publicKey, round: round2Pda }).signers([player]).rpc();
+    const escAfter = await program.account.playerEscrow.fetch(escrowPda);
+    assert.equal(escAfter.activeRound.toNumber(), 0, "withdraw-lock released");
+    assert.equal(escAfter.balance.toString(), escBefore.balance.toString(), "no credit on refund");
+  });
 });
