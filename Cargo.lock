@@ -287,6 +287,7 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "ephemeral-rollups-sdk",
+ "ephemeral-vrf-sdk",
  "solana-keccak-hasher 3.1.0",
 ]
 
@@ -957,6 +958,30 @@ name = "ephemeral-rollups-sdk-attribute-ephemeral-accounts"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e6338f039a9feb8569312492336dc929dec5abf7208faa45bb7562c2c319308"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "ephemeral-vrf-sdk"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6f6d796808e62cac2734c58731e8f7a43a7b9725587c0ceb2f94ab8b0a1421"
+dependencies = [
+ "anchor-lang",
+ "borsh 1.7.0",
+ "ephemeral-vrf-sdk-vrf-macro",
+ "solana-program 3.0.0",
+ "solana-system-interface 3.2.0",
+]
+
+[[package]]
+name = "ephemeral-vrf-sdk-vrf-macro"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a2f2f427a08d0a9a3806034fc719f6181dc0a2d0ad990e472707a7093cf3b9d"
 dependencies = [
  "proc-macro2",
  "quote",
