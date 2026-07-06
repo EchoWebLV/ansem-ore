@@ -4,6 +4,8 @@
 target/
 test-ledger/
 .anchor/
+.er-logs/
+magicblock-test-storage/
 **/*.rs.bk
 
 # Node

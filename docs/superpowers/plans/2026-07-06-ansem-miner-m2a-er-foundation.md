@@ -58,11 +58,13 @@ L1:  claim(round_id)          [M1, unchanged]
 
 ## Task 0: Dependencies + local ER test stack
 
+> **STATUS: ✅ COMPLETE & VALIDATED (2026-07-06).** Recipe proven simpler than first sketched — **no `Anchor.toml` genesis fixtures needed.** `mb-test-validator --reset` already pre-clones the DLP; passing `--upgradeable-program <PROGRAM_ID> <so> <auth>` to it **also preloads our sBPF-v3 program at genesis** (mb-test-validator wraps the same 4.1.0-beta.2 that gates v3 at *deploy*, so preload is still required — but the flag passes through). Then `ephemeral-validator --no-tui --lifecycle ephemeral --remotes http://127.0.0.1:8899 --remotes ws://127.0.0.1:8900 --listen 127.0.0.1:7799 --reset`. This is all captured in `scripts/test-er.sh` (committed). Verified: smoke test green (program + DLP on base, ER live @ magicblock-core 0.12.0); M1 regression **19/19** + unit **9/9** green with the ER dep added. Later tasks just add `it(...)` blocks to `tests/ansem-miner-er.ts` and run `SKIP_BUILD=1 bash scripts/test-er.sh` (or omit SKIP_BUILD to rebuild).
+
 **Files:**
 - Modify: `programs/ansem-miner/Cargo.toml`
 - Modify: `package.json`
-- Modify: `Anchor.toml`
 - Create: `scripts/test-er.sh`
+- Create: `tests/ansem-miner-er.ts` (smoke test; later tasks append)
 
 - [ ] **Step 1: Add the ER SDK to Cargo.toml**
 
