@@ -16,6 +16,9 @@ pub use stake::*;
 pub mod settle;
 pub use settle::*;
 
+pub mod vrf_settle;
+pub use vrf_settle::*;
+
 pub mod admin;
 pub use admin::*;
 

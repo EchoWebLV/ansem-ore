@@ -46,6 +46,17 @@ pub mod ansem_miner {
         instructions::settle::settle_handler(ctx, randomness)
     }
 
+    // ---- M2b: Ephemeral VRF settle (admin-gated request + VRF-identity callback).
+    // Keeps `settle` above as a devnet/test fallback; both paths write the same
+    // Round fields → STATE_SETTLED. ----
+    pub fn request_settle(ctx: Context<RequestSettle>, client_seed: u8) -> Result<()> {
+        instructions::vrf_settle::request_settle_handler(ctx, client_seed)
+    }
+
+    pub fn settle_callback(ctx: Context<SettleCallback>, randomness: [u8; 32]) -> Result<()> {
+        instructions::vrf_settle::settle_callback_handler(ctx, randomness)
+    }
+
     pub fn set_round_duration(ctx: Context<SetParams>, secs: i64) -> Result<()> {
         instructions::admin::set_round_duration(ctx, secs)
     }
