@@ -9,7 +9,8 @@
 #                     emits sBPF v3, which this validator gates off at *deploy*
 #                     time — but happily *executes* a v3 program loaded at genesis.
 #   2. ephemeral    : ephemeral-validator (the ER), remotes -> base, listen :7799.
-#   (VRF oracle is added in M2b; skipped here.)
+#   3. VRF oracles (M2b): two vrf-oracle instances (base + ER) fulfill the
+#      in-ER request_settle → settle_callback draw. Skip with SKIP_VRF=1.
 #
 # Then runs tests/ansem-miner-er.ts against both providers and tears everything
 # down on exit. Mirrors magicblock-engine-examples/test-locally.sh.
@@ -33,14 +34,16 @@ mkdir -p "$LOG_DIR"
 
 BASE_PID=""
 ER_PID=""
+VRF_PID=""
+VRF_ER_PID=""
 
 cleanup() {
   trap - EXIT INT TERM
   echo ""
   printf 'Stopping validators... '
-  for pid in $BASE_PID $ER_PID; do [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null || true; done
+  for pid in $BASE_PID $ER_PID $VRF_PID $VRF_ER_PID; do [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null || true; done
   sleep 1
-  for pid in $BASE_PID $ER_PID; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true; done
+  for pid in $BASE_PID $ER_PID $VRF_PID $VRF_ER_PID; do [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true; done
   # Fallback by name (mb-test-validator wraps solana-test-validator).
   pkill -f "mb-test-validator"     2>/dev/null || true
   pkill -f "solana-test-validator" 2>/dev/null || true
@@ -118,6 +121,29 @@ for i in $(seq 1 60); do
 done
 echo "ER ready."
 
+# ---- VRF oracles (M2b). TWO instances: one subscribed to base, one to the ER.
+# The ER-side oracle is what fulfills our in-ER request_settle → settle_callback.
+# The oracle has no port to probe; we just confirm the process stays alive.
+# Skip with SKIP_VRF=1 for non-VRF suites (M1/M2a don't need it). ----
+if [ "${SKIP_VRF:-0}" = "1" ]; then
+  echo "Skipping VRF oracles (SKIP_VRF=1)."
+else
+  command -v vrf-oracle >/dev/null 2>&1 || { echo "ERROR: vrf-oracle not on PATH (npm i -g @magicblock-labs/ephemeral-validator) — or set SKIP_VRF=1"; exit 1; }
+  echo "Starting base VRF oracle..."
+  VRF_ORACLE_SKIP_PREFLIGHT=true RPC_URL=http://127.0.0.1:8899 WEBSOCKET_URL=ws://127.0.0.1:8900 RUST_LOG=info \
+    vrf-oracle > "$LOG_DIR/vrf-base.log" 2>&1 < /dev/null &
+  VRF_PID=$!
+  sleep 2
+  kill -0 $VRF_PID 2>/dev/null || { echo "base VRF oracle died:"; tail -40 "$LOG_DIR/vrf-base.log"; exit 1; }
+  echo "Starting ER VRF oracle..."
+  VRF_ORACLE_SKIP_PREFLIGHT=true RPC_URL=http://127.0.0.1:7799 WEBSOCKET_URL=ws://127.0.0.1:7800 RUST_LOG=info \
+    vrf-oracle > "$LOG_DIR/vrf-er.log" 2>&1 < /dev/null &
+  VRF_ER_PID=$!
+  sleep 2
+  kill -0 $VRF_ER_PID 2>/dev/null || { echo "ER VRF oracle died:"; tail -40 "$LOG_DIR/vrf-er.log"; exit 1; }
+  echo "VRF oracles running (base $VRF_PID, ER $VRF_ER_PID)."
+fi
+
 # Env the two-provider test harness reads (matches magicblock examples).
 export PROVIDER_ENDPOINT=http://127.0.0.1:8899
 export WS_ENDPOINT=ws://127.0.0.1:8900
@@ -126,6 +152,9 @@ export EPHEMERAL_WS_ENDPOINT=ws://127.0.0.1:7800
 export ANCHOR_PROVIDER_URL=$PROVIDER_ENDPOINT
 export ANCHOR_WALLET=$WALLET
 export VALIDATOR=mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev
+# VRF queue the local ER oracle services (index-1 delegated queue), NOT the SDK
+# default 5hBR571… — the test passes this as request_settle's oracle_queue.
+export VRF_EPHEMERAL_QUEUE=Sc9MJUngNbQXSXGP3F67KvKwVnhaYn6kcioxXNVowYT
 
 if [ "${SETUP_ONLY:-0}" = "1" ]; then
   echo ""
