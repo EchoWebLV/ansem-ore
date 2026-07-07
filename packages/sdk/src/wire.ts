@@ -36,3 +36,19 @@ export interface WireSnapshot {
 
 /** A live WS push frame. */
 export interface WireMessage { snapshot: WireSnapshot; events: KeeperEvent[]; }
+
+/** Recursively replace `bigint` with its decimal-string wire form. */
+type Stringify<T> =
+  T extends bigint ? string :
+  T extends (infer U)[] ? Stringify<U>[] :
+  T extends object ? { [K in keyof T]: Stringify<T[K]> } :
+  T;
+
+// Compile-time drift guard: the serialized shape of FullSnapshot must stay assignable
+// to WireSnapshot, so adding a bigint field to BoardSnapshot/FullSnapshot without
+// mirroring it here is a type error. `recentEvents` (KeeperEvent[]) is already
+// wire-safe (no bigint fields), so it is excluded to keep the union mapping simple.
+type _WireDriftGuard =
+  Stringify<Omit<FullSnapshot, "recentEvents">> extends Omit<WireSnapshot, "recentEvents"> ? true : never;
+const _wireDriftOk: _WireDriftGuard = true;
+void _wireDriftOk;

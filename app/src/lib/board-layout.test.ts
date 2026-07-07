@@ -22,9 +22,14 @@ describe("bullCells", () => {
     }
   });
 
-  it("is left-right symmetric about the center column", () => {
-    // The center column cells sit at left ~= 0.5.
-    const center = cells.filter((c) => Math.abs(c.left - 0.5) < 1e-9);
-    expect(center.length).toBe(5);
+  it("is left-right symmetric: every cell has a mirror at (1-left, top)", () => {
+    const key = (l: number, t: number) => `${l.toFixed(6)}:${t.toFixed(6)}`;
+    const present = new Set(cells.map((c) => key(c.left, c.top)));
+    // Each cell's mirror across x=0.5 must also be a cell (center cells mirror to themselves).
+    for (const c of cells) {
+      expect(present.has(key(1 - c.left, c.top))).toBe(true);
+    }
+    // Exactly the 5 center-column cells sit on the axis of symmetry.
+    expect(cells.filter((c) => Math.abs(c.left - 0.5) < 1e-9)).toHaveLength(5);
   });
 });

@@ -1,4 +1,4 @@
-import type { WireSnapshot, KeeperEvent } from "@ansem/sdk";
+import type { WireSnapshot, KeeperEvent, WireMessage } from "@ansem/sdk";
 
 export type KeeperStatus = "connecting" | "connected" | "disconnected";
 
@@ -22,7 +22,9 @@ export interface KeeperClient { start: () => void; stop: () => void; }
 export function createKeeperClient(opts: KeeperClientOpts): KeeperClient {
   const WS = opts.WebSocketImpl ?? WebSocket;
   const doFetch = opts.fetchImpl ?? fetch;
-  const reconnectMs = opts.reconnectMs ?? 2000;
+  const baseReconnectMs = opts.reconnectMs ?? 1000;
+  const maxReconnectMs = 15_000;
+  let reconnectDelay = baseReconnectMs;
   let ws: WebSocket | null = null;
   let stopped = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -32,7 +34,9 @@ export function createKeeperClient(opts: KeeperClientOpts): KeeperClient {
   async function coldLoad() {
     try {
       const res = await doFetch(`${opts.httpUrl}/snapshot`);
-      if (res.ok) opts.onSnapshot((await res.json()) as WireSnapshot);
+      // Guard: a fetch that resolves after stop() must not push a stale snapshot
+      // (symmetry with connect()'s `stopped` check).
+      if (res.ok && !stopped) opts.onSnapshot((await res.json()) as WireSnapshot);
     } catch { /* WS will deliver the next frame; ignore cold-load miss */ }
   }
 
@@ -41,10 +45,10 @@ export function createKeeperClient(opts: KeeperClientOpts): KeeperClient {
     setStatus("connecting");
     const sock = new WS(opts.wsUrl);
     ws = sock;
-    sock.onopen = () => setStatus("connected");
+    sock.onopen = () => { reconnectDelay = baseReconnectMs; setStatus("connected"); };
     sock.onmessage = (ev: MessageEvent) => {
       try {
-        const frame = JSON.parse(String(ev.data)) as { snapshot?: WireSnapshot; events?: KeeperEvent[] };
+        const frame = JSON.parse(String(ev.data)) as Partial<WireMessage>;
         if (frame.snapshot) opts.onSnapshot(frame.snapshot);
         if (frame.events && frame.events.length) opts.onEvents?.(frame.events);
       } catch { /* ignore malformed frame */ }
@@ -52,7 +56,10 @@ export function createKeeperClient(opts: KeeperClientOpts): KeeperClient {
     sock.onerror = () => { try { sock.close(); } catch { /* noop */ } };
     sock.onclose = () => {
       setStatus("disconnected");
-      if (!stopped) reconnectTimer = setTimeout(connect, reconnectMs);
+      if (!stopped) {
+        reconnectTimer = setTimeout(connect, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectMs); // exponential backoff, capped
+      }
     };
   }
 
