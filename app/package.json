@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "predev": "node scripts/optimize-bulls.mjs",
-    "dev": "next dev -p 3000",
+    "dev": "next dev -p 3100",
     "prebuild": "node scripts/optimize-bulls.mjs",
     "build": "next build",
-    "start": "next start -p 3000",
+    "start": "next start -p 3100",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "next lint"
