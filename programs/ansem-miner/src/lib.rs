@@ -65,6 +65,11 @@ pub mod ansem_miner {
         instructions::admin::set_return_band(ctx, min_bps, max_bps)
     }
 
+    // DEVNET/TEST-ONLY migration tool — see instructions/admin.rs::close_config.
+    pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {
+        instructions::admin::close_config(ctx)
+    }
+
     pub fn execute_swap_mock(ctx: Context<ExecuteSwapMock>) -> Result<()> {
         instructions::swap::execute_swap_mock_handler(ctx)
     }
