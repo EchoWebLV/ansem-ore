@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { RoundState } from "@ansem/sdk";
 import { Board } from "./Board.js";
 import type { WireSnapshot } from "@ansem/sdk";
@@ -34,5 +34,15 @@ describe("Board", () => {
   it("renders nothing-jackpot while still open", () => {
     render(<Board snapshot={snap({ state: RoundState.Open, jackpotSquare: null })} />);
     expect(screen.getByTestId("tile-7")).toHaveAttribute("data-jackpot", "false");
+  });
+
+  it("calls onSelect with the square id when a tile is clicked and highlights the selection", () => {
+    const onSelect = vi.fn();
+    const { container, rerender } = render(<Board snapshot={snap()} onSelect={onSelect} selectedSquare={null} />);
+    const tiles = container.querySelectorAll("[data-square]");
+    fireEvent.click(tiles[3]);
+    expect(onSelect).toHaveBeenCalledWith(3);
+    rerender(<Board snapshot={snap()} onSelect={onSelect} selectedSquare={3} />);
+    expect(container.querySelector('[data-square="3"]')?.getAttribute("data-selected")).toBe("true");
   });
 });
