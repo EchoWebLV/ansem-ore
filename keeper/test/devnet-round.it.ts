@@ -22,22 +22,29 @@ d("keeper drives a full hands-off devnet round (M4a verify)", () => {
     // Requires `source scripts/devnet-env.sh` first (ANCHOR_PROVIDER_URL, DEVNET_WALLET, ER endpoints).
     const cfg = loadKeeperConfig(process.env, fsLoadKeypair);
     const log = makeLogger();
-    // 90s round: the keeper opens+delegates the round, then the scripted player
+    // 180s round: the keeper opens+delegates the round, then the scripted player
     // must onboard (deposit/init/session/join/delegate/ER-stake) before the
-    // deadline — devnet tx + ER clone latency needs the headroom (matches the
-    // proven tests/ansem-miner-devnet.ts phase-4 timing).
-    const service = createService({ ...cfg, roundDurationSecs: 90, httpPort: 0 }, log);
+    // deadline — devnet tx + ER clone latency (and dev-RPC 429 retries) need the
+    // headroom (the proven tests/ansem-miner-devnet.ts phase-4 uses 90s with a
+    // pre-delegated round; here the keeper also runs the whole loop concurrently).
+    const service = createService({ ...cfg, roundDurationSecs: 180, httpPort: 0 }, log);
     await service.start();
     try {
       const conn = new Connection(cfg.rpcUrl, { commitment: "confirmed" });
       const program = createProgram(conn, new Wallet(cfg.adminKeypair));
       const erConn = new Connection(cfg.erEndpoint, { wsEndpoint: cfg.erWsEndpoint, commitment: "confirmed" });
 
-      // Wait for the keeper to open+delegate a fresh round.
-      const openCfg = await awaitEr(
-        () => fetchConfig(program, configPda()),
-        (c) => !c.currentRoundFinalized, 60, 2000);
-      const roundId = openCfg.currentRoundId;
+      // Target a round the keeper opens FRESHLY after boot (id advances past any
+      // round it inherits/cleans up on start), so the player gets the full round
+      // duration to onboard+stake instead of racing a round about to settle.
+      const startId = (await fetchConfig(program, configPda())).currentRoundId;
+      let roundId = 0;
+      for (let i = 0; i < 200; i++) {
+        const c = await fetchConfig(program, configPda()).catch(() => null);
+        if (c && !c.currentRoundFinalized && c.currentRoundId > startId) { roundId = c.currentRoundId; break; }
+        await sleep(2000);
+      }
+      if (!roundId) throw new Error("keeper did not open a fresh round in time");
       await awaitOwnerIs(conn, roundPda(roundId), DLP_PROGRAM_ID.toBase58());
 
       // Scripted player: fund -> deposit -> init_miner -> session mint -> join -> delegate -> ER session stake.
@@ -90,5 +97,5 @@ d("keeper drives a full hands-off devnet round (M4a verify)", () => {
     } finally {
       await service.stop();
     }
-  }, 600_000);
+  }, 900_000);
 });
