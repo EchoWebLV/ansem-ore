@@ -1,7 +1,8 @@
+import { PlayBoard } from "../components/PlayBoard.js";
+
+const WS = process.env.NEXT_PUBLIC_KEEPER_WS ?? "ws://127.0.0.1:8787";
+const HTTP = process.env.NEXT_PUBLIC_KEEPER_HTTP ?? "http://127.0.0.1:8787";
+
 export default function Page() {
-  return (
-    <main className="min-h-screen bg-bull-bg flex items-center justify-center">
-      <p className="text-bull-muted text-sm tracking-widest">ANSEM MINER — BOOTING…</p>
-    </main>
-  );
+  return <PlayBoard wsUrl={WS} httpUrl={HTTP} />;
 }
