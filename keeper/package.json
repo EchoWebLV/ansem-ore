@@ -23,6 +23,8 @@
     "vitest": "^2.1.0",
     "tsx": "^4.19.0",
     "@types/node": "^20.11.0",
-    "@types/ws": "^8.5.10"
+    "@types/ws": "^8.5.10",
+    "@solana/spl-token": "^0.4.14",
+    "@magicblock-labs/gum-sdk": "^3.0.10"
   }
 }
