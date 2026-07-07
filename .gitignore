@@ -18,3 +18,10 @@ dist/
 .env.local
 *.keypair.json
 wallet-keypair.json
+
+# monorepo
+**/node_modules
+**/dist
+.turbo
+packages/sdk/src/idl/ansem_miner.json
+packages/sdk/src/idl/ansem_miner.ts

@@ -1,0 +1,28 @@
+{
+  "name": "@ansem/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "scripts": {
+    "sync-idl": "node scripts/sync-idl.mjs",
+    "build": "pnpm sync-idl && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/web3.js": "^1.95.0",
+    "@solana/spl-token": "^0.4.14",
+    "@magicblock-labs/ephemeral-rollups-sdk": "0.14.3",
+    "@magicblock-labs/gum-sdk": "^3.0.10"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.2",
+    "vitest": "^2.1.0",
+    "@types/node": "^20.11.0"
+  }
+}
