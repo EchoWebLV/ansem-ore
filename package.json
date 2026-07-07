@@ -1,5 +1,4 @@
 {
-  "packageManager": "pnpm@9.12.0",
   "scripts": {
     "test": "anchor test",
     "build": "turbo run build",
