@@ -10,7 +10,7 @@ use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuild
 
 use crate::constants::*;
 use crate::error::AnsemError;
-use crate::state::{Config, MinerPosition, Round};
+use crate::state::{Config, MinerPosition, Round, STATE_OPEN};
 
 // ---- Task 2: delegate_round (L1) ----
 // Hands the already-inited Round PDA to the delegation program so staking can
@@ -22,6 +22,13 @@ use crate::state::{Config, MinerPosition, Round};
 pub struct DelegateRound<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
+    // AUTHORIZATION (§3B): keeper-only. Without this, delegate_round is
+    // permissionless and anyone can transfer the Round PDA to the DLP pinned to
+    // a validator they choose, freezing every L1 instruction on it (settle,
+    // swap, cancel, claim) — for the current round OR any past CLAIMABLE round.
+    #[account(seeds = [CONFIG_SEED], bump = config.config_bump,
+        constraint = config.admin == payer.key() @ AnsemError::Unauthorized)]
+    pub config: Account<'info, Config>,
     /// CHECK: delegated via the DLP CPI; UncheckedAccount avoids Anchor
     /// re-serializing after ownership transfers to the delegation program.
     #[account(mut, del, seeds = [ROUND_SEED, round_id.to_le_bytes().as_ref()], bump)]
@@ -29,6 +36,17 @@ pub struct DelegateRound<'info> {
 }
 
 pub fn delegate_round_handler(ctx: Context<DelegateRound>, round_id: u64) -> Result<()> {
+    // Defense-in-depth: only the CURRENT, still-OPEN round may be delegated — a
+    // stale/past/already-settled round can never be handed to the DLP. The Round
+    // is still program-owned here (pre-delegation), so we can read it. The borrow
+    // is scoped so it is dropped before the delegate CPI touches the account.
+    {
+        let data = ctx.accounts.round.try_borrow_data()?;
+        let r = Round::try_deserialize(&mut &data[..])?;
+        require!(r.state == STATE_OPEN, AnsemError::BadRoundState);
+        require!(r.round_id == ctx.accounts.config.current_round_id, AnsemError::NotCurrentRound);
+    }
+
     ctx.accounts.delegate_round(
         &ctx.accounts.payer,
         &[ROUND_SEED, &round_id.to_le_bytes()],
@@ -115,18 +133,29 @@ pub fn commit_round_handler(ctx: Context<CommitRound>) -> Result<()> {
 pub struct CommitMiner<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    // AUTHORIZATION: the miner's owner must sign. A READ-ONLY signer (not mut)
-    // so it doesn't trip the ER's InvalidWritableAccount (only delegated/
-    // fee-payer accounts may be writable there); the miner PDA is derived from
-    // authority.key(), so a victim's miner + attacker signer fails ConstraintSeeds.
-    // Without this, commit_miner is permissionless: an attacker could force-commit
-    // a victim's miner mid-round (truncating their staking) then force-reconcile it.
-    pub authority: Signer<'info>,
-    #[account(mut, seeds = [MINER_SEED, authority.key().as_ref()], bump = miner.bump)]
+    // AUTHORIZATION (§3A): permissionless like `reconcile_miner` — any `payer`
+    // (the keeper) can commit ANY miner, but ONLY once the round has left OPEN
+    // (see the handler gate), so staking is closed and the block_stake snapshot
+    // is final. Self-referential seeds mean no owner signature is needed.
+    #[account(mut, seeds = [MINER_SEED, miner.authority.as_ref()], bump = miner.bump)]
     pub miner: Account<'info, MinerPosition>,
+    // Read-only gate account: the round the miner staked. Still delegated and
+    // available on the ER because commit_miner runs BEFORE commit_round. Used
+    // only to prove staking is closed.
+    #[account(seeds = [ROUND_SEED, miner.round_id.to_le_bytes().as_ref()], bump = round.bump)]
+    pub round: Account<'info, Round>,
 }
 
 pub fn commit_miner_handler(ctx: Context<CommitMiner>) -> Result<()> {
+    // Gate: staking must be closed. `stake` requires STATE_OPEN && now < deadline,
+    // so a non-OPEN round guarantees the block_stake snapshot is final. This also
+    // blocks the mid-round force-commit the removed owner-signature used to block.
+    require!(
+        ctx.accounts.round.round_id == ctx.accounts.miner.round_id,
+        AnsemError::MinerRoundMismatch
+    );
+    require!(ctx.accounts.round.state != STATE_OPEN, AnsemError::CommitTooEarly);
+
     MagicIntentBundleBuilder::new(
         ctx.accounts.payer.to_account_info(),
         ctx.accounts.magic_context.to_account_info(),
