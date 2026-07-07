@@ -268,10 +268,10 @@ describe("ansem-miner", () => {
     assert.equal(rClosed.state, 5); // STATE_CLOSED
     assert.isTrue((await program.account.config.fetch(configPda)).currentRoundFinalized);
 
-    // player joined + staked 0.5 SOL on round 1 (0.3 + 0.2). Under reconcile-at-
-    // commit, stake never debited escrow, and this abandoned round is never
-    // reconciled — so refund only RELEASES the withdraw-lock; it credits nothing
-    // (balance and total_escrow_balance are unchanged by refund).
+    // player joined + staked 0.5 SOL on round 1 (0.3 + 0.2). This abandoned round
+    // was never RECONCILED, so refund takes the "joined, not reconciled" branch
+    // (§3C): it only RELEASES the withdraw-lock with no credit (nothing was
+    // debited). The reconciled-then-cancelled credit-back branch has its own test.
     const eBefore = await program.account.playerEscrow.fetch(escrowPda);
     assert.equal(eBefore.activeRound.toNumber(), 1);
     assert.equal(eBefore.balance.toNumber(), anchor.web3.LAMPORTS_PER_SOL); // never debited
@@ -281,7 +281,7 @@ describe("ansem-miner", () => {
     const eAfter = await program.account.playerEscrow.fetch(escrowPda);
     assert.equal(eAfter.balance.toNumber(), anchor.web3.LAMPORTS_PER_SOL); // unchanged (no credit)
     assert.equal(eAfter.activeRound.toNumber(), 0); // lock released
-    assert.equal(eAfter.lastClaimedRound.toNumber(), 1);
+    assert.equal(eAfter.lastClaimedRound.toNumber(), 0); // §3C: refund no longer writes last_claimed_round
     const teAfter = (await program.account.config.fetch(configPda)).totalEscrowBalance.toNumber();
     assert.equal(teAfter - teBefore, 0); // refund moves no escrow accounting
 
@@ -677,5 +677,113 @@ describe("ansem-miner", () => {
     assert.equal(finalEscrow.balance.toNumber(), depositAmount - stakeAmount);
     assert.equal(finalEscrow.activeRound.toNumber(), 0);
     assert.equal(finalEscrow.lastClaimedRound.toNumber(), id);
+  });
+
+  // ---------------------------------------------------------------------------
+  // M4a §3 program-hardening regressions (added at end so round-id sequencing of
+  // the tests above is undisturbed). 3A (commit_miner) is covered by the ER suite.
+  // ---------------------------------------------------------------------------
+
+  it("§3B: delegate_round rejects a non-admin caller (keeper-gate holds)", async () => {
+    const attacker = anchor.web3.Keypair.generate();
+    const air = await provider.connection.requestAirdrop(attacker.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(air);
+    // A 0-duration round is OPEN (settle hasn't run) but immediately past deadline.
+    const { id, pda } = await freshInstantRound(0);
+    try {
+      await program.methods.delegateRound(new anchor.BN(id))
+        .accounts({ payer: attacker.publicKey, config: configPda, round: pda })
+        .signers([attacker]).rpc();
+      assert.fail("non-admin delegate_round must be rejected");
+    } catch (e: any) { assert.include(e.toString(), "Unauthorized"); }
+    // Finalize this OPEN round so the create_round gate re-arms (poll for clock lag).
+    let closed = false;
+    for (let i = 0; i < 20 && !closed; i++) {
+      try {
+        await program.methods.cancelRound().accounts({ admin: admin.publicKey, round: pda }).rpc();
+        closed = true;
+      } catch (e: any) { if (!e.toString().includes("RoundNotCancelable")) throw e; await sleep(1000); }
+    }
+    assert.isTrue(closed, "round should finalize");
+    assert.equal((await program.account.round.fetch(pda)).state, 5); // STATE_CLOSED
+  });
+
+  it("§3B: delegate_round rejects a stale (non-current / non-OPEN) round", async () => {
+    // round 1 was closed by the escape-hatch test above -> stale + finalized. The
+    // admin gate passes but the defense-in-depth state/round-id check trips.
+    const [stalePda] = PublicKey.findProgramAddressSync(
+      [enc("round"), new anchor.BN(1).toArrayLike(Buffer, "le", 8)], program.programId);
+    try {
+      await program.methods.delegateRound(new anchor.BN(1))
+        .accounts({ payer: admin.publicKey, config: configPda, round: stalePda }).rpc();
+      assert.fail("delegating a stale round must be rejected");
+    } catch (e: any) {
+      assert.isTrue(/BadRoundState|NotCurrentRound/.test(e.toString()), e.toString());
+    }
+  });
+
+  it("§3C: reconcile -> cancel -> refund restores the staker's balance", async () => {
+    // Fresh player with a clean escrow.
+    const p = anchor.web3.Keypair.generate();
+    const air = await provider.connection.requestAirdrop(p.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(air);
+    await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: p.publicKey }).signers([p]).rpc();
+    await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
+
+    // Open a short round, join, stake 0.5 SOL (L1-direct, as this suite does).
+    const { id: rId, pda: rPda } = await freshInstantRound(15);
+    await program.methods.joinRound(new anchor.BN(rId))
+      .accounts({ authority: p.publicKey, config: configPda, escrow: escrowOf(p.publicKey) })
+      .signers([p]).rpc();
+    const STAKE = new anchor.BN(0.5 * anchor.web3.LAMPORTS_PER_SOL);
+    await program.methods.stake(4, STAKE)
+      .accounts(stakeAccts(p.publicKey, rPda)).signers([p]).rpc();
+
+    // Reconcile (permissionless): debits escrow from the block_stake snapshot and
+    // clears the lock. This is the step whose debit refund must later reverse.
+    await program.methods.reconcileMiner(new anchor.BN(rId))
+      .accounts({ config: configPda, escrow: escrowOf(p.publicKey), miner: minerOf(p.publicKey) }).rpc();
+    const eStaked = await program.account.playerEscrow.fetch(escrowOf(p.publicKey));
+    assert.equal(eStaked.balance.toNumber(), 1.5 * anchor.web3.LAMPORTS_PER_SOL, "debited by reconcile");
+    assert.equal(eStaked.activeRound.toNumber(), 0, "reconcile released the lock");
+    assert.equal(eStaked.reconciledRound.toNumber(), rId);
+    const teBefore = (await program.account.config.fetch(configPda)).totalEscrowBalance.toNumber();
+
+    // Cancel the round after its deadline (poll for on-chain clock lag).
+    let canceled = false;
+    for (let i = 0; i < 30 && !canceled; i++) {
+      await sleep(1500);
+      try {
+        await program.methods.cancelRound().accounts({ admin: admin.publicKey, round: rPda }).rpc();
+        canceled = true;
+      } catch (e: any) { if (!e.toString().includes("RoundNotCancelable")) throw e; }
+    }
+    assert.isTrue(canceled);
+
+    // Refund must CREDIT BACK the 0.5 SOL and clear the lock.
+    await program.methods.refund(new anchor.BN(rId))
+      .accounts({ authority: p.publicKey, config: configPda, round: rPda,
+        escrow: escrowOf(p.publicKey), miner: minerOf(p.publicKey) })
+      .signers([p]).rpc();
+    const eRef = await program.account.playerEscrow.fetch(escrowOf(p.publicKey));
+    assert.equal(eRef.balance.toNumber(), 2 * anchor.web3.LAMPORTS_PER_SOL, "stake credited back");
+    assert.equal(eRef.activeRound.toNumber(), 0, "lock released");
+    assert.equal(eRef.reconciledRound.toNumber(), 0, "reconciled_round consumed");
+    const teAfter = (await program.account.config.fetch(configPda)).totalEscrowBalance.toNumber();
+    assert.equal(teAfter - teBefore, 0.5 * anchor.web3.LAMPORTS_PER_SOL, "total_escrow_balance restored");
+
+    // A second refund now no-ops (nothing to refund).
+    try {
+      await program.methods.refund(new anchor.BN(rId))
+        .accounts({ authority: p.publicKey, config: configPda, round: rPda,
+          escrow: escrowOf(p.publicKey), miner: minerOf(p.publicKey) })
+        .signers([p]).rpc();
+      assert.fail("double refund must be rejected");
+    } catch (e: any) { assert.include(e.toString(), "NothingToRefund"); }
+
+    // The credited balance is now withdrawable (lock released).
+    await program.methods.withdraw(new anchor.BN(0.5 * anchor.web3.LAMPORTS_PER_SOL))
+      .accounts({ authority: p.publicKey }).signers([p]).rpc();
   });
 });
