@@ -14,7 +14,7 @@
 
 ## 1. Scope
 
-**In:** the full player loop against the live devnet program; a keeper that runs continuous rounds hands-off; a keeper-backed read-layer; the bull-board UI (Black-Bull skin, 25 named bull tiles); a **small program change** (`commit_miner`) that makes hands-off settlement possible; deploy of web + keeper.
+**In:** the full player loop against the live devnet program; a keeper that runs continuous rounds hands-off; a keeper-backed read-layer; the bull-board UI (Black-Bull skin, 25 named bull tiles); a **small program-change bundle** (§3 — delegation + recovery hardening: keeper-drivable `commit_miner`, keeper-gated `delegate_round`, credit-back `refund`) that makes hands-off settlement possible and closes two HIGH fund-safety bugs; deploy of web + keeper.
 
 **Out (deferred):** mainnet swap (Jupiter) and real ANSEM — devnet uses the mock mint (`execute_swap_mock`); the pre-mainnet program hardening items in §12; Private ER; multi-region ER.
 
@@ -27,7 +27,7 @@
 | 3 | **Keeper-backed read API** (WebSocket) for live shared state | Dev-tier RPC 429'd during M3; one RPC consumer + instant multiplayer board beats every-client polling. |
 | 4 | **Board-hero Black-Bull skin** (green = staked, gold = jackpot, glowing eyes, gasless badge); settle-reveal plays on the board | Matches the Ansem homage; reveal is honest (outcomes VRF-fixed) theater. |
 | 5 | **Bull-head silhouette of 25 bull tiles** (one named bull per on-chain square 0–24) | The 25 `generated/bulls/*.png` assets; every square is a character. |
-| 6 | **Small `commit_miner` program change** to make settlement keeper-drivable | Without it, hands-off continuous rounds are impossible (see §3). |
+| 6 | **Small program-change bundle** (§3): keeper-drivable `commit_miner`, keeper-gated `delegate_round`, credit-back `refund` | `commit_miner` enables hands-off rounds; the other two fix HIGH fund-safety bugs a pre-M4 stress test found on the same delegation/recovery seams. |
 
 ---
 
@@ -44,7 +44,7 @@ Extracted directly from `programs/ansem-miner/src/**` — this is authoritative 
 | `initialize` | L1 | admin | – | one-time bootstrap; sets `config.admin` (the keeper key) |
 | `deposit` / `withdraw` | L1 | player wallet (never session) | no | value in/out of escrow; `withdraw` locked while `active_round≠0` |
 | `create_round` | L1 | **permissionless** | – | opens round; guard `current_round_finalized==true` |
-| `delegate_round` | L1 | **permissionless** | – | hands Round PDA to the DLP (→ ER) |
+| `delegate_round` | L1 | **keeper (admin-gated)** ← §3B | – | hands Round PDA to the DLP (→ ER); OPEN + current-round only |
 | `init_miner` | L1 | player wallet | no | one-time MinerPosition PDA (persistent) |
 | `join_round` | L1 | player wallet | no | per-round entry; sets `escrow.active_round` (no debit) |
 | `delegate_miner` | L1 | player wallet (owner) | no | per-round re-delegate MinerPosition → ER |
@@ -59,7 +59,7 @@ Extracted directly from `programs/ansem-miner/src/**` — this is authoritative 
 | `reconcile_miner` | L1 | **permissionless** (keeper) | – | debits escrow from committed `block_stake`; clears lock |
 | `execute_swap_mock` | L1 | **permissionless** (keeper) | – | `SETTLED→CLAIMABLE`; mints ANSEM to payout vault; solvency-gated |
 | `claim` | L1 | player wallet | no | transfers ANSEM payout + jackpot shares to player ATA |
-| `cancel_round` / `refund` | L1 | admin / player | – | escape hatch (voids round; refund only unlocks, no credit) |
+| `cancel_round` / `refund` | L1 | admin / player | – | escape hatch; `refund` unlocks **and credits back reconciled stake** (§3C) |
 
 **Canonical hands-off round (after the §3 fix):**
 1. `[KEEPER]` `create_round` → `delegate_round` (L1).
@@ -75,7 +75,11 @@ Extracted directly from `programs/ansem-miner/src/**` — this is authoritative 
 
 ---
 
-## 3. Program change (M3.5, folded into M4a): keeper-drivable `commit_miner`
+## 3. Program change (M3.5, folded into M4a): delegation + recovery hardening
+
+M4a ships one on-chain upgrade bundle. It was scoped as just the keeper-drivable `commit_miner` (needed for hands-off settlement); a pre-M4 stress test (170k+ adversarial math trials via `programs/ansem-miner/tests/invariants.rs` + adversarial handler review, 2026-07-07) then found two **HIGH** fund-safety bugs on the same delegation/recovery seams, so they ride along in the same redeploy. The payout/jackpot math itself was proven bulletproof and is unchanged; the state machine, VRF-callback auth, finalization gate, and admin/session/commit access control all held.
+
+### 3A. Keeper-drivable `commit_miner` (liveness)
 
 **Problem:** As deployed, `commit_miner` requires the *miner owner's* wallet signature (seed `[MINER_SEED, authority.key()]`, `authority: Signer`; not session-gated, no admin path). Since the round can't reach `CLAIMABLE` until **every** staker's miner is committed → reconciled (the `execute_swap_mock` solvency gate passes only when cumulative reconciled stake ≥ `round.pot`), a single offline staker stalls the whole round — and because `create_round` needs `current_round_finalized`, it blocks **all** future rounds until a `cancel_round` void. That makes hands-off continuous rounds impossible and opens a griefing/liveness hole.
 
@@ -92,7 +96,30 @@ Extracted directly from `programs/ansem-miner/src/**` — this is authoritative 
 
 **Safety argument:** After the round leaves `OPEN` (which only `request_settle`/`settle` can do, both post-deadline), no further staking is possible, so committing a miner's final snapshot is purely mechanical and beneficial. The guarded `reconcile_miner` (`reconciled_round`) still performs the one-and-only debit. This neutralizes the original review concern (an attacker force-committing a victim's miner *mid-round* to truncate staking) because the gate forbids commits while the round is still `OPEN`. No new value-movement path is introduced; this mirrors the already-permissionless `reconcile_miner`.
 
-**Verification (M4a):** rebuild v3 (`cargo build-sbf --arch v3 --tools-version v1.54`), re-run the full local gate (ER `tests/ansem-miner-er.ts`, `-session`, `-vrf`, M1, unit — the same 40/40 harness), confirm the ER `commit_and_undelegate` works with the keeper as `payer` and no owner signature, then redeploy the upgrade to devnet (`scripts/deploy-devnet.sh`, loader-v3, resumable) and re-run `tests/ansem-miner-devnet.ts`. Regenerate the IDL/types the `sdk` consumes. This is a genuine program change → treat it with the M2/M3 rigor (adversarial review of the new `commit_miner` before merge).
+### 3B. Keeper-gate `delegate_round` (anti-freeze) — stress finding #1, HIGH
+
+**Problem:** `delegate_round` is fully permissionless — `DelegateRound` is only `payer: Signer` + `round: UncheckedAccount` (seeds `[ROUND_SEED, round_id]`), with no admin gate, no round-state check, and the ER validator taken from `remaining_accounts[0]` (caller-chosen). Anyone can delegate the **current** round — or **any past CLAIMABLE round** (its PDA is still program-owned) — to a validator they pick. The account's owner becomes the delegation program, so every L1 instruction on it (`settle`, `execute_swap_mock`, `cancel_round`, `claim`) then fails Anchor's owner check → **claims + escrow freeze and new rounds halt** (`current_round_finalized` stuck false). `commit_round`/`commit_miner` were deliberately gated; `delegate_round` was the miss. Per §2 the delegator is always the **keeper**, so gating it costs nothing.
+
+**Change:**
+- Add `config: Account<Config>` (seeds `[CONFIG_SEED]`) with `constraint = config.admin == payer.key()` — keeper-only (mirrors `commit_round`).
+- Defense-in-depth: in the handler, deserialize the (still program-owned) Round from account data and `require!(state == STATE_OPEN)` and `require!(round_id == config.current_round_id)` — a stale / past / already-settled round can never be delegated.
+- With the keeper as the sole caller the keeper-supplied validator is trusted; a config-pinned validator allow-list is a possible M5 hardening, not needed for devnet.
+
+### 3C. Credit-back `refund` (anti-strand) — stress finding #2, HIGH
+
+**Problem:** `reconcile_miner` (permissionless, no round-state check) **debits** escrow (`balance` and `total_escrow_balance`) from the committed `block_stake` and clears `escrow.active_round`. `refund` gives **no credit** and requires `escrow.active_round == round_id`. So a staker reconciled *before* a `cancel_round` — the exact VRF-stuck recovery path, or an honest crank that reconciles then cancels — can neither `refund` (lock already cleared) nor `claim` (CLOSED ≠ CLAIMABLE). Their staked lamports orphan in `pot_vault` (the round never swaps, so they were never moved out) and are swept to treasury on a later swap. Fund loss, not insolvency (`refund`'s "a Closed round is never reconciled" comment is false for any committed round).
+
+**Change — make `refund` reverse the reconcile debit:**
+- `Refund` accounts add `config: Account<Config>(mut)` (for `total_escrow_balance`) and `miner: Account<MinerPosition>` (read-only, seeds `[MINER_SEED, authority.key()]`, for the `block_stake` snapshot).
+- Handler (round must be `CLOSED`):
+  - `joined = escrow.active_round == round_id`; `reconciled = escrow.reconciled_round == round_id`; `require!(joined || reconciled, NothingToRefund)`.
+  - If `reconciled`: `require!(miner.round_id == round_id)`; `staked = Σ miner.block_stake`; `escrow.balance += staked`; `config.total_escrow_balance += staked` (both checked); set `escrow.reconciled_round = 0` (consumes it → no double credit).
+  - Always: `escrow.active_round = 0`. **Remove** the `escrow.last_claimed_round = round_id` write — the (`active_round`, `reconciled_round`) guards already block replay, and dropping it also fixes the LOW bug where refunding a later round blocked claiming an earlier unclaimed one.
+- Solvency stays intact: the credited lamports were never moved out of `pot_vault`, so restoring `total_escrow_balance += staked` re-matches `total_escrow_balance == Σ escrow.balance ≤ pot_vault.lamports()`.
+- Optional M5 defense-in-depth: also round-state-gate `reconcile_miner` to refuse a `CLOSED` round; not required once `refund` credits back.
+
+### Verification (M4a)
+Rebuild v3 (`cargo build-sbf --arch v3 --tools-version v1.54`). Extend the local gate with regression tests for all three changes — keeper-signed `commit_miner` (no owner signature); permissionless `delegate_round` **rejected** / keeper `delegate_round` OK / stale-or-past round rejected; the reconcile→cancel→refund round-trip restores the staker's withdrawable balance and a second refund no-ops — alongside the existing ER/session/vrf/M1/unit suites and the new `programs/ansem-miner/tests/invariants.rs` math harness (the same 40/40+ gate). Then redeploy the upgrade to devnet (`scripts/deploy-devnet.sh`, loader-v3, resumable), re-run `tests/ansem-miner-devnet.ts`, and regenerate the IDL/types the `sdk` consumes. Adversarially review all three handler changes before merge (M2/M3 rigor).
 
 ---
 
@@ -154,7 +181,8 @@ Routes/areas:
 
 ## 7. Error handling & edge cases
 
-- **No-show at settle:** eliminated by the §3 fix — the keeper commits every miner. Residual: an unfulfilled VRF or an RPC outage → keeper retries within a grace window, then `cancel_round` (round voided, all `refund`-unlockable) and logs it. One stuck round no longer silently blocks the game forever.
+- **No-show at settle:** eliminated by the §3A fix — the keeper commits every miner. Residual: an unfulfilled VRF or an RPC outage → keeper retries within a grace window, then `cancel_round` (round voided, all `refund`-unlockable **and credited back** per §3C) and logs it. One stuck round no longer silently blocks the game forever.
+- **Join-without-stake lock:** a wallet that `join_round`s but never stakes holds the withdraw-lock (`active_round≠0`). If the round finalizes it can't `refund` (needs CLOSED) or `claim` (no stake), so its escrow looks frozen. It IS recoverable — `init_miner` (if needed) then the permissionless `reconcile_miner` clears the lock with no debit — so the **keeper's reconcile pass covers every joined wallet**, staked or not, and the app surfaces "unlocking…" rather than "frozen".
 - **RPC rate limits (429):** browsers never hit RPC (read via keeper WS). The keeper is the single consumer; reuse M3's pre-send retry + a paid RPC tier if needed. Player write txs go direct to devnet but are infrequent (entry + claim).
 - **ER races / clone-lag:** reuse M3 hardening — `awaitJoined` (join→stake propagation), tolerant ER read retries, regional endpoint for writes.
 - **Session expiry / missing:** app detects `now ≥ valid_until` or no token → re-runs the one-popup entry (mint a fresh session). Staking falls back to wallet-signed if the user declines a session.
@@ -167,7 +195,7 @@ Routes/areas:
 ## 8. Phased delivery (each phase = working, independently verifiable software)
 
 - **M4a — Program fix + SDK + keeper + read-layer (backbone).**
-  Do the §3 `commit_miner` change and re-verify (40/40 local, redeploy to devnet, `tests/ansem-miner-devnet.ts` green). Build `packages/sdk` (from the test suites). Build the `keeper`: full hands-off round loop on devnet + participant index + read-layer (WS/REST). **Verify:** keeper runs continuous rounds end-to-end on devnet with **no UI** (rounds open, gasless stakes via a scripted session, keeper settles + swaps hands-off, a scripted claim succeeds); `curl`/ws shows a live `BoardSnapshot`.
+  Do the §3 change bundle (keeper-drivable `commit_miner`, keeper-gated `delegate_round`, credit-back `refund`) and re-verify (40/40+ local incl. the new `invariants.rs` math harness, redeploy to devnet, `tests/ansem-miner-devnet.ts` green). Build `packages/sdk` (from the test suites). Build the `keeper`: full hands-off round loop on devnet + participant index + read-layer (WS/REST). **Verify:** keeper runs continuous rounds end-to-end on devnet with **no UI** (rounds open, gasless stakes via a scripted session, keeper settles + swaps hands-off, a scripted claim succeeds); `curl`/ws shows a live `BoardSnapshot`.
 - **M4b — Web read path.**
   Next.js app, wallet connect, live bull-head board (25 optimized tiles) + HUD + countdown + activity feed + leaderboard off the keeper WS. **Verify:** open the browser, watch real devnet rounds open/stake/settle/reveal live (read-only; no staking yet).
 - **M4c — Write path (the loop).**
@@ -181,7 +209,7 @@ Each phase gets its own implementation plan (`writing-plans`), mirroring the M2/
 
 ## 9. Testing strategy
 
-- **Program (M4a):** the existing Rust unit + the ER/session/VRF/M1 suites re-run green on the changed `commit_miner`; a new/adjusted ER test asserts a **keeper-signed** `commit_miner` (no owner signature) undelegates the miner and a full multi-staker round settles hands-off; `tests/ansem-miner-devnet.ts` re-verifies on devnet post-redeploy.
+- **Program (M4a):** the existing Rust unit + the ER/session/VRF/M1 suites re-run green, plus the new `programs/ansem-miner/tests/invariants.rs` math stress harness. New/adjusted regressions: (a) a **keeper-signed** `commit_miner` (no owner signature) undelegates the miner and a full multi-staker round settles hands-off; (b) permissionless `delegate_round` is **rejected** while keeper `delegate_round` succeeds, and a stale/past/non-OPEN round is rejected; (c) the reconcile→`cancel_round`→`refund` round-trip restores the staker's withdrawable balance and a second `refund` no-ops. `tests/ansem-miner-devnet.ts` re-verifies on devnet post-redeploy.
 - **SDK:** unit tests for PDA derivations (vectors vs the program) and instruction-builder account shapes.
 - **Keeper:** an integration test driving one full multi-participant round headless on devnet; assertions on the read-layer snapshot/events.
 - **Web:** Playwright e2e against a keeper pointed at devnet — connect (mock wallet), entry, gasless stake, observe reveal, claim; plus component tests for the board render/reveal.
@@ -208,6 +236,8 @@ Each phase gets its own implementation plan (`writing-plans`), mirroring the M2/
 ## 12. Deferred to M5 (pre-mainnet hardening — surfaced by the M4 grounding, NOT M4 scope)
 
 - **`settle` admin fallback has no on-chain mainnet gate** — admin can supply favorable randomness; hard-gate or remove before mainnet (require VRF).
-- **`create_round`/`delegate_round` are permissionless** — a griefer can open/delegate rounds against the single global round slot; tighten to keeper-only or add anti-grief for mainnet.
+- **`create_round` is permissionless** — harmless today (the `current_round_finalized` gate serializes to one round slot and a griefer only opens the round the keeper would have), but tighten to keeper-only for mainnet hygiene. (`delegate_round` was the dangerous half — fixed in §3B.)
 - **A round stranded *delegated* in the ER can't be `cancel_round`'d** (cancel needs an L1/program-owned Round) — add an ER-side recovery path + keeper redundancy assumptions for mainnet.
+- **No on-chain claim-before-restake enforcement** (`UnclaimedRound` is defined but unused) — a player who re-enters before claiming forfeits the prior round's payout (it sits in the payout vault). Frontend auto-claims to mask it; on-chain enforcement is M5.
+- **Jackpot pool is a % of the live admin-seeded vault**, snapshotted per hit — across many hits with delayed claims the cumulative snapshots can exceed the vault until re-seeded; per-round funded pools are M5.
 - Real swap adapter (Jupiter batch), jackpot vault funding, Private ER opt-in, legal/geo — all M5.
