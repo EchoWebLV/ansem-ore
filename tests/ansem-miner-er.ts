@@ -169,6 +169,27 @@ async function settleAfterDeadline(rnd: Buffer, tries = 40): Promise<void> {
   throw new Error("round 1 never became settleable after polling");
 }
 
+// Settle round 1 ON THE ER while it is still delegated (production ordering for
+// §3A: commit_miner requires the round to have left OPEN). Poll-retry: the ER
+// clock may lag the round's L1-set deadline (RoundNotEnded), and the ER confirm
+// layer can flake (see erRpcTolerant). Idempotent — returns early once SETTLED.
+async function settleOnErAfterDeadline(rnd: Buffer, tries = 60): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    const r: any = await ephemeralProgram.account.round.fetch(round1Pda).catch(() => null);
+    if (r && r.state === 2) return;
+    try {
+      await ephemeralProgram.methods.settle([...rnd])
+        .accounts({ admin: admin.publicKey, round: round1Pda })
+        .rpc({ skipPreflight: true, commitment: "confirmed" });
+    } catch (e: any) {
+      const s = String(e);
+      if (!/RoundNotEnded|Unknown action|not confirmed|block height exceeded|Invalid response|failed to get|timeout|Blockhash not found/i.test(s)) throw e;
+    }
+    await sleep(1500);
+  }
+  throw new Error("round 1 never became settleable on the ER after polling");
+}
+
 describe("ansem-miner (ER)", () => {
   before("L1 prelude: initialize, fund player, create round 1, init miner", async () => {
     // Idempotent-ish: fresh validator each run (scripts/test-er.sh --reset).
@@ -302,56 +323,61 @@ describe("ansem-miner (ER)", () => {
     );
   });
 
-  it("task 6: commit_round + commit_miner both commit-and-undelegate back to L1", async () => {
-    // commit_round = commit AND undelegate: Round returns to our program on L1
-    // (writable again) carrying the ER's final pot. Payer is the ER fee payer
-    // (admin) — a non-fee-payer writable signer would trip InvalidWritableAccount.
-    const sigR = await ephemeralProgram.methods.commitRound()
-      .accounts({ payer: admin.publicKey, config: configPda, round: round1Pda })
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
-    await GetCommitmentSignature(sigR, erConnection);
-
-    await awaitOwnerIs(provider.connection, round1Pda, program.programId.toBase58());
-    const roundL1 = await program.account.round.fetch(round1Pda); // now our-program-owned
-    assert.equal(roundL1.pot.toString(), STAKE_AMT.toString(), "committed pot landed on L1");
-
-    // SECURITY REGRESSION: an attacker must NOT be able to commit the victim's
-    // miner (the miner PDA is derived from the authority *signer*, so a wrong
-    // signer fails ConstraintSeeds). Without the authority check this force-
-    // commit would truncate the victim's staking mid-round.
-    const attacker = Keypair.generate();
-    let griefBlocked = false;
+  it("task 6: settle(ER) -> commit_miner(keeper) -> commit_round (settle-before-commit, §3A)", async () => {
+    // §3A NEGATIVE: committing a miner while its round is still OPEN must fail
+    // (staking not closed). The round is still delegated + OPEN on the ER here.
+    // commit_miner is now keeper-signable (no owner signature), so this state
+    // gate is what replaces the old owner-signature griefing guard.
+    let tooEarlyBlocked = false;
     try {
       await ephemeralProgram.methods.commitMiner()
-        .accounts({ payer: admin.publicKey, authority: attacker.publicKey, miner: minerPda })
-        .signers([attacker])
+        .accounts({ payer: admin.publicKey, miner: minerPda, round: round1Pda })
         .rpc({ skipPreflight: true, commitment: "confirmed" });
-    } catch { griefBlocked = true; }
-    assert.isTrue(griefBlocked, "attacker must not commit a victim's miner");
+    } catch { tooEarlyBlocked = true; }
+    assert.isTrue(tooEarlyBlocked, "commit_miner must be rejected while round is OPEN (CommitTooEarly)");
 
-    // commit_miner = commit AND undelegate: the block_stake snapshot flushes to
-    // L1 and the miner returns to our program (so reconcile_miner/claim can read
-    // it as a normal Account). Authorized by the miner owner (player). It is
-    // re-delegated next round.
+    // Settle ON THE ER while the Round is still delegated (production ordering):
+    // commit_miner requires round.state != OPEN, so the round must reach SETTLED
+    // on the ER (where commit_miner reads it as its gate) BEFORE we commit.
+    await settleOnErAfterDeadline(Buffer.alloc(32, 7));
+    const rSettled = await awaitEr(
+      () => ephemeralProgram.account.round.fetch(round1Pda),
+      (r: any) => r.state === 2, 20
+    );
+    assert.equal(rSettled.state, 2, "round SETTLED on the ER");
+
+    // KEEPER commits the miner — NO owner signature (payer = keeper/admin). The
+    // §3A gate passes now that the round is SETTLED. commit_miner runs BEFORE
+    // commit_round so its read-only `round` gate account is still delegated and
+    // available on the ER.
     const sigM = await ephemeralProgram.methods.commitMiner()
-      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
-      .signers([player])
+      .accounts({ payer: admin.publicKey, miner: minerPda, round: round1Pda })
       .rpc({ skipPreflight: true, commitment: "confirmed" });
     await GetCommitmentSignature(sigM, erConnection);
-
     await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
     const minerL1 = await program.account.minerPosition.fetch(minerPda); // our-program-owned
     assert.equal(
       minerL1.blockStake[STAKE_BLOCK].toString(), STAKE_AMT.toString(),
       "committed miner snapshot on L1"
     );
+
+    // THEN commit_round = commit AND undelegate: the Round returns to our program
+    // on L1 carrying the ER's final SETTLED state + pot. Payer is the ER fee payer
+    // (admin) — a non-fee-payer writable signer would trip InvalidWritableAccount.
+    const sigR = await ephemeralProgram.methods.commitRound()
+      .accounts({ payer: admin.publicKey, config: configPda, round: round1Pda })
+      .rpc({ skipPreflight: true, commitment: "confirmed" });
+    await GetCommitmentSignature(sigR, erConnection);
+    await awaitOwnerIs(provider.connection, round1Pda, program.programId.toBase58());
+    const roundL1 = await program.account.round.fetch(round1Pda); // now our-program-owned
+    assert.equal(roundL1.pot.toString(), STAKE_AMT.toString(), "committed pot landed on L1");
+    assert.equal(roundL1.state, 2, "round SETTLED on L1 after commit");
   });
 
-  it("task 8: e2e tail — settle -> [swap Insolvent] -> reconcile -> swap -> claim", async () => {
-    // Round 1 is committed+undelegated (task 6) and still OPEN on L1. Settle it
-    // once its deadline passes (M1 admin-injected randomness; real VRF is M2b).
-    await settleAfterDeadline(Buffer.alloc(32, 7));
-    assert.equal((await program.account.round.fetch(round1Pda)).state, 2, "round SETTLED");
+  it("task 8: e2e tail — [swap Insolvent] -> reconcile -> swap -> claim", async () => {
+    // Round 1 was settled on the ER and committed+undelegated in task 6, so it
+    // arrives here already SETTLED on L1 (settle-before-commit, §3A). No L1 settle.
+    assert.equal((await program.account.round.fetch(round1Pda)).state, 2, "round SETTLED on L1");
 
     // SOLVENCY GATE: swapping BEFORE reconcile must fail Insolvent —
     // total_escrow_balance still counts the staked lamports as idle while
@@ -442,13 +468,17 @@ describe("ansem-miner (ER)", () => {
     assert.isTrue(closed, "abandoned round 2 should cancel after its deadline");
     assert.equal((await program.account.round.fetch(round2Pda)).state, 5, "round CLOSED");
 
-    // Recovery step 3: refund releases the joiner's withdraw-lock (no credit —
-    // the round was never reconciled, so nothing was ever debited).
+    // Recovery step 3: refund releases the joiner's withdraw-lock. This round-2
+    // player joined but was never reconciled (nobody staked/committed/reconciled
+    // round 2), so refund takes the no-credit branch: lock released, balance
+    // unchanged. The §3C account shape now includes config + miner (read only in
+    // the reconciled branch, but Anchor still loads them).
     const escBefore = await program.account.playerEscrow.fetch(escrowPda);
     await program.methods.refund(new anchor.BN(ROUND2))
-      .accounts({ authority: player.publicKey, round: round2Pda }).signers([player]).rpc();
+      .accounts({ authority: player.publicKey, config: configPda, round: round2Pda,
+        escrow: escrowPda, miner: minerPda }).signers([player]).rpc();
     const escAfter = await program.account.playerEscrow.fetch(escrowPda);
     assert.equal(escAfter.activeRound.toNumber(), 0, "withdraw-lock released");
-    assert.equal(escAfter.balance.toString(), escBefore.balance.toString(), "no credit on refund");
+    assert.equal(escAfter.balance.toString(), escBefore.balance.toString(), "no credit on refund (never reconciled)");
   });
 });
