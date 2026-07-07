@@ -1,3 +1,4 @@
+export { BN } from "./bn.js";
 export * from "./constants.js";
 export * from "./program.js";
 export * from "./pdas.js";
