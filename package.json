@@ -6,7 +6,8 @@
     "typecheck": "turbo run typecheck",
     "sdk:sync-idl": "node packages/sdk/scripts/sync-idl.mjs",
     "keeper:dev": "pnpm --filter @ansem/keeper dev",
-    "keeper:it": "KEEPER_DEVNET_IT=1 pnpm --filter @ansem/keeper test devnet-round"
+    "keeper:it": "KEEPER_DEVNET_IT=1 pnpm --filter @ansem/keeper test devnet-round",
+    "app:dev": "pnpm --filter @ansem/app dev"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
