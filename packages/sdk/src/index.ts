@@ -7,4 +7,5 @@ export * from "./session.js";
 export * from "./er.js";
 export * from "./instructions/player.js";
 export * from "./instructions/keeper.js";
+export * from "./instructions/entry.js";
 export type { AnsemMiner } from "./idl/ansem_miner.js";
