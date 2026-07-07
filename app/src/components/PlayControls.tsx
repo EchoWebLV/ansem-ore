@@ -50,13 +50,15 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquare, onStaked }:
   const doEnter = () => run(async () => {
     // Decide init_miner by the RAW account (fetchMiner is null while delegated too — would double-init).
     const info = await connection.getAccountInfo(minerPda(owner));
-    const res = await enterRound({
+    await enterRound({
       l1, connection, wallet, roundId, validator: DEFAULT_ER_VALIDATOR,
       includeInitMiner: info === null, validUntilSec: Math.floor(Date.now() / 1000) + 3600,
-    });
-    persist({
-      owner: owner.toBase58(), secretKey: Array.from(res.sessionSigner.secretKey),
-      tokenPda: res.tokenPda.toBase58(), validUntil: res.validUntil,
+      // Persist the moment the entry confirms (before propagation waits) so a slow wait
+      // can't strand a joined+delegated player with a forgotten session key.
+      onLanded: ({ sessionSigner, tokenPda, validUntil }) => persist({
+        owner: owner.toBase58(), secretKey: Array.from(sessionSigner.secretKey),
+        tokenPda: tokenPda.toBase58(), validUntil,
+      }),
     });
   });
 

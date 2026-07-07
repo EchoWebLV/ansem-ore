@@ -13,27 +13,6 @@ export const isSessionValid = (validUntil: number, nowSec: number, marginSec = 3
   nowSec + marginSec < validUntil;
 
 /**
- * Mint a SessionTokenV2 (one wallet popup). Returns the token PDA + the ephemeral signer
- * and a `send()` that submits the createSessionV2 tx (feePayer + authority = the owner wallet,
- * signed additionally by the ephemeral session signer). The app/keeper controls submission.
- */
-export function buildCreateSession(
-  connection: Connection, ownerWallet: Wallet, validUntilSec: number, target = PROGRAM_ID,
-): { sessionSigner: Keypair; tokenPda: PublicKey; send: () => Promise<string> } {
-  const gum = new SessionTokenManager(ownerWallet, connection).program;
-  const sessionSigner = Keypair.generate();
-  const tokenPda = sessionTokenPda(sessionSigner.publicKey, ownerWallet.publicKey, target);
-  const send = () =>
-    gum.methods.createSessionV2(false, new BN(validUntilSec), null)
-      .accountsPartial({
-        sessionToken: tokenPda, sessionSigner: sessionSigner.publicKey,
-        feePayer: ownerWallet.publicKey, authority: ownerWallet.publicKey, targetProgram: target,
-      })
-      .signers([sessionSigner]).rpc();
-  return { sessionSigner, tokenPda, send };
-}
-
-/**
  * The gum `createSessionV2` instruction (not sent) so it can be batched into the
  * one-popup entry tx. The returned tx must be co-signed by `sessionSigner` and the
  * owner wallet (feePayer + authority).

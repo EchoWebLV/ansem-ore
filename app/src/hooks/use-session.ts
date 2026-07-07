@@ -27,9 +27,15 @@ export function useSession(owner: string | undefined): SessionInfo & {
     setSession(null);
   }, [owner]);
 
+  // A corrupt/old-schema stored secret must not crash the render; null it and let the
+  // player re-enter (valid=false forces the Enter button, which overwrites the bad entry).
+  let signer: Keypair | null = null;
+  if (session) {
+    try { signer = Keypair.fromSecretKey(Uint8Array.from(session.secretKey)); }
+    catch { signer = null; }
+  }
   const nowSec = Math.floor((typeof Date !== "undefined" ? Date.now() : 0) / 1000);
-  const valid = !!session && isSessionValid(session.validUntil, nowSec);
-  const signer = session ? Keypair.fromSecretKey(Uint8Array.from(session.secretKey)) : null;
+  const valid = !!session && !!signer && isSessionValid(session.validUntil, nowSec);
 
   return { session, signer, valid, persist, clear };
 }
