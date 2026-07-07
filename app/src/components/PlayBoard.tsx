@@ -1,11 +1,16 @@
 "use client";
+import { useState } from "react";
+import { useAnchorWallet } from "@solana/wallet-adapter-react";
 import { useKeeperSnapshot } from "../hooks/use-keeper-snapshot.js";
 import type { KeeperClientOpts, KeeperClient } from "../lib/keeper-client.js";
+import { useL1Program } from "../lib/anchor.js";
+import type { WalletAdapter } from "../lib/writes.js";
 import { Board } from "./Board.js";
 import { Hud } from "./Hud.js";
 import { Leaderboard } from "./Leaderboard.js";
 import { ActivityFeed } from "./ActivityFeed.js";
 import { WalletBar } from "./WalletBar.js";
+import { PlayControls } from "./PlayControls.js";
 
 export interface PlayBoardProps {
   wsUrl: string;
@@ -18,6 +23,10 @@ export interface PlayBoardProps {
 
 export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardProps) {
   const { snapshot, events, status } = useKeeperSnapshot({ wsUrl, httpUrl, clientFactory });
+  const l1 = useL1Program();
+  const wallet = useAnchorWallet();
+  const [selected, setSelected] = useState<number | null>(null);
+  const canPlay = !!l1 && !!wallet;
 
   return (
     <main className="min-h-screen bg-black text-white px-4 py-4 flex flex-col gap-4 max-w-[520px] mx-auto">
@@ -28,7 +37,13 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
       {snapshot ? (
         <>
           <Hud snapshot={snapshot} nowMs={nowMs} />
-          <Board snapshot={snapshot} />
+          <Board snapshot={snapshot} selectedSquare={selected} onSelect={canPlay ? setSelected : undefined} />
+          {canPlay && (
+            <PlayControls
+              l1={l1!} wallet={wallet as unknown as WalletAdapter} snapshot={snapshot}
+              selectedSquare={selected} onStaked={() => setSelected(null)}
+            />
+          )}
           <Leaderboard leaderboard={snapshot.leaderboard} />
           <ActivityFeed events={events.length ? events : snapshot.recentEvents} />
         </>
