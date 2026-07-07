@@ -25,4 +25,5 @@ pub enum AnsemError {
     #[msg("Round id is not the current round")] NotCurrentRound,
     #[msg("Escrow already joined to a round")] RoundAlreadyJoined,
     #[msg("Miner already reconciled for this round")] AlreadyReconciled,
+    #[msg("Cannot commit a miner while its round is still open (staking not closed)")] CommitTooEarly,
 }
