@@ -180,26 +180,23 @@ describe("ansem-miner (M2b VRF)", () => {
       (m: any) => m.blockStake[STAKE_BLOCK].toString() === STAKE_AMT.toString(), 10
     );
 
-    // Deadline-gate ordering: wait out the deadline (read the still-delegated
-    // round on the ER), commit the miner while the round is STILL delegated (so
-    // its read-only gate account is available on the ER), then commit the round.
-    // Retry the miner commit until the ER clock passes the deadline (CommitTooEarly).
-    // VRF settle runs on L1 afterward.
-    await awaitEr(
-      () => ephemeralProgram.account.round.fetch(roundPda),
-      (r: any) => Date.now() / 1000 >= r.deadlineTs.toNumber(), 60
-    );
-    for (let i = 0; i < 40; i++) {
+    // Deadline-gate ordering: commit the miner while the round is STILL delegated
+    // (so its read-only gate account is available on the ER), retrying until the
+    // ON-CHAIN clock passes the deadline (CommitTooEarly). This polls the validator
+    // clock via the program gate — NOT wall-clock — so it's robust to clock drift.
+    // Then commit the round; VRF settle runs on L1 afterward.
+    for (let i = 0; i < 60; i++) {
+      const cur = await provider.connection.getAccountInfo(minerPda, "confirmed").catch(() => null);
+      if (cur && cur.owner.toBase58() === program.programId.toBase58()) break; // already undelegated
       try {
-        await ephemeralProgram.methods.commitMiner()
+        const sig = await ephemeralProgram.methods.commitMiner()
           .accounts({ payer: admin.publicKey, miner: minerPda, round: roundPda })
           .rpc({ skipPreflight: true, commitment: "confirmed" });
+        await GetCommitmentSignature(sig, erConnection);
         break;
       } catch (e: any) {
-        const s = String(e);
-        if (/CommitTooEarly/.test(s)) { await sleep(1500); continue; }
-        if (/Unknown action|not confirmed|block height|Invalid response|failed to get|timeout|Blockhash not found/i.test(s)) break;
-        throw e;
+        if (/CommitTooEarly/.test(String(e))) { await sleep(1500); continue; }
+        await sleep(1500); // ER confirm flake — retry; owner pre-check confirms a landed tx
       }
     }
     await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
