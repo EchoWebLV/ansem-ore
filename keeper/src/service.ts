@@ -1,14 +1,15 @@
 import {
   ConfigState, RoundStateData, fetchConfig, fetchRound, fetchMiner,
-  configPda, roundPda, minerPda, sleep,
+  configPda, roundPda, minerPda, sleep, DLP_PROGRAM_ID,
 } from "@ansem/sdk";
 import type { KeeperConfig } from "./env.js";
 import { buildChain, Chain } from "./chain.js";
 import { makeLogger, Logger } from "./logger.js";
-import { runTick, TickState } from "./crank/loop.js";
+import { runTick, TickState, RoundView } from "./crank/loop.js";
 import { CrankAction } from "./crank/decide.js";
 import {
-  ActionCtx, createAndDelegate, requestSettle, cancelRound, finalizeRound, liveFinalizeDeps,
+  ActionCtx, createAndDelegate, requestSettle, cancelRound,
+  commitToL1, liveCommitDeps, finalizeSettled, liveFinalizeDeps,
 } from "./crank/actions.js";
 import { fetchStakerWallets } from "./participants.js";
 import { startReadServer, ReadServer } from "./read/server.js";
@@ -31,11 +32,14 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
     switch (action) {
       case CrankAction.CreateRound:
         return createAndDelegate(ctx, s.config.currentRoundId + 1);
+      case CrankAction.CommitToL1:
+        if (s.round) await commitToL1(s.round.roundId, liveCommitDeps(ctx, s.round.roundId));
+        return;
       case CrankAction.Settle:
         if (s.round) await requestSettle(ctx, s.round.roundId);
         return;
       case CrankAction.Finalize:
-        if (s.round) await finalizeRound(s.round.roundId, liveFinalizeDeps(ctx, s.round.roundId));
+        if (s.round) await finalizeSettled(s.round.roundId, liveFinalizeDeps(ctx, s.round.roundId));
         return;
       case CrankAction.Cancel:
         if (s.round) await cancelRound(ctx, s.round.roundId);
@@ -45,6 +49,18 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
       default:
         return; // nothing to do this tick
     }
+  };
+
+  // Read the current round by OWNERSHIP: while delegated the live copy is in the
+  // ER (L1 anchor .fetch would fail the owner check), once committed it is on L1.
+  const fetchRoundView = async (currentRoundId: number): Promise<RoundView | null> => {
+    if (currentRoundId === 0) return null;
+    const rpda = roundPda(currentRoundId);
+    const info = await chain.conn.getAccountInfo(rpda, "confirmed"); // RPC error -> tick retry
+    if (!info) return null;
+    const delegated = info.owner.toBase58() === DLP_PROGRAM_ID.toBase58();
+    const round = await fetchRound(delegated ? chain.erProgram : chain.program, rpda).catch(() => null);
+    return round ? { round, delegated } : null;
   };
 
   return {
@@ -57,10 +73,7 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
         try {
           state = await runTick({
             fetchConfig: () => fetchConfig(chain.program, configPda()),
-            fetchRound: async () => {
-              const cfgState = await fetchConfig(chain.program, configPda());
-              return fetchRound(chain.program, roundPda(cfgState.currentRoundId)).catch(() => null);
-            },
+            fetchRound: fetchRoundView,
             fetchMiners: async (roundId) => {
               const wallets = await fetchStakerWallets(chain.conn, roundId);
               const rows = await Promise.all(wallets.map(async (w) => {

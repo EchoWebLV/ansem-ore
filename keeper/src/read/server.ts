@@ -34,8 +34,10 @@ export function startReadServer(
     if (snap) ws.send(encode({ snapshot: snap, events: [] }));
   });
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    http.once("error", reject); // bind failure (e.g. port in use) -> reject instead of hanging
     http.listen(port, "127.0.0.1", () => {
+      http.removeListener("error", reject);
       const actualPort = (http.address() as AddressInfo).port;
       resolve({
         port: actualPort,
@@ -43,7 +45,11 @@ export function startReadServer(
           const payload = encode({ snapshot, events });
           for (const client of wss.clients) if (client.readyState === WebSocket.OPEN) client.send(payload);
         },
-        close: () => new Promise<void>((res) => { wss.close(); http.close(() => res()); }),
+        close: () => new Promise<void>((res) => {
+          for (const client of wss.clients) client.terminate(); // don't wait on live sockets to drain
+          wss.close();
+          http.close(() => res());
+        }),
       });
     });
   });

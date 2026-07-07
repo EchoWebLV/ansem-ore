@@ -15,7 +15,7 @@ function makeDeps(over: Partial<TickDeps> = {}) {
   let broadcasts = 0;
   const deps: TickDeps = {
     fetchConfig: async () => config,
-    fetchRound: async () => openRound,
+    fetchRound: async () => ({ round: openRound, delegated: false }),
     fetchMiners: async () => [],
     dispatch: async (a) => { dispatched.push(a); },
     broadcast: () => { broadcasts++; },
@@ -34,15 +34,25 @@ describe("runTick", () => {
     expect(broadcasts()).toBe(1);
   });
 
-  it("dispatches Settle once OPEN passes the deadline", async () => {
-    const { deps, dispatched } = makeDeps({ nowSec: () => 6000 });
+  it("dispatches CommitToL1 once OPEN passes the deadline while still delegated", async () => {
+    const { deps, dispatched } = makeDeps({
+      fetchRound: async () => ({ round: openRound, delegated: true }), nowSec: () => 6000,
+    });
+    await runTick(deps, { prevSnapshot: null, vrfPendingSinceSec: null });
+    expect(dispatched).toEqual([CrankAction.CommitToL1]);
+  });
+
+  it("dispatches Settle once the round is back on L1 (undelegated) past the deadline", async () => {
+    const { deps, dispatched } = makeDeps({
+      fetchRound: async () => ({ round: openRound, delegated: false }), nowSec: () => 6000,
+    });
     await runTick(deps, { prevSnapshot: null, vrfPendingSinceSec: null });
     expect(dispatched).toEqual([CrankAction.Settle]);
   });
 
   it("stamps vrfPendingSinceSec the first tick a round is VRF_PENDING", async () => {
     const pending = { ...openRound, state: RoundState.VrfPending };
-    const { deps } = makeDeps({ fetchRound: async () => pending as any, nowSec: () => 6000 });
+    const { deps } = makeDeps({ fetchRound: async () => ({ round: pending as any, delegated: false }), nowSec: () => 6000 });
     const next = await runTick(deps, { prevSnapshot: null, vrfPendingSinceSec: null });
     expect(next.vrfPendingSinceSec).toBe(6000);
   });

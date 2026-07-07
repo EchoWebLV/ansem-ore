@@ -22,7 +22,11 @@ d("keeper drives a full hands-off devnet round (M4a verify)", () => {
     // Requires `source scripts/devnet-env.sh` first (ANCHOR_PROVIDER_URL, DEVNET_WALLET, ER endpoints).
     const cfg = loadKeeperConfig(process.env, fsLoadKeypair);
     const log = makeLogger();
-    const service = createService({ ...cfg, roundDurationSecs: 30, httpPort: 0 }, log);
+    // 90s round: the keeper opens+delegates the round, then the scripted player
+    // must onboard (deposit/init/session/join/delegate/ER-stake) before the
+    // deadline — devnet tx + ER clone latency needs the headroom (matches the
+    // proven tests/ansem-miner-devnet.ts phase-4 timing).
+    const service = createService({ ...cfg, roundDurationSecs: 90, httpPort: 0 }, log);
     await service.start();
     try {
       const conn = new Connection(cfg.rpcUrl, { commitment: "confirmed" });

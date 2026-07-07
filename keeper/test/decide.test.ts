@@ -6,6 +6,7 @@ const base: CrankState = {
   finalized: true,
   currentRoundId: 100,
   round: null,
+  roundDelegated: false,
   nowSec: 1000,
   vrfPendingSinceSec: null,
   graceSecs: 180,
@@ -27,12 +28,17 @@ describe("decideAction", () => {
   });
 
   it("is idle while OPEN before the deadline", () => {
-    expect(decideAction({ ...base, finalized: false, round: { state: RoundState.Open, deadlineTs: 2000, roundId: 100 } }))
+    expect(decideAction({ ...base, finalized: false, roundDelegated: true, round: { state: RoundState.Open, deadlineTs: 2000, roundId: 100 } }))
       .toBe(CrankAction.Idle);
   });
 
-  it("settles once OPEN passes the deadline", () => {
-    expect(decideAction({ ...base, finalized: false, round: { state: RoundState.Open, deadlineTs: 999, roundId: 100 } }))
+  it("commits to L1 when OPEN passes the deadline but the round is still delegated", () => {
+    expect(decideAction({ ...base, finalized: false, roundDelegated: true, round: { state: RoundState.Open, deadlineTs: 999, roundId: 100 } }))
+      .toBe(CrankAction.CommitToL1);
+  });
+
+  it("settles once OPEN passes the deadline and the round is back on L1 (undelegated)", () => {
+    expect(decideAction({ ...base, finalized: false, roundDelegated: false, round: { state: RoundState.Open, deadlineTs: 999, roundId: 100 } }))
       .toBe(CrankAction.Settle);
   });
 
@@ -48,7 +54,7 @@ describe("decideAction", () => {
       .toBe(CrankAction.Cancel);
   });
 
-  it("finalizes a SETTLED round (commit -> reconcile -> swap)", () => {
+  it("finalizes a SETTLED round (reconcile -> swap; commit already happened pre-settle)", () => {
     expect(decideAction({ ...base, finalized: false, round: { state: RoundState.Settled, deadlineTs: 0, roundId: 100 } }))
       .toBe(CrankAction.Finalize);
   });

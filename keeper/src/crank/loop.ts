@@ -3,9 +3,12 @@ import { decideAction, CrankAction, CrankState } from "./decide.js";
 import { buildFullSnapshot, FullSnapshot, MinerRow } from "../read/snapshot.js";
 import { diffEvents, KeeperEvent } from "../read/events.js";
 
+/** The current round plus whether its PDA is still delegated to the DLP (live in the ER). */
+export interface RoundView { round: RoundStateData; delegated: boolean; }
+
 export interface TickDeps {
   fetchConfig: () => Promise<ConfigState>;
-  fetchRound: () => Promise<RoundStateData | null>;
+  fetchRound: (currentRoundId: number) => Promise<RoundView | null>;
   fetchMiners: (roundId: number) => Promise<MinerRow[]>;
   dispatch: (action: CrankAction, ctx: { config: ConfigState; round: RoundStateData | null }) => Promise<void>;
   broadcast: (snap: FullSnapshot, events: KeeperEvent[]) => void;
@@ -26,7 +29,9 @@ const buildBoardOnly = (round: RoundStateData, config: ConfigState, now: number)
 /** One crank+read tick. Returns the next TickState (prev snapshot + grace clock). */
 export async function runTick(deps: TickDeps, state: TickState): Promise<TickState> {
   const config = await deps.fetchConfig();
-  const round = await deps.fetchRound();
+  const view = await deps.fetchRound(config.currentRoundId);
+  const round = view?.round ?? null;
+  const delegated = view?.delegated ?? false;
   const now = deps.nowSec();
 
   // Grace clock: stamp the first tick we see VRF_PENDING; clear otherwise.
@@ -53,6 +58,7 @@ export async function runTick(deps: TickDeps, state: TickState): Promise<TickSta
     finalized: config.currentRoundFinalized,
     currentRoundId: config.currentRoundId,
     round: round ? { state: round.state, deadlineTs: round.deadlineTs, roundId: round.roundId } : null,
+    roundDelegated: delegated,
     nowSec: now,
     vrfPendingSinceSec,
     graceSecs: deps.graceSecs ?? 180,
