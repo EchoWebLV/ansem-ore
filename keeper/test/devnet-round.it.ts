@@ -27,7 +27,9 @@ d("keeper drives a full hands-off devnet round (M4a verify)", () => {
     // 180s round: the keeper is Idle during the OPEN window (settles only at the
     // deadline), so the scripted player has the full duration to onboard+stake.
     const service = createService({ ...cfg, roundDurationSecs: 180, httpPort: 0 }, log);
-    await service.start();
+    // start() runs the crank loop forever (while running) and never resolves, so
+    // fire-and-forget it (like main.ts) and let the player flow run concurrently.
+    void service.start().catch((e) => log.error("keeper start failed", { err: String(e) }));
     try {
       const conn = new Connection(cfg.rpcUrl, { commitment: "confirmed" });
       const program = createProgram(conn, new Wallet(cfg.adminKeypair));
