@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<!--
+  ANSEM MINER — Bull-head board + round-reveal prototype
+  ------------------------------------------------------
+  A 25-cell hex board arranged into a bull's head (horns + eyes).
+  Each hex cell === one on-chain square (block index 0..24 in
+  Round.block_sol / MinerPosition.block_stake). The board SHAPE is a
+  pure front-end concern; on-chain it is just 25 indices.
+
+  The "reveal" is presentation only: when a round settles, all 25
+  outcomes are already fixed on-chain (VRF-decided). The client simply
+  unveils them smallest->largest for drama, then flashes the random
+  jackpot bull last. The result is honest; only the pacing is theater.
+
+  Reusable bits for the real frontend:
+    * BULL_CELLS  — the bull-head layout (id = on-chain square index)
+    * hexPoints() — flat-top hexagon geometry
+    * playReveal()— the ascending reveal + jackpot finale
+  Standalone: no dependencies. Open in a browser.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ANSEM Miner — Bull Board</title>
+<style>
+  :root { --green:#35e07a; --greenf:rgba(53,224,122,0.15); --gold:#e8c452;
+          --goldf:rgba(232,196,82,0.24); --dim:#2c4034; --bg:#0b0b0e; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#000; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  .card { width:min(460px,92vw); background:var(--bg); border:1px solid #23232a;
+          border-radius:18px; padding:18px; text-align:center; }
+  .label { color:#8a8a93; font-size:12px; letter-spacing:2px; }
+  .big { font-family:ui-monospace,Menlo,monospace; font-size:40px; font-weight:500;
+         color:var(--green); margin:2px 0; transition:color .2s; }
+  .sub { color:#8a8a93; font-size:12px; min-height:16px; }
+  button { margin-top:8px; background:transparent; border:1px solid var(--green);
+           color:var(--green); font:inherit; font-size:13px; padding:6px 18px;
+           border-radius:999px; cursor:pointer; }
+  button:hover { background:var(--greenf); }
+  svg { display:block; margin:10px 0 4px; width:100%; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="label">ROUND SETTLING</div>
+    <div class="big" id="big">&mdash;</div>
+    <div class="sub" id="sub">the bull awaits&hellip;</div>
+    <svg id="board" viewBox="0 0 400 340" role="img" aria-label="Bull-head board of 25 hex cells">
+      <defs>
+        <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="2.6" />
+        </filter>
+      </defs>
+    </svg>
+    <button id="replay">&#9654; Replay reveal</button>
+  </div>
+
+<script>
+(function () {
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const C = { green:"#35e07a", greenf:"rgba(53,224,122,0.15)", gold:"#e8c452",
+              goldf:"rgba(232,196,82,0.24)", dim:"#2c4034" };
+  const S3 = Math.sqrt(3);
+
+  // --- Bull-head layout ---------------------------------------------------
+  // Defined on one half (col >= 0), then mirrored, giving 25 symmetric cells.
+  // (col,row) -> pixel via a flat-top hex lattice:
+  //   x = col * 1.5 ;  y = row * sqrt3 + (|col| odd ? sqrt3/2 : 0)
+  // Anatomy: col +-4/+-3 = horns, +-1/0 top = brow, +-1 row0 = eyes,
+  //          col0 bottom = muzzle/chin.
+  const HALF = [
+    [0,0],[0,1],[0,2],[0,3],[0,4],   // center column: poll -> chin
+    [1,-1],[1,0],[1,1],[1,2],        // inner face (row0 = eye)
+    [2,0],[2,1],[2,2],               // cheeks
+    [3,-1],[3,0],                    // lower horn
+    [4,-1]                           // horn tip
+  ];
+  const BULL_CELLS = [];
+  HALF.forEach(([c,r]) => { BULL_CELLS.push({c,r}); if (c !== 0) BULL_CELLS.push({c:-c,r}); });
+  BULL_CELLS.forEach((o,i) => {
+    o.id  = i;                                        // === on-chain square index 0..24
+    o.x   = o.c * 1.5;
+    o.y   = o.r * S3 + (Math.abs(o.c) % 2 === 1 ? S3/2 : 0);
+    o.eye = (Math.abs(o.c) === 1 && o.r === 0);
+  });
+
+  // --- Fit layout into the SVG viewBox -----------------------------------
+  const W = 400, H = 340;
+  const xs = BULL_CELLS.map(o => o.x), ys = BULL_CELLS.map(o => o.y);
+  const mnx = Math.min(...xs)-1, mxx = Math.max(...xs)+1;
+  const mny = Math.min(...ys)-1, mxy = Math.max(...ys)+1;
+  const s  = Math.min((W-20)/(mxx-mnx), (H-20)/(mxy-mny));
+  const ox = (W - s*(mxx-mnx))/2 - s*mnx;
+  const oy = (H - s*(mxy-mny))/2 - s*mny;
+
+  function hexPoints(cx, cy, R) {           // flat-top hexagon
+    let p = [];
+    for (let k=0; k<6; k++) { const a = 60*k*Math.PI/180;
+      p.push((cx + R*Math.cos(a)).toFixed(1) + "," + (cy + R*Math.sin(a)).toFixed(1)); }
+    return p.join(" ");
+  }
+
+  // --- Render the (dim) board --------------------------------------------
+  const svg = document.getElementById("board");
+  const big = document.getElementById("big"), sub = document.getElementById("sub");
+  const face = [], glowEl = [];              // indexed by cell id
+  BULL_CELLS.forEach(o => {
+    const cx = ox + s*o.x, cy = oy + s*o.y, R = s*0.9;
+    const g = document.createElementNS(SVGNS, "polygon");
+    g.setAttribute("points", hexPoints(cx,cy,R*0.92));
+    g.setAttribute("fill","none"); g.setAttribute("stroke","none");
+    g.setAttribute("stroke-width","3"); g.setAttribute("filter","url(#glow)");
+    svg.appendChild(g); glowEl[o.id] = g;
+
+    const el = document.createElementNS(SVGNS, "polygon");
+    el.setAttribute("points", hexPoints(cx,cy,R*0.92));
+    el.setAttribute("fill","transparent"); el.setAttribute("stroke",C.dim);
+    el.setAttribute("stroke-width","1.5"); el.setAttribute("stroke-linejoin","round");
+    el.style.transition = "all .18s";
+    svg.appendChild(el); face[o.id] = el;
+
+    if (o.eye) {                             // persistent glowing eyes
+      const e = document.createElementNS(SVGNS, "circle");
+      e.setAttribute("cx",cx); e.setAttribute("cy",cy); e.setAttribute("r", s*0.24);
+      e.setAttribute("fill",C.green); e.setAttribute("opacity","0.85");
+      e.setAttribute("filter","url(#glow)"); svg.appendChild(e);
+    }
+  });
+
+  // --- Reveal animation ---------------------------------------------------
+  let timers = [];
+  const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
+  const shuffle = a => { for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; };
+
+  function reset() {
+    BULL_CELLS.forEach(o => {
+      face[o.id].setAttribute("stroke",C.dim); face[o.id].setAttribute("fill","transparent");
+      face[o.id].setAttribute("stroke-width","1.5"); glowEl[o.id].setAttribute("stroke","none");
+    });
+    big.textContent = "—"; big.style.color = C.green; sub.textContent = "opening the mine…";
+  }
+
+  function playReveal() {
+    clearTimers(); reset();
+    const n = BULL_CELLS.length;
+    // demo payouts: ascending, so the counter always climbs (real values come from chain)
+    const vals = Array.from({length:n}, (_,i) => 0.05 + Math.random()*Math.pow(i/n,1.4)*1.3).sort((a,b)=>a-b);
+    const order = shuffle(BULL_CELLS.map(o => o.id));   // which bull lights at each step
+    order.forEach((id, k) => {
+      const extra = k > n-5 ? (k-(n-5))*90 : 0;         // choke the pace near the end
+      timers.push(setTimeout(() => {
+        face[id].setAttribute("stroke",C.green); face[id].setAttribute("fill",C.greenf);
+        glowEl[id].setAttribute("stroke",C.green);
+        big.textContent = vals[k].toFixed(2); big.style.color = C.green;
+        sub.textContent = "bull #" + (id+1) + " mined  ·  new ANSEM holders: " + (k+1);
+      }, 320 + k*105 + extra));
+    });
+    // finale: a RANDOM bull strikes the jackpot
+    timers.push(setTimeout(() => {
+      const jp = order[Math.floor(Math.random()*n)];
+      face[jp].setAttribute("stroke",C.gold); face[jp].setAttribute("fill",C.goldf);
+      face[jp].setAttribute("stroke-width","2.8"); glowEl[jp].setAttribute("stroke",C.gold);
+      big.textContent = "12.40"; big.style.color = C.gold;
+      sub.innerHTML = '<span style="color:'+C.gold+'">★ JACKPOT — bull #' + (jp+1) + ' struck the big pot</span>';
+    }, 320 + n*105 + 900));
+  }
+
+  document.getElementById("replay").addEventListener("click", playReveal);
+  playReveal();
+})();
+</script>
+</body>
+</html>
