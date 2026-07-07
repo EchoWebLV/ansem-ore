@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::constants::*;
 use crate::error::AnsemError;
-use crate::state::{Config, PlayerEscrow, Round, STATE_CLOSED, STATE_OPEN, STATE_SETTLED, STATE_VRF_PENDING};
+use crate::state::{Config, MinerPosition, PlayerEscrow, Round, STATE_CLOSED, STATE_OPEN, STATE_SETTLED, STATE_VRF_PENDING};
 
 // ---------------------------------------------------------------------------
 // cancel_round (admin escape hatch)
@@ -82,6 +82,9 @@ pub fn cancel_round_handler(ctx: Context<CancelRound>) -> Result<()> {
 pub struct Refund<'info> {
     pub authority: Signer<'info>,
 
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.config_bump)]
+    pub config: Account<'info, Config>,
+
     #[account(seeds = [ROUND_SEED, round_id.to_le_bytes().as_ref()], bump = round.bump,
         constraint = round.round_id == round_id @ AnsemError::MinerRoundMismatch)]
     pub round: Account<'info, Round>,
@@ -89,20 +92,42 @@ pub struct Refund<'info> {
     #[account(mut, seeds = [ESCROW_SEED, authority.key().as_ref()], bump = escrow.bump,
         constraint = escrow.authority == authority.key() @ AnsemError::Unauthorized)]
     pub escrow: Account<'info, PlayerEscrow>,
+
+    // Committed block_stake snapshot — read only in the reconciled branch to
+    // learn how much to credit back. Seeded on the caller's wallet.
+    #[account(seeds = [MINER_SEED, authority.key().as_ref()], bump = miner.bump)]
+    pub miner: Account<'info, MinerPosition>,
 }
 
 pub fn refund_handler(ctx: Context<Refund>, round_id: u64) -> Result<()> {
     require!(ctx.accounts.round.state == STATE_CLOSED, AnsemError::RoundNotClosed);
 
-    let escrow = &mut ctx.accounts.escrow;
-    // The player must be locked to exactly this round (they joined it). A second
-    // refund fails here because active_round is set to 0 below.
-    require!(escrow.active_round == round_id, AnsemError::NothingToRefund);
+    // A genuine participant of THIS round is either still locked (joined, not yet
+    // reconciled) or already reconciled (the debit ran). The (active_round,
+    // reconciled_round) pair also double-serves as the replay guard.
+    let joined = ctx.accounts.escrow.active_round == round_id;
+    let reconciled = ctx.accounts.escrow.reconciled_round == round_id;
+    require!(joined || reconciled, AnsemError::NothingToRefund);
 
-    // No credit: in the reconcile-at-commit model `stake` never debited escrow,
-    // and a Closed round is never reconciled, so there is nothing to reverse —
-    // refund only releases the withdraw-lock.
-    escrow.active_round = 0;
-    escrow.last_claimed_round = round_id;
+    if reconciled {
+        // reconcile_miner already debited escrow from block_stake, but this round
+        // never swapped — the lamports are still idle in pot_vault. Reverse the
+        // debit so the player can withdraw. Consume reconciled_round to prevent a
+        // second credit.
+        require!(ctx.accounts.miner.round_id == round_id, AnsemError::MinerRoundMismatch);
+        let staked: u64 = ctx.accounts.miner.block_stake.iter().sum();
+        let escrow = &mut ctx.accounts.escrow;
+        escrow.balance = escrow.balance.checked_add(staked).ok_or(AnsemError::Overflow)?;
+        escrow.reconciled_round = 0;
+        let cfg = &mut ctx.accounts.config;
+        cfg.total_escrow_balance =
+            cfg.total_escrow_balance.checked_add(staked).ok_or(AnsemError::Overflow)?;
+    }
+
+    // Release the withdraw-lock. Do NOT write last_claimed_round: the
+    // (active_round, reconciled_round) guards already block a second refund, and
+    // leaving last_claimed_round untouched preserves the player's ability to
+    // claim an earlier, still-unclaimed round.
+    ctx.accounts.escrow.active_round = 0;
     Ok(())
 }
