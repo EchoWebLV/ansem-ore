@@ -108,7 +108,8 @@ pot = 10 SOL, `mock_rate` = 1 SOL → 1000 ANSEM, `fee_bps` = 0 ⇒ Q = 10,000 A
 - **`claim.rs`:** compute `NJ_player + JP_player` per §3, both paid from `payout_vault`. **Remove** the small/big jackpot vault accounts + transfers.
 - **`initialize.rs`:** remove reserve jackpot vault/authority creation; set the return band; init `rollover_jackpot = 0`.
 - **`commit_miner` (delegation.rs) — deadline-gate fold-in:** change the §3A gate from `round.state != STATE_OPEN` to `now >= round.deadline_ts` (via `Clock::get()`), keeping the `round_id` match. Reads only immutable fields → robust to ER clone staleness → keeps natural commit-then-settle ordering in every ER-based suite. Same security (staking requires `now < deadline`, so past-deadline ⟺ staking closed) and liveness (keeper commits post-deadline). Account shape unchanged.
-- **`constants.rs`:** add `RETURN_MAX_BPS = 5000` (and `RETURN_MIN_BPS = 0`) if used.
+- **`constants.rs`:** add `RETURN_MAX_BPS = 5000` (and `RETURN_MIN_BPS = 0`).
+- **`admin.rs` — live return-band knob (required):** add `set_return_band(min_bps, max_bps)` on the existing `SetParams` context (admin-gated), validating `min_bps ≤ max_bps ≤ RETURN_MAX_BPS`. This makes the return range a one-call config change with no redeploy. **`set_return_band(0, 0)` ⇒ every non-jackpot square returns 0% ⇒ the entire pot `Q` (plus rollover) goes to the jackpot square** — the max-variance / all-to-jackpot mode. `initialize` defaults to `(0, RETURN_MAX_BPS)` = 0–50%. To ever allow >50% returns later, raise the single `RETURN_MAX_BPS` constant — no other change. **Also remove** the now-dead admin instructions `set_small_jackpot_odds`, `set_big_jackpot_odds`, `seed_small_jackpot`, `seed_big_jackpot` (and their `SeedSmallJackpot`/`SeedBigJackpot` account structs).
 
 ---
 
