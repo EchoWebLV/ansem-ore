@@ -1,6 +1,6 @@
 import { Connection, PublicKey, Keypair } from "@solana/web3.js";
 import { Wallet } from "@coral-xyz/anchor";
-import * as anchor from "@coral-xyz/anchor";
+import { BN } from "./bn.js";
 import { SessionTokenManager } from "@magicblock-labs/gum-sdk";
 import { PROGRAM_ID } from "./constants.js";
 import { sessionTokenPda } from "./pdas.js";
@@ -24,7 +24,7 @@ export function buildCreateSession(
   const sessionSigner = Keypair.generate();
   const tokenPda = sessionTokenPda(sessionSigner.publicKey, ownerWallet.publicKey, target);
   const send = () =>
-    gum.methods.createSessionV2(false, new anchor.BN(validUntilSec), null)
+    gum.methods.createSessionV2(false, new BN(validUntilSec), null)
       .accountsPartial({
         sessionToken: tokenPda, sessionSigner: sessionSigner.publicKey,
         feePayer: ownerWallet.publicKey, authority: ownerWallet.publicKey, targetProgram: target,

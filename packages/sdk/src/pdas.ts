@@ -1,10 +1,10 @@
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import * as anchor from "@coral-xyz/anchor";
+import { BN } from "./bn.js";
 import { PROGRAM_ID, GUM_PROGRAM_ID, SEED } from "./constants.js";
 
 const enc = (s: string) => Buffer.from(s);
-const u64le = (id: number | bigint) => new anchor.BN(id.toString()).toArrayLike(Buffer, "le", 8);
+const u64le = (id: number | bigint) => new BN(id.toString()).toArrayLike(Buffer, "le", 8);
 const pda = (seeds: (Buffer | Uint8Array)[], programId = PROGRAM_ID) =>
   PublicKey.findProgramAddressSync(seeds, programId)[0];
 
