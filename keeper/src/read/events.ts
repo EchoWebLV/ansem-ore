@@ -1,11 +1,6 @@
 import { RoundState, BoardSnapshot } from "@ansem/sdk";
-
-export type KeeperEvent =
-  | { type: "round.open"; roundId: number; deadlineTs: number }
-  | { type: "stake"; roundId: number; square: number; totalStake: string }
-  | { type: "round.settling"; roundId: number }
-  | { type: "round.revealed"; roundId: number; jackpotSquare: number }
-  | { type: "round.claimable"; roundId: number };
+import type { KeeperEvent } from "@ansem/sdk";
+export type { KeeperEvent } from "@ansem/sdk";
 
 /** Typed events for the transition prev -> next. `prev = null` on cold start. */
 export function diffEvents(prev: BoardSnapshot | null, next: BoardSnapshot): KeeperEvent[] {

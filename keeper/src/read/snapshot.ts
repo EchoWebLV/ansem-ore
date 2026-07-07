@@ -1,13 +1,6 @@
-import { toBoardSnapshot, BoardSnapshot, RoundStateData, ConfigState } from "@ansem/sdk";
-import type { KeeperEvent } from "./events.js";
-
-export interface MinerRow { wallet: string; blockStake: bigint[]; }
-export interface LeaderRow { wallet: string; totalStake: bigint; squares: number[]; }
-
-export interface FullSnapshot extends BoardSnapshot {
-  leaderboard: LeaderRow[];
-  recentEvents: KeeperEvent[];
-}
+import { toBoardSnapshot, RoundStateData, ConfigState } from "@ansem/sdk";
+import type { MinerRow, LeaderRow, FullSnapshot, KeeperEvent } from "@ansem/sdk";
+export type { MinerRow, LeaderRow, FullSnapshot } from "@ansem/sdk";
 
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
 
