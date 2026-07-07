@@ -3,8 +3,11 @@
   "configurations": [
     {
       "name": "app",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@ansem/app", "exec", "next", "dev", "-p", "3100"],
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "source $HOME/.nvm/nvm.sh && nvm use 22 >/dev/null && exec pnpm --filter @ansem/app exec next dev -p 3100"
+      ],
       "port": 3100
     }
   ]
