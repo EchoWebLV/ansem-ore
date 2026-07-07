@@ -1,4 +1,5 @@
-import { Program, BN } from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import * as anchor from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { AnsemMiner } from "../idl/ansem_miner.js";
 import { configPda, roundPda, payoutVault, vaultAuthPda, mintAuthPda, potVaultPda, treasuryPda, ansemMintPda } from "../pdas.js";
@@ -10,7 +11,7 @@ export const createRoundIx = (p: Program<AnsemMiner>, keeper: PublicKey, newRoun
   p.methods.createRound().accountsPartial({ payer: keeper, round: roundPda(newRoundId) });
 
 export const delegateRoundIx = (p: Program<AnsemMiner>, keeper: PublicKey, roundId: number, validator: PublicKey) =>
-  p.methods.delegateRound(new BN(roundId)).accountsPartial({ payer: keeper, round: roundPda(roundId) })
+  p.methods.delegateRound(new anchor.BN(roundId)).accountsPartial({ payer: keeper, round: roundPda(roundId) })
     .remainingAccounts(validatorMeta(validator));
 
 export const requestSettleIx = (p: Program<AnsemMiner>, keeper: PublicKey, roundId: number, clientSeed: number, oracleQueue = VRF_BASE_QUEUE) =>
@@ -27,7 +28,7 @@ export const commitMinerIx = (erProgram: Program<AnsemMiner>, keeper: PublicKey,
   erProgram.methods.commitMiner().accountsPartial({ payer: keeper, miner: minerAccount, round: roundAccount });
 
 export const reconcileMinerIx = (p: Program<AnsemMiner>, roundId: number, escrow: PublicKey, miner: PublicKey) =>
-  p.methods.reconcileMiner(new BN(roundId)).accountsPartial({ config: configPda(), escrow, miner });
+  p.methods.reconcileMiner(new anchor.BN(roundId)).accountsPartial({ config: configPda(), escrow, miner });
 
 export const executeSwapMockIx = (p: Program<AnsemMiner>, keeper: PublicKey, roundId: number) =>
   p.methods.executeSwapMock().accountsPartial({
@@ -40,6 +41,6 @@ export const cancelRoundIx = (p: Program<AnsemMiner>, keeper: PublicKey, roundId
 
 // Admin setters
 export const setRoundDurationIx = (p: Program<AnsemMiner>, admin: PublicKey, secs: number) =>
-  p.methods.setRoundDuration(new BN(secs)).accountsPartial({ admin });
+  p.methods.setRoundDuration(new anchor.BN(secs)).accountsPartial({ admin });
 export const setReturnBandIx = (p: Program<AnsemMiner>, admin: PublicKey, minBps: number, maxBps: number) =>
   p.methods.setReturnBand(minBps, maxBps).accountsPartial({ admin });

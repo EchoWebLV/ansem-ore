@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program, AnchorProvider, Wallet } from "@coral-xyz/anchor";
 import { Connection } from "@solana/web3.js";
 import { AnsemMiner } from "./idl/ansem_miner.js";
-import idlJson from "./idl/ansem_miner.json" assert { type: "json" };
+import idlJson from "./idl/ansem_miner.json" with { type: "json" };
 
 /** L1 program bound to a connection + wallet. */
 export function createProgram(connection: Connection, wallet: Wallet): Program<AnsemMiner> {
