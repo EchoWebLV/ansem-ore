@@ -4,6 +4,7 @@ import { AnsemMiner } from "../target/types/ansem_miner";
 import { Connection, PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
 import { SessionTokenManager } from "@magicblock-labs/gum-sdk";
+import { GetCommitmentSignature } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { assert } from "chai";
 
 // ANSEM Miner — M3 devnet smoke. Reuses the proven flow (mirrors ansem-miner-vrf.ts)
@@ -79,33 +80,64 @@ const [ansemMint] = PublicKey.findProgramAddressSync([enc("ansem_mint")], progra
 const [vaultAuth] = PublicKey.findProgramAddressSync([enc("vault_auth")], program.programId);
 const [mintAuth] = PublicKey.findProgramAddressSync([enc("mint_auth")], program.programId);
 const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.programId);
-const [smallJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_sm_auth")], program.programId);
-const [bigJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_big_auth")], program.programId);
 const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
-const smallJackpotVault = getAssociatedTokenAddressSync(ansemMint, smallJackpotAuth, true);
-const bigJackpotVault = getAssociatedTokenAddressSync(ansemMint, bigJackpotAuth, true);
 
-// Account bundles parametrized by the fresh round / player (devnet uses fresh ids).
+// Account bundles parametrized by the fresh round / player (lottery model: a
+// single payout_vault, no reserve jackpots).
 const swapAccounts = (roundPda: PublicKey) => ({
   payer: admin.publicKey, round: roundPda, ansemMint, mintAuthority: mintAuth,
-  vaultAuthority: vaultAuth, payoutVault, smallJackpotAuthority: smallJackpotAuth,
-  smallJackpotVault, bigJackpotAuthority: bigJackpotAuth, bigJackpotVault,
-  potVault: potVaultPda, treasury,
+  vaultAuthority: vaultAuth, payoutVault, potVault: potVaultPda, treasury,
 });
 const claimAccounts = (player: PublicKey, playerAta: PublicKey, roundPda: PublicKey) => ({
   authority: player, round: roundPda, ansemMint, vaultAuthority: vaultAuth,
-  smallJackpotAuthority: smallJackpotAuth, bigJackpotAuthority: bigJackpotAuth,
-  payoutVault, smallJackpotVault, bigJackpotVault, playerAta,
+  payoutVault, playerAta,
 });
 
 // ---- Devnet-realism helpers (no genesis reset to lean on) ----
 
 // initialize is one-time; create-or-skip.
+let migrated = false;
 async function ensureInitialized() {
-  const cfg = await program.account.config.fetch(configPda).catch(() => null);
-  if (cfg) { console.log(`   config exists (current_round_id=${cfg.currentRoundId}) — skip initialize`); return; }
+  if (migrated) return; // fresh lottery config already created this run
+  // M4b migration: the old on-chain Config is byte-incompatible with the new
+  // lottery layout → close it (if present) so a fresh initialize can run.
+  const info = await provider.connection.getAccountInfo(configPda, "confirmed").catch(() => null);
+  if (info) {
+    await program.methods.closeConfig().accounts({ admin: admin.publicKey }).rpc();
+    console.log("   M4b migration: closed old-layout config");
+  }
   await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
-  console.log("   initialized config + mint + vaults on devnet");
+  // Flat 50% return band so a sole ER staker always mines > 0 ANSEM regardless of
+  // which square is the VRF-picked jackpot square.
+  await program.methods.setReturnBand(5000, 5000).accounts({ admin: admin.publicKey }).rpc();
+  console.log("   initialized fresh lottery config + set flat 50% band on devnet");
+  migrated = true;
+}
+
+// Deadline-gate commit ordering (lottery model): commit the miner while the round
+// is STILL delegated (its read-only gate account must be available on the ER),
+// retrying until the ON-CHAIN clock passes the deadline (CommitTooEarly); confirm
+// the ER->L1 flush via GetCommitmentSignature; THEN commit the round.
+async function commitMinerThenRound(roundPda: PublicKey, minerPda: PublicKey) {
+  for (let i = 0; i < 80; i++) {
+    const cur = await provider.connection.getAccountInfo(minerPda, "confirmed").catch(() => null);
+    if (cur && cur.owner.toBase58() === program.programId.toBase58()) break;
+    try {
+      const sig = await ephemeralProgram.methods.commitMiner()
+        .accounts({ payer: admin.publicKey, miner: minerPda, round: roundPda })
+        .rpc({ skipPreflight: true, commitment: "confirmed" });
+      await GetCommitmentSignature(sig, erConnection);
+      break;
+    } catch (e: any) {
+      if (/CommitTooEarly/.test(String(e))) { await sleep(2000); continue; }
+      await sleep(2000); // ER confirm flake — retry; owner pre-check confirms a landed tx
+    }
+  }
+  await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
+  await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
+    .accounts({ payer: admin.publicKey, config: configPda, round: roundPda })
+    .rpc({ skipPreflight: true, commitment: "confirmed" }));
+  await awaitOwnerIs(provider.connection, roundPda, program.programId.toBase58());
 }
 
 // Fund an ephemeral player from the deploy wallet (devnet airdrop is throttled).
@@ -293,7 +325,7 @@ describe("ansem-miner (M3 devnet)", () => {
 
     // Finalize: cancel once the validator clock passes the deadline, refund the lock.
     await retryPastDeadline(() => program.methods.cancelRound().accounts({ admin: admin.publicKey, round: roundPda }).rpc(), "cancel");
-    await program.methods.refund(new anchor.BN(id)).accounts({ authority: player.publicKey, round: roundPda }).signers([player]).rpc();
+    await program.methods.refund(new anchor.BN(id)).accounts({ authority: player.publicKey, config: configPda, round: roundPda, escrow: escrowPda, miner: minerPda }).signers([player]).rpc();
   });
 
   it("phase 2: ER stake via the devnet ER -> commit round-trip to L1", async function () {
@@ -340,15 +372,8 @@ describe("ansem-miner (M3 devnet)", () => {
       (m: any) => m.blockStake[0].toString() === STAKE.toString(), 15);
     console.log("   ✓ stake executed inside the devnet ER (US regional endpoint)");
 
-    // Commit round + miner back to L1 (commit-and-undelegate).
-    await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
-      .accounts({ payer: admin.publicKey, config: configPda, round: roundPda })
-      .rpc({ skipPreflight: true, commitment: "confirmed" }));
-    await awaitOwnerIs(provider.connection, roundPda, program.programId.toBase58());
-    await erRpcTolerant(() => ephemeralProgram.methods.commitMiner()
-      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
-      .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
-    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
+    // Deadline-gate: commit the miner (while delegated, past deadline) then round.
+    await commitMinerThenRound(roundPda, minerPda);
 
     const round: any = await program.account.round.fetch(roundPda);
     assert.equal(round.state, 0, "committed round is OPEN on L1");
@@ -357,7 +382,7 @@ describe("ansem-miner (M3 devnet)", () => {
 
     // Finalize: cancel past deadline, refund the lock.
     await retryPastDeadline(() => program.methods.cancelRound().accounts({ admin: admin.publicKey, round: roundPda }).rpc(), "cancel");
-    await program.methods.refund(new anchor.BN(id)).accounts({ authority: player.publicKey, round: roundPda }).signers([player]).rpc().catch(() => {});
+    await program.methods.refund(new anchor.BN(id)).accounts({ authority: player.publicKey, config: configPda, round: roundPda, escrow: escrowPda, miner: minerPda }).signers([player]).rpc().catch(() => {});
   });
 
   it("phase 3: ER stake -> commit -> request_settle -> real devnet VRF oracle -> Settled -> claim", async function () {
@@ -398,13 +423,7 @@ describe("ansem-miner (M3 devnet)", () => {
     }
     await awaitEr(() => ephemeralProgram.account.minerPosition.fetch(minerPda),
       (m: any) => m.blockStake[0].toString() === STAKE.toString(), 15);
-    await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
-      .accounts({ payer: admin.publicKey, config: configPda, round: roundPda }).rpc({ skipPreflight: true, commitment: "confirmed" }));
-    await awaitOwnerIs(provider.connection, roundPda, program.programId.toBase58());
-    await erRpcTolerant(() => ephemeralProgram.methods.commitMiner()
-      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
-      .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
-    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
+    await commitMinerThenRound(roundPda, minerPda);
     console.log("   ✓ staked in ER + committed to L1; requesting VRF settle on L1");
 
     // request_settle on L1 (needs Open + past-deadline). Idempotent + tolerant of
@@ -494,13 +513,7 @@ describe("ansem-miner (M3 devnet)", () => {
       (m: any) => m.blockStake[0].toString() === STAKE.toString(), 15);
     console.log("   ✓ ER stake signed ONLY by the session key (wallet never signed the stake)");
 
-    await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
-      .accounts({ payer: admin.publicKey, config: configPda, round: roundPda }).rpc({ skipPreflight: true, commitment: "confirmed" }));
-    await awaitOwnerIs(provider.connection, roundPda, program.programId.toBase58());
-    await erRpcTolerant(() => ephemeralProgram.methods.commitMiner()
-      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
-      .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
-    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
+    await commitMinerThenRound(roundPda, minerPda);
 
     for (let i = 0; i < 90; i++) {
       const r: any = await program.account.round.fetch(roundPda).catch(() => null);
