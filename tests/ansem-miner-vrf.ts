@@ -117,23 +117,16 @@ const [ansemMint] = PublicKey.findProgramAddressSync([enc("ansem_mint")], progra
 const [vaultAuth] = PublicKey.findProgramAddressSync([enc("vault_auth")], program.programId);
 const [mintAuth] = PublicKey.findProgramAddressSync([enc("mint_auth")], program.programId);
 const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.programId);
-const [smallJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_sm_auth")], program.programId);
-const [bigJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_big_auth")], program.programId);
 const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
-const smallJackpotVault = getAssociatedTokenAddressSync(ansemMint, smallJackpotAuth, true);
-const bigJackpotVault = getAssociatedTokenAddressSync(ansemMint, bigJackpotAuth, true);
 const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
 
 const swapAccounts = () => ({
   payer: admin.publicKey, round: roundPda, ansemMint, mintAuthority: mintAuth,
-  vaultAuthority: vaultAuth, payoutVault, smallJackpotAuthority: smallJackpotAuth,
-  smallJackpotVault, bigJackpotAuthority: bigJackpotAuth, bigJackpotVault,
-  potVault: potVaultPda, treasury,
+  vaultAuthority: vaultAuth, payoutVault, potVault: potVaultPda, treasury,
 });
 const claimAccounts = () => ({
   authority: player.publicKey, round: roundPda, ansemMint, vaultAuthority: vaultAuth,
-  smallJackpotAuthority: smallJackpotAuth, bigJackpotAuthority: bigJackpotAuth,
-  payoutVault, smallJackpotVault, bigJackpotVault, playerAta,
+  payoutVault, playerAta,
 });
 
 describe("ansem-miner (M2b VRF)", () => {
@@ -141,6 +134,8 @@ describe("ansem-miner (M2b VRF)", () => {
     await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
     await program.methods.setRoundDuration(new anchor.BN(20))
       .accounts({ admin: admin.publicKey }).rpc();
+    // Lottery model: flat 50% return band so the sole staker always gets > 0.
+    await program.methods.setReturnBand(5000, 5000).accounts({ admin: admin.publicKey }).rpc();
     const sig = await provider.connection.requestAirdrop(player.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL);
     await provider.connection.confirmTransaction(sig, "confirmed");
     await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
@@ -185,26 +180,38 @@ describe("ansem-miner (M2b VRF)", () => {
       (m: any) => m.blockStake[STAKE_BLOCK].toString() === STAKE_AMT.toString(), 10
     );
 
-    // Commit round + miner back to L1 (undelegate) — settle happens on L1.
+    // Deadline-gate ordering: wait out the deadline (read the still-delegated
+    // round on the ER), commit the miner while the round is STILL delegated (so
+    // its read-only gate account is available on the ER), then commit the round.
+    // Retry the miner commit until the ER clock passes the deadline (CommitTooEarly).
+    // VRF settle runs on L1 afterward.
+    await awaitEr(
+      () => ephemeralProgram.account.round.fetch(roundPda),
+      (r: any) => Date.now() / 1000 >= r.deadlineTs.toNumber(), 60
+    );
+    for (let i = 0; i < 40; i++) {
+      try {
+        await ephemeralProgram.methods.commitMiner()
+          .accounts({ payer: admin.publicKey, miner: minerPda, round: roundPda })
+          .rpc({ skipPreflight: true, commitment: "confirmed" });
+        break;
+      } catch (e: any) {
+        const s = String(e);
+        if (/CommitTooEarly/.test(s)) { await sleep(1500); continue; }
+        if (/Unknown action|not confirmed|block height|Invalid response|failed to get|timeout|Blockhash not found/i.test(s)) break;
+        throw e;
+      }
+    }
+    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
     await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
       .accounts({ payer: admin.publicKey, config: configPda, round: roundPda })
       .rpc({ skipPreflight: true, commitment: "confirmed" }));
     await awaitOwnerIs(provider.connection, roundPda, program.programId.toBase58());
-    await erRpcTolerant(() => ephemeralProgram.methods.commitMiner()
-      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
-      .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
-    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
 
-    // Round is back on L1, still OPEN, with the ER's committed pot.
+    // Round is back on L1, still OPEN (VRF settle hasn't run), with the ER's pot.
     const roundOpen = await program.account.round.fetch(roundPda);
     assert.equal(roundOpen.state, 0, "committed round is OPEN on L1");
     assert.equal(roundOpen.pot.toString(), STAKE_AMT.toString(), "committed pot landed on L1");
-
-    // Wait out the deadline on L1.
-    await awaitEr(
-      () => program.account.round.fetch(roundPda),
-      (r: any) => Date.now() / 1000 >= r.deadlineTs.toNumber(), 60
-    );
 
     // ---- VRF settle phase (BASE oracle UP only here) ----
     let settled: any;
@@ -317,7 +324,8 @@ describe("ansem-miner (M2b VRF)", () => {
     // round was never reconciled, so nothing was debited).
     const escBefore = await program.account.playerEscrow.fetch(escrowPda);
     await program.methods.refund(new anchor.BN(ROUND2))
-      .accounts({ authority: player.publicKey, round: round2Pda }).signers([player]).rpc();
+      .accounts({ authority: player.publicKey, config: configPda, round: round2Pda,
+        escrow: escrowPda, miner: minerPda }).signers([player]).rpc();
     const escAfter = await program.account.playerEscrow.fetch(escrowPda);
     assert.equal(escAfter.activeRound.toNumber(), 0, "withdraw-lock released");
     assert.equal(escAfter.balance.toString(), escBefore.balance.toString(), "no credit on refund");

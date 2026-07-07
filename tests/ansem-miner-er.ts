@@ -133,24 +133,17 @@ const [ansemMint] = PublicKey.findProgramAddressSync([enc("ansem_mint")], progra
 const [vaultAuth] = PublicKey.findProgramAddressSync([enc("vault_auth")], program.programId);
 const [mintAuth] = PublicKey.findProgramAddressSync([enc("mint_auth")], program.programId);
 const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.programId);
-const [smallJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_sm_auth")], program.programId);
-const [bigJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_big_auth")], program.programId);
 const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
-const smallJackpotVault = getAssociatedTokenAddressSync(ansemMint, smallJackpotAuth, true);
-const bigJackpotVault = getAssociatedTokenAddressSync(ansemMint, bigJackpotAuth, true);
 const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
 
 const swapAccounts = () => ({
   payer: admin.publicKey, round: round1Pda, ansemMint,
   mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault,
-  smallJackpotAuthority: smallJackpotAuth, smallJackpotVault,
-  bigJackpotAuthority: bigJackpotAuth, bigJackpotVault,
   potVault: potVaultPda, treasury,
 });
 const claimAccounts = () => ({
   authority: player.publicKey, round: round1Pda, ansemMint, vaultAuthority: vaultAuth,
-  smallJackpotAuthority: smallJackpotAuth, bigJackpotAuthority: bigJackpotAuth,
-  payoutVault, smallJackpotVault, bigJackpotVault, playerAta,
+  payoutVault, playerAta,
 });
 
 // Settle round 1 once its (undelegated, on-L1) deadline passes — poll the
@@ -199,6 +192,9 @@ describe("ansem-miner (ER)", () => {
     // tail can wait out the deadline to settle without a long stall.
     await program.methods.setRoundDuration(new anchor.BN(30))
       .accounts({ admin: admin.publicKey }).rpc();
+    // Lottery model: pin the return band to a flat 50% so the sole staker always
+    // receives a positive payout regardless of which square is the jackpot square.
+    await program.methods.setReturnBand(5000, 5000).accounts({ admin: admin.publicKey }).rpc();
 
     const sig = await provider.connection.requestAirdrop(
       player.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL

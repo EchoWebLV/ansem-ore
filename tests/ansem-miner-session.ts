@@ -98,20 +98,15 @@ const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.p
 const [smallJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_sm_auth")], program.programId);
 const [bigJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_big_auth")], program.programId);
 const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
-const smallJackpotVault = getAssociatedTokenAddressSync(ansemMint, smallJackpotAuth, true);
-const bigJackpotVault = getAssociatedTokenAddressSync(ansemMint, bigJackpotAuth, true);
 const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
 
 const swapAccounts = (roundPda: PublicKey) => ({
   payer: admin.publicKey, round: roundPda, ansemMint, mintAuthority: mintAuth,
-  vaultAuthority: vaultAuth, payoutVault, smallJackpotAuthority: smallJackpotAuth,
-  smallJackpotVault, bigJackpotAuthority: bigJackpotAuth, bigJackpotVault,
-  potVault: potVaultPda, treasury,
+  vaultAuthority: vaultAuth, payoutVault, potVault: potVaultPda, treasury,
 });
 const claimAccounts = (roundPda: PublicKey) => ({
   authority: player.publicKey, round: roundPda, ansemMint, vaultAuthority: vaultAuth,
-  smallJackpotAuthority: smallJackpotAuth, bigJackpotAuthority: bigJackpotAuth,
-  payoutVault, smallJackpotVault, bigJackpotVault, playerAta,
+  payoutVault, playerAta,
 });
 
 // Gum session-token manager, wallet = the PLAYER (fee_payer + authority of the
@@ -145,6 +140,8 @@ async function createSession(sessionSigner: Keypair, target: PublicKey, validUnt
 describe("ansem-miner (M2c session keys)", () => {
   before("L1 prelude: initialize, fund player, deposit, init miner", async () => {
     await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
+    // Lottery model: flat 50% return band so the sole staker always gets > 0.
+    await program.methods.setReturnBand(5000, 5000).accounts({ admin: admin.publicKey }).rpc();
     const sig = await provider.connection.requestAirdrop(player.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL);
     await provider.connection.confirmTransaction(sig, "confirmed");
     await program.methods.deposit(new anchor.BN(2 * anchor.web3.LAMPORTS_PER_SOL))
@@ -202,24 +199,37 @@ describe("ansem-miner (M2c session keys)", () => {
     assert.equal(staked.blockStake[STAKE_BLOCK].toString(), STAKE_AMT.toString(),
       "session-key-signed stake landed in the ER");
 
-    // Commit round + miner back to L1.
+    // Deadline-gate ordering: wait out the deadline (read the still-delegated
+    // round on the ER), commit the miner while the round is STILL delegated (so
+    // its read-only gate account is available on the ER), then commit the round.
+    // Retry the miner commit until the ER clock passes the deadline (CommitTooEarly).
+    await awaitEr(
+      () => ephemeralProgram.account.round.fetch(roundPda),
+      (r: any) => nowSec() >= r.deadlineTs.toNumber(), 60
+    );
+    for (let i = 0; i < 40; i++) {
+      try {
+        await ephemeralProgram.methods.commitMiner()
+          .accounts({ payer: admin.publicKey, miner: minerPda, round: roundPda })
+          .rpc({ skipPreflight: true, commitment: "confirmed" });
+        break;
+      } catch (e: any) {
+        const s = String(e);
+        if (/CommitTooEarly/.test(s)) { await sleep(1500); continue; }
+        if (/Unknown action|not confirmed|block height|Invalid response|failed to get|timeout|Blockhash not found/i.test(s)) break;
+        throw e;
+      }
+    }
+    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
     await erRpcTolerant(() => ephemeralProgram.methods.commitRound()
       .accounts({ payer: admin.publicKey, config: configPda, round: roundPda })
       .rpc({ skipPreflight: true, commitment: "confirmed" }));
     await awaitOwnerIs(provider.connection, roundPda, program.programId.toBase58());
-    await erRpcTolerant(() => ephemeralProgram.methods.commitMiner()
-      .accounts({ payer: admin.publicKey, authority: player.publicKey, miner: minerPda })
-      .signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
-    await awaitOwnerIs(provider.connection, minerPda, program.programId.toBase58());
 
     assert.equal((await program.account.round.fetch(roundPda)).pot.toString(), STAKE_AMT.toString(),
       "session-staked pot committed to L1");
 
-    // Wait out deadline, settle (admin), reconcile, swap, claim.
-    await awaitEr(
-      () => program.account.round.fetch(roundPda),
-      (r: any) => nowSec() >= r.deadlineTs.toNumber(), 60
-    );
+    // Settle (admin), reconcile, swap, claim.
     await program.methods.settle(RANDOMNESS).accounts({ admin: admin.publicKey, config: configPda, round: roundPda }).rpc();
     await program.methods.reconcileMiner(new anchor.BN(ROUND_ID))
       .accounts({ config: configPda, escrow: escrowPda, miner: minerPda })

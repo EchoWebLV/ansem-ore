@@ -10,7 +10,7 @@ const enc = (s: string) => Buffer.from(s);
 
 // Mirrors the Rust `jackpot_block` in programs/ansem-miner/src/math.rs EXACTLY:
 // keccak256( randomness[32 bytes] || utf8(domain) ), take output byte[0] % 25.
-// Domains: "jkblock_sm" (small tier), "jkblock_big" (big tier).
+// Lottery model uses the single domain "jackpot" (the one winning square/round).
 function computeJackpotBlock(rnd: Buffer, domain: string): number {
   const h = keccak256.arrayBuffer(Buffer.concat([rnd, Buffer.from(domain)]));
   const firstByte = new Uint8Array(h)[0];
@@ -57,15 +57,12 @@ describe("ansem-miner", () => {
     assert.equal(cfg.swapMode, 0);
     // No round yet => finalized true, so the first create_round is allowed.
     assert.isTrue(cfg.currentRoundFinalized);
-    // Tiered jackpots: small 1/100, big 1/625, each paying 10% of its vault.
-    assert.equal(cfg.smallJackpotOdds, 100);
-    assert.equal(cfg.bigJackpotOdds, 625);
-    assert.equal(cfg.smallJackpotBps, 1000);
-    assert.equal(cfg.bigJackpotBps, 1000);
-    // Both jackpot vaults are created (empty) at init, so claims never DoS on a
-    // missing vault.
-    assert.equal(Number((await getAccount(provider.connection, smallJackpotVault)).amount), 0);
-    assert.equal(Number((await getAccount(provider.connection, bigJackpotVault)).amount), 0);
+    // Lottery model: per-square return band defaults to 0-50%; the jackpot
+    // rollover starts empty. The reserve jackpot vaults are gone — the jackpot is
+    // funded from each round's own proceeds.
+    assert.equal(cfg.multMinBps, 0);
+    assert.equal(cfg.multMaxBps, 5000);
+    assert.equal(cfg.rolloverJackpot.toNumber(), 0);
   });
 
   const player = anchor.web3.Keypair.generate();
@@ -310,27 +307,19 @@ describe("ansem-miner", () => {
   const [vaultAuth] = PublicKey.findProgramAddressSync([enc("vault_auth")], program.programId);
   const [mintAuth] = PublicKey.findProgramAddressSync([enc("mint_auth")], program.programId);
   const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.programId);
-  const [smallJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_sm_auth")], program.programId);
-  const [bigJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_big_auth")], program.programId);
-
-  // Vault ATAs (payout + both jackpot tiers). The jackpot vaults are created at
-  // initialize, so tests never need to create them client-side anymore.
   const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
-  const smallJackpotVault = getAssociatedTokenAddressSync(ansemMint, smallJackpotAuth, true);
-  const bigJackpotVault = getAssociatedTokenAddressSync(ansemMint, bigJackpotAuth, true);
+  // The one VRF-picked jackpot square for a given settle randomness.
+  const jackpotSquareOf = (rnd: Buffer) => computeJackpotBlock(rnd, "jackpot");
 
-  // Account-set helpers (both swap and claim now reference both jackpot tiers).
+  // Account-set helpers (lottery model: a single payout_vault, no reserve jackpots).
   const swapAccounts = (roundPda: PublicKey) => ({
     payer: admin.publicKey, round: roundPda, ansemMint,
     mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault,
-    smallJackpotAuthority: smallJackpotAuth, smallJackpotVault,
-    bigJackpotAuthority: bigJackpotAuth, bigJackpotVault,
     potVault, treasury,
   });
   const claimAccounts = (roundPda: PublicKey, authority: PublicKey, playerAta: PublicKey) => ({
     authority, round: roundPda, ansemMint, vaultAuthority: vaultAuth,
-    smallJackpotAuthority: smallJackpotAuth, bigJackpotAuthority: bigJackpotAuth,
-    payoutVault, smallJackpotVault, bigJackpotVault, playerAta,
+    payoutVault, playerAta,
   });
 
   // Hoisted to describe-scope (rather than declared inside the swap test) so
@@ -347,7 +336,10 @@ describe("ansem-miner", () => {
       .accounts({ authority: p2.publicKey }).signers([p2]).rpc();
     await program.methods.initMiner().accounts({ authority: p2.publicKey }).signers([p2]).rpc();
     await joinOnce(id, p2);
-    await program.methods.stake(5, new anchor.BN(anchor.web3.LAMPORTS_PER_SOL))
+    // Stake the jackpot square (derived from the settle randomness) so this sole
+    // staker wins the whole pool == full proceeds (and the rollover stays 0).
+    const jsq = jackpotSquareOf(Buffer.alloc(32, 3));
+    await program.methods.stake(jsq, new anchor.BN(anchor.web3.LAMPORTS_PER_SOL))
       .accounts(stakeAccts(p2.publicKey, pda)).signers([p2]).rpc();
     // reconcile debits escrow from block_stake — required or the swap is Insolvent.
     await reconcile(p2);
@@ -357,8 +349,11 @@ describe("ansem-miner", () => {
 
     const r = await program.account.round.fetch(pda);
     assert.equal(r.state, 4); // CLAIMABLE
+    assert.equal(r.jackpotSquare, jsq); // VRF-picked square == the one we staked
     // net = 1 SOL - 1% fee = 0.99 SOL; ansem = 0.99 * 2800e6 = 2,772,000,000
     assert.equal(r.swapProceeds.toNumber(), 2_772_000_000);
+    // Sole staker on the jackpot square => the pool == the full proceeds.
+    assert.equal(r.jackpotPool.toNumber(), 2_772_000_000);
     const bal = await getAccount(provider.connection, payoutVault);
     assert.equal(Number(bal.amount), 2_772_000_000);
   });
@@ -421,7 +416,10 @@ describe("ansem-miner", () => {
 
     const roundA = await freshInstantRound(STAKE_WINDOW);
     await joinOnce(roundA.id, pA);
-    await program.methods.stake(2, new anchor.BN(0.6 * anchor.web3.LAMPORTS_PER_SOL))
+    // Stake the jackpot square so the pool is won this round and the global
+    // rollover stays 0 for the tests that follow.
+    const jsqA = jackpotSquareOf(Buffer.alloc(32, 7));
+    await program.methods.stake(jsqA, new anchor.BN(0.6 * anchor.web3.LAMPORTS_PER_SOL))
       .accounts(stakeAccts(pA.publicKey, roundA.pda)).signers([pA]).rpc();
     await reconcile(pA);
 
@@ -477,12 +475,15 @@ describe("ansem-miner", () => {
     }
     const { id, pda } = await freshInstantRound(STAKE_WINDOW);
     for (const p of players) await joinOnce(id, p);
-    // varied stakes across squares
+    // varied stakes across squares; ensure SOMEONE stakes the jackpot square so
+    // the whole pool is won and the payouts sum to the full proceeds.
+    const jsq = jackpotSquareOf(Buffer.alloc(32, 42));
     await program.methods.stake(0, new anchor.BN(0.3e9)).accounts(stakeAccts(players[0].publicKey, pda)).signers([players[0]]).rpc();
     await program.methods.stake(1, new anchor.BN(0.2e9)).accounts(stakeAccts(players[0].publicKey, pda)).signers([players[0]]).rpc();
     await program.methods.stake(1, new anchor.BN(0.5e9)).accounts(stakeAccts(players[1].publicKey, pda)).signers([players[1]]).rpc();
     await program.methods.stake(7, new anchor.BN(0.1e9)).accounts(stakeAccts(players[1].publicKey, pda)).signers([players[1]]).rpc();
     await program.methods.stake(7, new anchor.BN(0.9e9)).accounts(stakeAccts(players[2].publicKey, pda)).signers([players[2]]).rpc();
+    await program.methods.stake(jsq, new anchor.BN(0.4e9)).accounts(stakeAccts(players[2].publicKey, pda)).signers([players[2]]).rpc();
     for (const p of players) await reconcile(p);
 
     await settleAfterDeadline(pda, Buffer.alloc(32, 42));
@@ -490,8 +491,9 @@ describe("ansem-miner", () => {
     const r = await program.account.round.fetch(pda);
     const proceeds = r.swapProceeds.toNumber();
 
-    // Jackpot vaults are unseeded here, so even if a tier's roll hits, its
-    // snapshot pool is 0 and the sum-to-proceeds invariant is unaffected.
+    // Lottery model: with the jackpot square staked, Σ(returns + jackpot share)
+    // equals the full proceeds, modulo per-player floor dust (one floor for the
+    // returns portion + one for the jackpot share, per claimer).
     let sum = 0;
     for (const p of players) {
       const ata = getAssociatedTokenAddressSync(ansemMint, p.publicKey);
@@ -500,76 +502,58 @@ describe("ansem-miner", () => {
       const bal = await getAccount(provider.connection, ata);
       sum += Number(bal.amount);
     }
-    assert.isAtMost(proceeds - sum, players.length); // floor dust only
-    assert.isAbove(sum, proceeds - players.length - 1);
+    assert.isAtMost(proceeds - sum, 2 * players.length + 2);
+    assert.isAbove(sum, proceeds - 2 * players.length - 2);
   });
 
-  it("pays both jackpot tiers from settle-time snapshots to a sole staker", async () => {
-    // Force both tiers to always hit; seed the big vault larger than the small
-    // so "big" genuinely pays more.
-    await program.methods.setSmallJackpotOdds(1).accounts({ admin: admin.publicKey }).rpc();
-    await program.methods.setBigJackpotOdds(1).accounts({ admin: admin.publicKey }).rpc();
-    await program.methods.seedSmallJackpot(new anchor.BN(1_000_000_000)).accounts({
-      admin: admin.publicKey, ansemMint, smallJackpotAuthority: smallJackpotAuth, smallJackpotVault,
-    }).rpc();
-    await program.methods.seedBigJackpot(new anchor.BN(5_000_000_000)).accounts({
-      admin: admin.publicKey, ansemMint, bigJackpotAuthority: bigJackpotAuth, bigJackpotVault,
-    }).rpc();
+  it("§lottery: set_return_band(0,0) sends the whole pot to the jackpot square", async () => {
+    // Max-variance mode: non-jackpot squares return 0, so the jackpot-square
+    // staker takes the entire proceeds and everyone else gets nothing.
+    await program.methods.setReturnBand(0, 0).accounts({ admin: admin.publicKey }).rpc();
 
-    const p = anchor.web3.Keypair.generate();
-    const s = await provider.connection.requestAirdrop(p.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
-    await provider.connection.confirmTransaction(s);
-    await program.methods.deposit(new anchor.BN(2e9)).accounts({ authority: p.publicKey }).signers([p]).rpc();
-    await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
-    const { id, pda } = await freshInstantRound(STAKE_WINDOW);
-
-    const rnd = Buffer.alloc(32, 5);
-    const smallBlock = computeJackpotBlock(rnd, "jkblock_sm");
-    const bigBlock = computeJackpotBlock(rnd, "jkblock_big");
-    // Sole staker stakes both winning squares (dedup if they coincide) so both
-    // tiers pay; sole staker => main payout == full proceeds regardless.
-    const blocks = smallBlock === bigBlock ? [smallBlock] : [smallBlock, bigBlock];
-    await joinOnce(id, p);
-    for (const b of blocks) {
-      await program.methods.stake(b, new anchor.BN(0.5e9))
-        .accounts(stakeAccts(p.publicKey, pda)).signers([p]).rpc();
+    const [pWin, pLose] = [anchor.web3.Keypair.generate(), anchor.web3.Keypair.generate()];
+    for (const p of [pWin, pLose]) {
+      const s = await provider.connection.requestAirdrop(p.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+      await provider.connection.confirmTransaction(s);
+      await program.methods.deposit(new anchor.BN(2e9)).accounts({ authority: p.publicKey }).signers([p]).rpc();
+      await program.methods.initMiner().accounts({ authority: p.publicKey }).signers([p]).rpc();
     }
-    await reconcile(p);
+    const { id, pda } = await freshInstantRound(STAKE_WINDOW);
+    const rnd = Buffer.alloc(32, 5);
+    const jsq = jackpotSquareOf(rnd);
+    const other = (jsq + 1) % 25;
+    await joinOnce(id, pWin);
+    await joinOnce(id, pLose);
+    await program.methods.stake(jsq, new anchor.BN(1e9)).accounts(stakeAccts(pWin.publicKey, pda)).signers([pWin]).rpc();
+    await program.methods.stake(other, new anchor.BN(1e9)).accounts(stakeAccts(pLose.publicKey, pda)).signers([pLose]).rpc();
+    await reconcile(pWin);
+    await reconcile(pLose);
 
     await settleAfterDeadline(pda, rnd);
     await program.methods.executeSwapMock().accounts(swapAccounts(pda)).rpc();
 
     const r = await program.account.round.fetch(pda);
-    assert.isTrue(r.smallJackpotHit);
-    assert.isTrue(r.bigJackpotHit);
-    assert.equal(r.smallJackpotBlock, smallBlock);
-    assert.equal(r.bigJackpotBlock, bigBlock);
-    // pools snapshotted at swap: 10% of each seeded vault (1e9 and 5e9)
-    assert.equal(r.smallJackpotPool.toNumber(), 100_000_000);
-    assert.equal(r.bigJackpotPool.toNumber(), 500_000_000);
+    assert.equal(r.jackpotSquare, jsq);
+    const proceeds = r.swapProceeds.toNumber();
+    assert.equal(r.jackpotPool.toNumber(), proceeds, "0-band => pool == full proceeds");
 
-    const ata = getAssociatedTokenAddressSync(ansemMint, p.publicKey);
-    await program.methods.claim(new anchor.BN(id))
-      .accounts(claimAccounts(pda, p.publicKey, ata)).signers([p]).rpc();
-    const bal = await getAccount(provider.connection, ata);
-    // sole staker: main == proceeds; + small pool (1e8) + big pool (5e8)
-    const mainProceeds = r.swapProceeds.toNumber();
-    assert.equal(Number(bal.amount), mainProceeds + 100_000_000 + 500_000_000);
+    const winAta = getAssociatedTokenAddressSync(ansemMint, pWin.publicKey);
+    const loseAta = getAssociatedTokenAddressSync(ansemMint, pLose.publicKey);
+    await program.methods.claim(new anchor.BN(id)).accounts(claimAccounts(pda, pWin.publicKey, winAta)).signers([pWin]).rpc();
+    await program.methods.claim(new anchor.BN(id)).accounts(claimAccounts(pda, pLose.publicKey, loseAta)).signers([pLose]).rpc();
+    assert.equal(Number((await getAccount(provider.connection, winAta)).amount), proceeds, "jackpot staker takes all");
+    assert.equal(Number((await getAccount(provider.connection, loseAta)).amount), 0, "non-jackpot staker gets nothing at 0-band");
+
+    // Restore the default 0-50% band for the tests that follow.
+    await program.methods.setReturnBand(0, 5000).accounts({ admin: admin.publicKey }).rpc();
   });
 
-  it("jackpot snapshot makes multi-winner payouts order-independent", async () => {
-    // Regression test for the audit's Important finding: two equally-staked
-    // winners on the same jackpot square must receive EQUAL jackpot shares
-    // regardless of who claims first. Pre-fix (live vault balance read per
-    // claim), the second claimant was shortchanged.
-    await program.methods.setSmallJackpotOdds(1).accounts({ admin: admin.publicKey }).rpc();
-    await program.methods.setBigJackpotOdds(0).accounts({ admin: admin.publicKey }).rpc(); // isolate small tier
-    await program.methods.seedSmallJackpot(new anchor.BN(1_000_000_000)).accounts({
-      admin: admin.publicKey, ansemMint, smallJackpotAuthority: smallJackpotAuth, smallJackpotVault,
-    }).rpc();
-
-    const pa = anchor.web3.Keypair.generate();
-    const pb = anchor.web3.Keypair.generate();
+  it("§lottery: equal jackpot-square stakers split the pool equally, order-independent", async () => {
+    // Two equal stakers on the jackpot square must get EQUAL shares regardless of
+    // who claims first — the pool is frozen at swap (the audit's order-dependence
+    // fix, preserved). Use (0,0) so the pool == full proceeds for a clean split.
+    await program.methods.setReturnBand(0, 0).accounts({ admin: admin.publicKey }).rpc();
+    const [pa, pb] = [anchor.web3.Keypair.generate(), anchor.web3.Keypair.generate()];
     for (const p of [pa, pb]) {
       const s = await provider.connection.requestAirdrop(p.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
       await provider.connection.confirmTransaction(s);
@@ -578,43 +562,79 @@ describe("ansem-miner", () => {
     }
     const { id, pda } = await freshInstantRound(STAKE_WINDOW);
     const rnd = Buffer.alloc(32, 5);
-    const smallBlock = computeJackpotBlock(rnd, "jkblock_sm");
-    // both stake the SAME amount on the SAME winning square
+    const jsq = jackpotSquareOf(rnd);
     await joinOnce(id, pa);
     await joinOnce(id, pb);
-    await program.methods.stake(smallBlock, new anchor.BN(1e9))
-      .accounts(stakeAccts(pa.publicKey, pda)).signers([pa]).rpc();
-    await program.methods.stake(smallBlock, new anchor.BN(1e9))
-      .accounts(stakeAccts(pb.publicKey, pda)).signers([pb]).rpc();
+    await program.methods.stake(jsq, new anchor.BN(1e9)).accounts(stakeAccts(pa.publicKey, pda)).signers([pa]).rpc();
+    await program.methods.stake(jsq, new anchor.BN(1e9)).accounts(stakeAccts(pb.publicKey, pda)).signers([pb]).rpc();
     await reconcile(pa);
     await reconcile(pb);
 
     await settleAfterDeadline(pda, rnd);
     await program.methods.executeSwapMock().accounts(swapAccounts(pda)).rpc();
-
     const r = await program.account.round.fetch(pda);
-    assert.isTrue(r.smallJackpotHit);
-    assert.isFalse(r.bigJackpotHit);
-    const pool = r.smallJackpotPool.toNumber();
-    const proceeds = r.swapProceeds.toNumber();
-    const expectedEach = Math.floor(proceeds / 2) + Math.floor(pool / 2);
+    const expectedEach = Math.floor(r.jackpotPool.toNumber() / 2);
 
     // pb claims FIRST, pa SECOND — order must not matter.
     const pbAta = getAssociatedTokenAddressSync(ansemMint, pb.publicKey);
     const paAta = getAssociatedTokenAddressSync(ansemMint, pa.publicKey);
-    await program.methods.claim(new anchor.BN(id))
-      .accounts(claimAccounts(pda, pb.publicKey, pbAta)).signers([pb]).rpc();
-    await program.methods.claim(new anchor.BN(id))
-      .accounts(claimAccounts(pda, pa.publicKey, paAta)).signers([pa]).rpc();
-
+    await program.methods.claim(new anchor.BN(id)).accounts(claimAccounts(pda, pb.publicKey, pbAta)).signers([pb]).rpc();
+    await program.methods.claim(new anchor.BN(id)).accounts(claimAccounts(pda, pa.publicKey, paAta)).signers([pa]).rpc();
     const balB = Number((await getAccount(provider.connection, pbAta)).amount);
     const balA = Number((await getAccount(provider.connection, paAta)).amount);
-    assert.equal(balA, balB, "equal stakers must get equal payouts regardless of claim order");
+    assert.equal(balA, balB, "equal stakers get equal payouts regardless of claim order");
     assert.equal(balA, expectedEach);
-    assert.equal(balB, expectedEach);
 
-    // reset odds so the remaining tests see no jackpot interference
-    await program.methods.setSmallJackpotOdds(0).accounts({ admin: admin.publicKey }).rpc();
+    await program.methods.setReturnBand(0, 5000).accounts({ admin: admin.publicKey }).rpc();
+  });
+
+  it("§lottery: an unstaked jackpot square rolls its pool into the next round", async () => {
+    // Round A: nobody stakes the jackpot square => the whole leftover rolls over.
+    const cfg0 = await program.account.config.fetch(configPda);
+    assert.equal(cfg0.rolloverJackpot.toNumber(), 0, "precondition: rollover starts empty");
+
+    const pA = anchor.web3.Keypair.generate();
+    let s = await provider.connection.requestAirdrop(pA.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(s);
+    await program.methods.deposit(new anchor.BN(2e9)).accounts({ authority: pA.publicKey }).signers([pA]).rpc();
+    await program.methods.initMiner().accounts({ authority: pA.publicKey }).signers([pA]).rpc();
+    const roundA = await freshInstantRound(STAKE_WINDOW);
+    const rndA = Buffer.alloc(32, 9);
+    const jsqA = jackpotSquareOf(rndA);
+    const nonJsqA = (jsqA + 1) % 25;
+    await joinOnce(roundA.id, pA);
+    await program.methods.stake(nonJsqA, new anchor.BN(1e9)).accounts(stakeAccts(pA.publicKey, roundA.pda)).signers([pA]).rpc();
+    await reconcile(pA);
+    await settleAfterDeadline(roundA.pda, rndA);
+    await program.methods.executeSwapMock().accounts(swapAccounts(roundA.pda)).rpc();
+    const rA = await program.account.round.fetch(roundA.pda);
+    assert.equal(rA.jackpotPool.toNumber(), 0, "no jackpot staker => no pool this round");
+    const carried = (await program.account.config.fetch(configPda)).rolloverJackpot.toNumber();
+    assert.isAbove(carried, 0, "leftover must roll over");
+    const paAta = getAssociatedTokenAddressSync(ansemMint, pA.publicKey);
+    await program.methods.claim(new anchor.BN(roundA.id)).accounts(claimAccounts(roundA.pda, pA.publicKey, paAta)).signers([pA]).rpc();
+
+    // Round B: a staker on the jackpot square collects this round's leftover PLUS
+    // the carried rollover; the rollover then resets to 0.
+    const pB = anchor.web3.Keypair.generate();
+    s = await provider.connection.requestAirdrop(pB.publicKey, 3 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(s);
+    await program.methods.deposit(new anchor.BN(2e9)).accounts({ authority: pB.publicKey }).signers([pB]).rpc();
+    await program.methods.initMiner().accounts({ authority: pB.publicKey }).signers([pB]).rpc();
+    const roundB = await freshInstantRound(STAKE_WINDOW);
+    const rndB = Buffer.alloc(32, 11);
+    const jsqB = jackpotSquareOf(rndB);
+    await joinOnce(roundB.id, pB);
+    await program.methods.stake(jsqB, new anchor.BN(1e9)).accounts(stakeAccts(pB.publicKey, roundB.pda)).signers([pB]).rpc();
+    await reconcile(pB);
+    await settleAfterDeadline(roundB.pda, rndB);
+    await program.methods.executeSwapMock().accounts(swapAccounts(roundB.pda)).rpc();
+    const rB = await program.account.round.fetch(roundB.pda);
+    assert.equal(rB.jackpotPool.toNumber(), rB.swapProceeds.toNumber() + carried, "carried rollover folded into pool");
+    assert.equal((await program.account.config.fetch(configPda)).rolloverJackpot.toNumber(), 0, "rollover consumed by the winner");
+    const pbAta = getAssociatedTokenAddressSync(ansemMint, pB.publicKey);
+    await program.methods.claim(new anchor.BN(roundB.id)).accounts(claimAccounts(roundB.pda, pB.publicKey, pbAta)).signers([pB]).rpc();
+    assert.equal(Number((await getAccount(provider.connection, pbAta)).amount), rB.swapProceeds.toNumber() + carried, "winner collects proceeds + rollover");
   });
 
   // Task 13: final end-to-end happy-path sweep for a completely fresh player,
@@ -647,9 +667,11 @@ describe("ansem-miner", () => {
     // initMiner
     await program.methods.initMiner().accounts({ authority: fresh.publicKey }).signers([fresh]).rpc();
 
-    // join_round (lock) -> stake (sole staker) -> reconcile_miner (debit)
+    // join_round (lock) -> stake (sole staker on the jackpot square, so they win
+    // the whole pool == full proceeds) -> reconcile_miner (debit)
     await joinOnce(id, fresh);
-    await program.methods.stake(11, new anchor.BN(stakeAmount))
+    const e2eJsq = jackpotSquareOf(Buffer.alloc(32, 21));
+    await program.methods.stake(e2eJsq, new anchor.BN(stakeAmount))
       .accounts(stakeAccts(fresh.publicKey, roundPda)).signers([fresh]).rpc();
     await reconcile(fresh);
 
