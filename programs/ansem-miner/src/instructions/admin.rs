@@ -50,3 +50,18 @@ pub struct CloseConfig<'info> {
 pub fn close_config(_ctx: Context<CloseConfig>) -> Result<()> {
     Ok(())
 }
+
+// Admin-only migration/dev tool: fast-forward the round cursor. A `close_config` +
+// fresh `initialize` resets `current_round_id` to 0, but historical Round PDAs from
+// earlier devnet runs still occupy the low ids and collide with `create_round`'s
+// strict `init` ("account already in use"). Setting the cursor past them (e.g. to the
+// current slot) makes the next `create_round` allocate a never-used id. Also marks the
+// (nonexistent) current round finalized so a fresh round can open immediately.
+// DEVNET/TEST ONLY — must be removed or hard-gated before any mainnet deploy, since it
+// lets the admin skip or rewind the live round counter.
+pub fn set_round_cursor(ctx: Context<SetParams>, new_id: u64) -> Result<()> {
+    let cfg = &mut ctx.accounts.config;
+    cfg.current_round_id = new_id;
+    cfg.current_round_finalized = true;
+    Ok(())
+}

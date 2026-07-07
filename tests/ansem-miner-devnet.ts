@@ -110,7 +110,14 @@ async function ensureInitialized() {
   // Flat 50% return band so a sole ER staker always mines > 0 ANSEM regardless of
   // which square is the VRF-picked jackpot square.
   await program.methods.setReturnBand(5000, 5000).accounts({ admin: admin.publicKey }).rpc();
-  console.log("   initialized fresh lottery config + set flat 50% band on devnet");
+  // The fresh initialize reset current_round_id to 0, but historical Round PDAs from
+  // earlier devnet runs still occupy the low ids and would collide with create_round's
+  // strict init. Fast-forward the round cursor to the current slot (>> any id ever
+  // used) so the next create_round allocates a never-used id; the slot only grows, so
+  // subsequent suite runs stay collision-free too.
+  const slot = await provider.connection.getSlot("confirmed");
+  await program.methods.setRoundCursor(new anchor.BN(slot)).accounts({ admin: admin.publicKey }).rpc();
+  console.log(`   initialized fresh lottery config + set flat 50% band + round cursor @ slot ${slot} on devnet`);
   migrated = true;
 }
 

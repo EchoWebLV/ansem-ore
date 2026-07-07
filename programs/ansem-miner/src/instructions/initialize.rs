@@ -20,8 +20,14 @@ pub struct Initialize<'info> {
     #[account(seeds = [MINT_AUTH_SEED], bump)]
     pub mint_authority: UncheckedAccount<'info>,
 
+    // `init_if_needed` (not `init`): the ANSEM mint is a permanent PDA that must
+    // survive a Config-layout migration. After an admin `close_config`, re-running
+    // `initialize` recreates a fresh Config (still strict `init`) while REUSING the
+    // existing mint instead of failing to allocate an address already in use.
+    // Anchor validates the existing mint against these same decimals/authority, so
+    // the reuse is safe; on a first-ever deploy this creates the mint normally.
     #[account(
-        init, payer = admin,
+        init_if_needed, payer = admin,
         seeds = [ANSEM_MINT_SEED], bump,
         mint::decimals = ANSEM_DECIMALS,
         mint::authority = mint_authority,

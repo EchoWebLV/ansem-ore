@@ -70,6 +70,11 @@ pub mod ansem_miner {
         instructions::admin::close_config(ctx)
     }
 
+    // DEVNET/TEST-ONLY migration tool — see instructions/admin.rs::set_round_cursor.
+    pub fn set_round_cursor(ctx: Context<SetParams>, new_id: u64) -> Result<()> {
+        instructions::admin::set_round_cursor(ctx, new_id)
+    }
+
     pub fn execute_swap_mock(ctx: Context<ExecuteSwapMock>) -> Result<()> {
         instructions::swap::execute_swap_mock_handler(ctx)
     }
