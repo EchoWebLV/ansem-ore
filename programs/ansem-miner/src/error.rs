@@ -26,4 +26,5 @@ pub enum AnsemError {
     #[msg("Escrow already joined to a round")] RoundAlreadyJoined,
     #[msg("Miner already reconciled for this round")] AlreadyReconciled,
     #[msg("Cannot commit a miner while its round is still open (staking not closed)")] CommitTooEarly,
+    #[msg("Invalid return band (require min <= max <= RETURN_MAX_BPS)")] BadReturnBand,
 }

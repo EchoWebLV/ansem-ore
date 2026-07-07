@@ -9,12 +9,8 @@ pub struct Config {
     pub current_round_id: u64,
     pub round_duration_secs: i64,
     pub fee_bps: u16,
-    pub mult_min_bps: u16,
-    pub mult_max_bps: u16,
-    pub small_jackpot_odds: u32,
-    pub small_jackpot_bps: u16,
-    pub big_jackpot_odds: u32,
-    pub big_jackpot_bps: u16,
+    pub mult_min_bps: u16,   // return-band low  (bps)
+    pub mult_max_bps: u16,   // return-band high (bps)
     pub min_stake: u64,
     pub max_stake_per_round: u64,
     pub mock_rate: u64,
@@ -24,6 +20,9 @@ pub struct Config {
     // can verify it isn't sweeping funds that belong to escrow rather than
     // to the round being swapped. See stake.rs / escrow.rs for updates.
     pub total_escrow_balance: u64,
+    // Accumulated ANSEM jackpot carried across rounds where nobody staked the
+    // jackpot square. Physically = unclaimed ANSEM sitting in payout_vault.
+    pub rollover_jackpot: u64,
     // Round-lifecycle gate: true when the newest round has reached a terminal
     // state (Claimable via swap, or Closed via cancel_round). create_round
     // requires this to be true (or current_round_id == 0), forbidding a new
@@ -37,6 +36,4 @@ pub struct Config {
     pub treasury_bump: u8,
     pub vault_auth_bump: u8,
     pub mint_auth_bump: u8,
-    pub small_jackpot_auth_bump: u8,
-    pub big_jackpot_auth_bump: u8,
 }

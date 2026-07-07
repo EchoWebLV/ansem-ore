@@ -40,12 +40,8 @@ pub fn create_round_handler(ctx: Context<CreateRound>) -> Result<()> {
     r.pot = 0;
     r.state = STATE_OPEN;
     r.randomness = [0u8; 32];
-    r.small_jackpot_hit = false;
-    r.small_jackpot_block = 0;
-    r.small_jackpot_pool = 0;
-    r.big_jackpot_hit = false;
-    r.big_jackpot_block = 0;
-    r.big_jackpot_pool = 0;
+    r.jackpot_square = 0;
+    r.jackpot_pool = 0;
     r.swap_proceeds = 0;
     r.bump = ctx.bumps.round;
     Ok(())

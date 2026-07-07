@@ -97,17 +97,13 @@ pub struct SettleCallback<'info> {
 }
 
 pub fn settle_callback_handler(ctx: Context<SettleCallback>, randomness: [u8; 32]) -> Result<()> {
-    let cfg = &ctx.accounts.config;
     let round = &mut ctx.accounts.round;
     // One-shot guard: only a VrfPending round accepts randomness → blocks replay /
     // a second oracle fire from overwriting a settled draw.
     require!(round.state == STATE_VRF_PENDING, AnsemError::BadRoundState);
 
     round.randomness = randomness;
-    round.small_jackpot_hit = math::jackpot_hit(&randomness, cfg.small_jackpot_odds, b"jackpot_sm");
-    round.small_jackpot_block = math::jackpot_block(&randomness, b"jkblock_sm");
-    round.big_jackpot_hit = math::jackpot_hit(&randomness, cfg.big_jackpot_odds, b"jackpot_big");
-    round.big_jackpot_block = math::jackpot_block(&randomness, b"jkblock_big");
+    round.jackpot_square = math::jackpot_block(&randomness, b"jackpot");
     round.state = STATE_SETTLED;
     Ok(())
 }

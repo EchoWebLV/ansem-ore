@@ -39,24 +39,8 @@ pub struct Claim<'info> {
     #[account(seeds = [VAULT_AUTH_SEED], bump = config.vault_auth_bump)]
     pub vault_authority: UncheckedAccount<'info>,
 
-    /// CHECK: small jackpot authority PDA
-    #[account(seeds = [JACKPOT_SM_AUTH_SEED], bump = config.small_jackpot_auth_bump)]
-    pub small_jackpot_authority: UncheckedAccount<'info>,
-
-    /// CHECK: big jackpot authority PDA
-    #[account(seeds = [JACKPOT_BIG_AUTH_SEED], bump = config.big_jackpot_auth_bump)]
-    pub big_jackpot_authority: UncheckedAccount<'info>,
-
     #[account(mut, associated_token::mint = ansem_mint, associated_token::authority = vault_authority)]
     pub payout_vault: Box<Account<'info, TokenAccount>>,
-
-    // Both jackpot vaults are created at initialize, so they always exist and a
-    // non-jackpot claim never fails on a missing vault (fixes the audit's DoS).
-    #[account(mut, associated_token::mint = ansem_mint, associated_token::authority = small_jackpot_authority)]
-    pub small_jackpot_vault: Box<Account<'info, TokenAccount>>,
-
-    #[account(mut, associated_token::mint = ansem_mint, associated_token::authority = big_jackpot_authority)]
-    pub big_jackpot_vault: Box<Account<'info, TokenAccount>>,
 
     #[account(init_if_needed, payer = authority,
         associated_token::mint = ansem_mint, associated_token::authority = authority)]
@@ -77,10 +61,22 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
 
     let miner = &ctx.accounts.miner;
 
-    // main payout
-    let tw = math::total_weight(&round.block_sol, &round.randomness, cfg.mult_min_bps, cfg.mult_max_bps);
-    let pw = math::player_weight(&miner.block_stake, &round.randomness, cfg.mult_min_bps, cfg.mult_max_bps);
-    let amount = math::payout(pw, tw, round.swap_proceeds);
+    // Payout = non-jackpot returns (0-50% per square) + this player's pro-rata
+    // share of the jackpot pool if they staked the jackpot square. Both are paid
+    // from the single payout_vault; every input is frozen round state, so the
+    // amount is independent of claim order.
+    let jsq = round.jackpot_square as usize;
+    let nj_weight = math::return_weight(
+        &miner.block_stake,
+        &round.randomness,
+        round.jackpot_square,
+        cfg.mult_min_bps,
+        cfg.mult_max_bps,
+    );
+    let nj_amount = math::nonjackpot_payout(nj_weight, round.pot, round.swap_proceeds);
+    let jp_amount =
+        math::jackpot_share(round.jackpot_pool, miner.block_stake[jsq], round.block_sol[jsq]);
+    let amount = nj_amount.checked_add(jp_amount).ok_or(AnsemError::Overflow)?;
 
     if amount > 0 {
         let va_bump = cfg.vault_auth_bump;
@@ -97,62 +93,6 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
             ),
             amount,
         )?;
-    }
-
-    // Jackpot payouts (additive). Each tier pays the player's pro-rata share of
-    // the tier's SNAPSHOTTED pool (frozen at swap time in round.*_jackpot_pool),
-    // never the live vault balance — so a claimant's share depends only on their
-    // stake share, not on claim order (the audit's order-dependence fix).
-    if round.small_jackpot_hit {
-        let jb = round.small_jackpot_block as usize;
-        let block_total = round.block_sol[jb];
-        let player_on_block = miner.block_stake[jb];
-        if block_total > 0 && player_on_block > 0 {
-            let share =
-                (round.small_jackpot_pool as u128 * player_on_block as u128 / block_total as u128) as u64;
-            if share > 0 {
-                let sj_bump = cfg.small_jackpot_auth_bump;
-                let sj_seeds: &[&[u8]] = &[JACKPOT_SM_AUTH_SEED, &[sj_bump]];
-                token::transfer(
-                    CpiContext::new_with_signer(
-                        ctx.accounts.token_program.key(),
-                        Transfer {
-                            from: ctx.accounts.small_jackpot_vault.to_account_info(),
-                            to: ctx.accounts.player_ata.to_account_info(),
-                            authority: ctx.accounts.small_jackpot_authority.to_account_info(),
-                        },
-                        &[sj_seeds],
-                    ),
-                    share,
-                )?;
-            }
-        }
-    }
-
-    if round.big_jackpot_hit {
-        let jb = round.big_jackpot_block as usize;
-        let block_total = round.block_sol[jb];
-        let player_on_block = miner.block_stake[jb];
-        if block_total > 0 && player_on_block > 0 {
-            let share =
-                (round.big_jackpot_pool as u128 * player_on_block as u128 / block_total as u128) as u64;
-            if share > 0 {
-                let bj_bump = cfg.big_jackpot_auth_bump;
-                let bj_seeds: &[&[u8]] = &[JACKPOT_BIG_AUTH_SEED, &[bj_bump]];
-                token::transfer(
-                    CpiContext::new_with_signer(
-                        ctx.accounts.token_program.key(),
-                        Transfer {
-                            from: ctx.accounts.big_jackpot_vault.to_account_info(),
-                            to: ctx.accounts.player_ata.to_account_info(),
-                            authority: ctx.accounts.big_jackpot_authority.to_account_info(),
-                        },
-                        &[bj_seeds],
-                    ),
-                    share,
-                )?;
-            }
-        }
     }
 
     // NOTE: claim intentionally does NOT touch Config.total_escrow_balance —

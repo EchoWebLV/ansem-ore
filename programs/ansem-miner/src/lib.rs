@@ -61,20 +61,8 @@ pub mod ansem_miner {
         instructions::admin::set_round_duration(ctx, secs)
     }
 
-    pub fn set_small_jackpot_odds(ctx: Context<SetParams>, odds: u32) -> Result<()> {
-        instructions::admin::set_small_jackpot_odds(ctx, odds)
-    }
-
-    pub fn set_big_jackpot_odds(ctx: Context<SetParams>, odds: u32) -> Result<()> {
-        instructions::admin::set_big_jackpot_odds(ctx, odds)
-    }
-
-    pub fn seed_small_jackpot(ctx: Context<SeedSmallJackpot>, amount: u64) -> Result<()> {
-        instructions::admin::seed_small_jackpot(ctx, amount)
-    }
-
-    pub fn seed_big_jackpot(ctx: Context<SeedBigJackpot>, amount: u64) -> Result<()> {
-        instructions::admin::seed_big_jackpot(ctx, amount)
+    pub fn set_return_band(ctx: Context<SetParams>, min_bps: u16, max_bps: u16) -> Result<()> {
+        instructions::admin::set_return_band(ctx, min_bps, max_bps)
     }
 
     pub fn execute_swap_mock(ctx: Context<ExecuteSwapMock>) -> Result<()> {

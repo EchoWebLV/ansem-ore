@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{Mint, Token, TokenAccount};
+use anchor_spl::token::{Mint, Token};
 
 use crate::constants::*;
 use crate::state::Config;
@@ -32,31 +32,6 @@ pub struct Initialize<'info> {
     #[account(seeds = [VAULT_AUTH_SEED], bump)]
     pub vault_authority: UncheckedAccount<'info>,
 
-    /// CHECK: small jackpot authority PDA (owns the small jackpot vault)
-    #[account(seeds = [JACKPOT_SM_AUTH_SEED], bump)]
-    pub small_jackpot_authority: UncheckedAccount<'info>,
-
-    /// CHECK: big jackpot authority PDA (owns the big jackpot vault)
-    #[account(seeds = [JACKPOT_BIG_AUTH_SEED], bump)]
-    pub big_jackpot_authority: UncheckedAccount<'info>,
-
-    // Create both jackpot vaults now so they always exist. claim/execute_swap_mock
-    // reference them as strict accounts; pre-creating removes the operational DoS
-    // where the first claim would revert until an admin seeded the vault.
-    #[account(
-        init, payer = admin,
-        associated_token::mint = ansem_mint,
-        associated_token::authority = small_jackpot_authority,
-    )]
-    pub small_jackpot_vault: Account<'info, TokenAccount>,
-
-    #[account(
-        init, payer = admin,
-        associated_token::mint = ansem_mint,
-        associated_token::authority = big_jackpot_authority,
-    )]
-    pub big_jackpot_vault: Account<'info, TokenAccount>,
-
     /// CHECK: SOL pot vault PDA (system-owned lamport holder)
     #[account(seeds = [POT_VAULT_SEED], bump)]
     pub pot_vault: UncheckedAccount<'info>,
@@ -81,14 +56,11 @@ pub fn initialize_handler(ctx: Context<Initialize>) -> Result<()> {
     c.fee_bps = DEFAULT_FEE_BPS;
     c.mult_min_bps = DEFAULT_MULT_MIN_BPS;
     c.mult_max_bps = DEFAULT_MULT_MAX_BPS;
-    c.small_jackpot_odds = DEFAULT_SMALL_JACKPOT_ODDS;
-    c.small_jackpot_bps = DEFAULT_SMALL_JACKPOT_BPS;
-    c.big_jackpot_odds = DEFAULT_BIG_JACKPOT_ODDS;
-    c.big_jackpot_bps = DEFAULT_BIG_JACKPOT_BPS;
     c.min_stake = DEFAULT_MIN_STAKE;
     c.max_stake_per_round = DEFAULT_MAX_STAKE_PER_ROUND;
     c.mock_rate = DEFAULT_MOCK_RATE;
     c.total_escrow_balance = 0;
+    c.rollover_jackpot = 0;
     // No round exists yet; treat as finalized so the first create_round passes.
     c.current_round_finalized = true;
     c.config_bump = ctx.bumps.config;
@@ -96,7 +68,5 @@ pub fn initialize_handler(ctx: Context<Initialize>) -> Result<()> {
     c.treasury_bump = ctx.bumps.treasury;
     c.vault_auth_bump = ctx.bumps.vault_authority;
     c.mint_auth_bump = ctx.bumps.mint_authority;
-    c.small_jackpot_auth_bump = ctx.bumps.small_jackpot_authority;
-    c.big_jackpot_auth_bump = ctx.bumps.big_jackpot_authority;
     Ok(())
 }
