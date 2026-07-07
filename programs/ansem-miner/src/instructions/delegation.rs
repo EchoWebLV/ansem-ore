@@ -134,27 +134,30 @@ pub struct CommitMiner<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     // AUTHORIZATION (§3A): permissionless like `reconcile_miner` — any `payer`
-    // (the keeper) can commit ANY miner, but ONLY once the round has left OPEN
-    // (see the handler gate), so staking is closed and the block_stake snapshot
-    // is final. Self-referential seeds mean no owner signature is needed.
+    // (the keeper) can commit ANY miner, but ONLY once the round is past its
+    // deadline (see the handler gate), so staking is closed and the block_stake
+    // snapshot is final. Self-referential seeds mean no owner signature is needed.
     #[account(mut, seeds = [MINER_SEED, miner.authority.as_ref()], bump = miner.bump)]
     pub miner: Account<'info, MinerPosition>,
-    // Read-only gate account: the round the miner staked. Still delegated and
-    // available on the ER because commit_miner runs BEFORE commit_round. Used
-    // only to prove staking is closed.
+    // Read-only gate account: the round the miner staked. Read only for its
+    // immutable deadline_ts / round_id, so it works whether the round is still
+    // delegated on the ER or served as a read-only clone (no staleness trap).
     #[account(seeds = [ROUND_SEED, miner.round_id.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Account<'info, Round>,
 }
 
 pub fn commit_miner_handler(ctx: Context<CommitMiner>) -> Result<()> {
-    // Gate: staking must be closed. `stake` requires STATE_OPEN && now < deadline,
-    // so a non-OPEN round guarantees the block_stake snapshot is final. This also
-    // blocks the mid-round force-commit the removed owner-signature used to block.
+    // Gate (§3A, deadline form): staking is closed once now >= deadline_ts (stake
+    // requires now < deadline). deadline_ts is immutable, so this gate is robust
+    // to ER clone staleness and keeps the natural commit-then-settle order in
+    // every ER flow (admin- and VRF-settled). Also blocks the mid-round
+    // force-commit the removed owner-signature used to block.
     require!(
         ctx.accounts.round.round_id == ctx.accounts.miner.round_id,
         AnsemError::MinerRoundMismatch
     );
-    require!(ctx.accounts.round.state != STATE_OPEN, AnsemError::CommitTooEarly);
+    let now = Clock::get()?.unix_timestamp;
+    require!(now >= ctx.accounts.round.deadline_ts, AnsemError::CommitTooEarly);
 
     MagicIntentBundleBuilder::new(
         ctx.accounts.payer.to_account_info(),
