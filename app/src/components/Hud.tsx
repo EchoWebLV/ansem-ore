@@ -22,11 +22,11 @@ export function Hud({ snapshot, nowMs, reveal }: HudProps) {
   const gold = reveal?.sub?.gold === true;
   return (
     <div className="text-center">
-      <div className="text-[12px] tracking-[2px] text-[#8a8a93]">
+      <div className="text-[12px] lg:text-[13px] tracking-[2px] text-[#8a8a93]">
         ROUND {snapshot.roundId} · <span>{stateLabel(snapshot.state)}</span>
       </div>
       <div
-        className="font-mono text-[40px] font-medium my-[2px] transition-colors duration-200"
+        className="font-mono text-[40px] lg:text-[64px] font-medium my-[2px] transition-colors duration-200"
         style={{
           color: gold ? "#e8c452" : "#35e07a",
           textShadow: gold ? "0 0 26px rgba(232,196,82,0.5)" : "0 0 20px rgba(53,224,122,0.35)",
@@ -34,7 +34,7 @@ export function Hud({ snapshot, nowMs, reveal }: HudProps) {
       >
         {reveal?.counter ?? (open ? <Countdown deadlineTs={snapshot.deadlineTs} nowMs={nowMs} /> : "—")}
       </div>
-      <div className="text-[12px] min-h-[16px] text-[#8a8a93]">
+      <div className="text-[12px] lg:text-[13px] min-h-[16px] text-[#8a8a93]">
         {reveal?.sub ? (
           <span style={gold ? { color: "#e8c452" } : undefined}>{reveal.sub.text}</span>
         ) : settling ? (

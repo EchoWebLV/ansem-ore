@@ -35,6 +35,54 @@ button, a, [data-square] { touch-action: manipulation; }
   to   { transform: translateY(340px); }
 }
 
+/* Synthwave floor: a perspective grid scrolling toward the viewer (desktop only). */
+.grid-floor {
+  position: fixed; left: 50%; bottom: -12vh;
+  width: 170vw; height: 46vh;
+  transform: translateX(-50%) perspective(620px) rotateX(62deg);
+  transform-origin: center bottom;
+  z-index: -1; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(53, 224, 122, 0.13) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(53, 224, 122, 0.13) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent 85%);
+  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent 85%);
+  animation: floor-scroll 3.2s linear infinite;
+}
+@keyframes floor-scroll {
+  from { background-position-y: 0; }
+  to   { background-position-y: 44px; }
+}
+
+/* Edge falloff that pulls the eye to the board (desktop only). */
+.vignette {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 40%, transparent 58%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+/* Full-screen gold wash when the jackpot finale strikes (desktop only). */
+.gold-flash {
+  position: fixed; inset: 0; z-index: 30; pointer-events: none;
+  background: radial-gradient(62% 62% at 50% 42%, rgba(232, 196, 82, 0.28), transparent 75%);
+  animation: gold-flash 1.5s ease-out both;
+}
+@keyframes gold-flash {
+  0%   { opacity: 0; }
+  18%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Desktop atmosphere boost. */
+@media (min-width: 1024px) {
+  .dust { opacity: 0.7; }
+  .bg-aura {
+    background:
+      radial-gradient(920px 660px at 50% 12%, rgba(53, 224, 122, 0.13), transparent 70%),
+      radial-gradient(720px 540px at 85% 92%, rgba(232, 196, 82, 0.07), transparent 70%);
+  }
+}
+
 /* ---------- holo-card stage ---------- */
 
 .stage { perspective: 1000px; }
@@ -42,6 +90,19 @@ button, a, [data-square] { touch-action: manipulation; }
   transform-style: preserve-3d;
   will-change: transform;
   transition: transform 0.25s ease-out;
+}
+
+/* Cursor-tracked sheen across the card — desktop hover only. */
+.stage-glare {
+  position: absolute; inset: 0; border-radius: 18px;
+  pointer-events: none; opacity: 0; transition: opacity 0.3s;
+  background: radial-gradient(
+    340px 240px at var(--gx, 50%) var(--gy, 50%),
+    rgba(53, 224, 122, 0.09), transparent 65%
+  );
+}
+@media (min-width: 1024px) and (hover: hover) {
+  .stage:hover .stage-glare { opacity: 1; }
 }
 
 .board-float { animation: board-float 6s ease-in-out infinite; }
@@ -101,7 +162,8 @@ button, a, [data-square] { touch-action: manipulation; }
 
 @media (prefers-reduced-motion: reduce) {
   .dust, .board-float, .cell-face.pop, .cell-face.burst,
-  .glow-live, .bull-eye, .jackpot-ring, .stage-card {
+  .glow-live, .bull-eye, .jackpot-ring, .stage-card,
+  .grid-floor, .gold-flash, .stage-glare {
     animation: none !important;
     transition: none !important;
   }
