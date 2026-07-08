@@ -439,6 +439,15 @@ git commit -m "feat(app): vercel config (workspace SDK build before next build)"
 
 Parallel work items, each its own plan later: real Jupiter `begin_swap`/`record_swap` keeper path (mock swap replacement) · security audit engagement · legal review (gambling-shaped mechanics, IP/likeness) · Ansem/community outreach + jackpot-vault seeding conversation · key hygiene (split program upgrade authority from the keeper's hot admin key; move admin off any shared host) · $ANSEM mainnet liquidity depth check · mainnet gate for the admin `settle` fallback (spec §12).
 
+**Custody-minimization ladder (user directive 2026-07-08: "we should not hold any of the funds").** The pot must be program-held during a round (inherent to a pooled game); everything else is removable — the target claim is "autonomous code holds funds; no human, including us, can redirect a lamport":
+1. No admin fund-moving paths — already true by design; keep it a review invariant.
+2. Permissionless crank — make the full round-driving loop permissionless (several calls already are); we run a keeper for liveness, not as a gatekeeper.
+3. Upgrade authority ladder: Squads multisig → timelock (changes visible before they apply) → BURN after audit + soak (immutable program = nobody holds the vault).
+4. On-chain swap guardrails: output mint pinned to $ANSEM, min-out enforced, proceeds only to the payout vault — a malicious keeper can stall, never siphon.
+5. Fee policy decision: zero / community multisig / keep-as-revenue (fees are the one true "we receive funds" flow). Jackpot vault externally funded.
+6. Optional: auto-sweep escrow remainders post-claim to shrink the custody window to minutes (trades away the session-budget UX; withdraw-anytime already exists).
+Caveat recorded: code-custody ≠ gambling-law immunity — legal review still gates mainnet regardless.
+
 ---
 
 ## Self-review notes
