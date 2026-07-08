@@ -18,6 +18,11 @@ describe("Board", () => {
     }
   });
 
+  it("renders plain squares — no image assets", () => {
+    const { container } = render(<Board snapshot={snap()} />);
+    expect(container.querySelector("img")).toBeNull();
+  });
+
   it("lights a staked square green (data-lit)", () => {
     const blockSol = Array(25).fill("0"); blockSol[3] = "60"; blockSol[8] = "40";
     render(<Board snapshot={snap({ blockSol, pot: "100" })} />);

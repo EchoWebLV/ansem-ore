@@ -1,11 +1,8 @@
 "use client";
-import Image from "next/image";
 import { RoundState, type WireSnapshot } from "@ansem/sdk";
 import { bullCells } from "../lib/board-layout.js";
 
 const CELLS = bullCells();
-
-function tileNo(id: number): string { return String(id + 1).padStart(2, "0"); }
 
 export interface BoardProps {
   snapshot: WireSnapshot;
@@ -36,23 +33,19 @@ export function Board({ snapshot, selectedSquare = null, onSelect }: BoardProps)
             data-jackpot={jackpot ? "true" : "false"}
             data-selected={selected ? "true" : "false"}
             onClick={onSelect ? () => onSelect(cell.id) : undefined}
-            className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-md overflow-hidden transition-all duration-300${onSelect ? " cursor-pointer" : ""}`}
+            className={`absolute -translate-x-1/2 -translate-y-1/2 aspect-square rounded-md transition-all duration-300${onSelect ? " cursor-pointer" : ""}`}
             style={{
               left: `${cell.left * 100}%`,
               top: `${cell.top * 100}%`,
               width: "17%",
               boxShadow: glow,
+              // Prototype palette (docs/design/bull-board.html): transparent square,
+              // green-tint fill when staked, gold-tint on the jackpot square.
+              background: jackpot ? "rgba(232,196,82,0.24)" : lit ? "rgba(53,224,122,0.15)" : "transparent",
               outline: selected ? "2px solid #fff" : jackpot ? "2px solid #e8c452" : lit ? "1px solid #35e07a" : "1px solid #2c4034",
               opacity: lit || jackpot || selected ? 1 : 0.5,
             }}
           >
-            <Image
-              src={`/bulls/${tileNo(cell.id)}.webp`}
-              alt={`Bull #${cell.id + 1}`}
-              width={128}
-              height={128}
-              className="w-full h-auto block"
-            />
             {cell.eye && (
               <span className="absolute inset-0 m-auto h-1/4 w-1/4 rounded-full bg-bull-green/80 blur-[1px]" />
             )}
