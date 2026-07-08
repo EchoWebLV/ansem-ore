@@ -1,0 +1,4 @@
+{
+  "buildCommand": "pnpm --filter @ansem/sdk build && pnpm run build",
+  "framework": "nextjs"
+}
