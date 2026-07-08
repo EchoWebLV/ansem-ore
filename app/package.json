@@ -13,6 +13,9 @@
     "test": "vitest run",
     "lint": "next lint"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@ansem/sdk": "workspace:*",
     "@solana/wallet-adapter-base": "^0.9.23",

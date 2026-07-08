@@ -6,7 +6,7 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": [
         "-c",
-        "source $HOME/.nvm/nvm.sh && nvm use 22 >/dev/null && exec pnpm --filter @ansem/app exec next dev -p 3100"
+        "source $HOME/.nvm/nvm.sh && nvm use 22 >/dev/null && exec pnpm --filter @ansem/app run dev"
       ],
       "port": 3100
     }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { PublicKey } from "@solana/web3.js";
-import { commitToL1, CommitDeps, finalizeSettled, FinalizeDeps } from "../src/crank/actions.js";
+import { commitToL1, CommitDeps, finalizeSettled, FinalizeDeps, isNotThisRoundError } from "../src/crank/actions.js";
 
 const wallet = () => PublicKey.unique();
 
@@ -57,5 +57,20 @@ describe("finalizeSettled", () => {
     };
     await expect(finalizeSettled(100, deps)).rejects.toThrow(/rpc flake/);
     expect(swapped).toBe(false);
+  });
+});
+
+describe("isNotThisRoundError (commit_miner skip classifier)", () => {
+  it("skips a miner whose round_id != current round (seeds constraint / 2006)", () => {
+    expect(isNotThisRoundError(new Error("AnchorError: Error Code: ConstraintSeeds. Error Number: 2006. A seeds constraint was violated"))).toBe(true);
+  });
+
+  it("skips a miner whose current-round PDA was never created (AccountNotInitialized / 3012)", () => {
+    expect(isNotThisRoundError(new Error("Error Code: AccountNotInitialized. Error Number: 3012."))).toBe(true);
+  });
+
+  it("does NOT skip retryable clock-lag / RPC errors (must retry commit_round, not abandon the round)", () => {
+    expect(isNotThisRoundError(new Error("Error Code: CommitTooEarly. Error Number: 6023."))).toBe(false);
+    expect(isNotThisRoundError(new Error("failed to send transaction: rpc flake / blockhash not found"))).toBe(false);
   });
 });

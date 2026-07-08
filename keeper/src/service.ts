@@ -80,7 +80,10 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
                 const m = await fetchMiner(chain.program, minerPda(w));
                 return m ? { wallet: w.toBase58(), blockStake: m.blockStake } : null;
               }));
-              return rows.filter((r): r is NonNullable<typeof r> => r !== null);
+              // Post the CRIT-1 join_round-stamp fix, a join-without-stake miner also
+              // carries round_id == roundId, so keep only wallets that actually staked
+              // (some square > 0) — the leaderboard stays "stakers only".
+              return rows.filter((r): r is NonNullable<typeof r> => r !== null && r.blockStake.some((v) => v > 0n));
             },
             dispatch,
             broadcast: (snap, events) => server!.broadcast(snap, events),

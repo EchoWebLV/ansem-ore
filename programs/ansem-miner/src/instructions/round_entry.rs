@@ -17,6 +17,18 @@ use crate::state::{Config, MinerPosition, PlayerEscrow};
 // the withdraw-mid-round hole. The lock is released by reconcile_miner (the
 // single release point), which handles both stakers and join-without-stake
 // players, so no joiner can get permanently locked.
+//
+// CRIT-1 (join-without-stake wedge): join_round ALSO stamps the miner for this
+// round (round_id + zeroed block_stake). The one-popup entry batch always
+// delegates the miner right after this ix (entry.ts), so a player who never
+// stakes would otherwise leave the delegated miner at round_id=0. `commit_miner`
+// seed-binds its `round` account to `miner.round_id` (delegation.rs), so a
+// round_id=0 miner can never be undelegated (roundPda(0) doesn't exist / the
+// keeper passes the current round -> ConstraintSeeds), which strands the miner in
+// the ER, blocks commit_round for the whole round, and locks the escrow forever.
+// Stamping here makes EVERY joined miner committable via the normal current-round
+// path. The miner is guaranteed to exist and be program-owned at this point:
+// init_miner precedes join in the entry batch, and delegate_miner follows it.
 #[derive(Accounts)]
 #[instruction(round_id: u64)]
 pub struct JoinRound<'info> {
@@ -29,6 +41,13 @@ pub struct JoinRound<'info> {
         constraint = escrow.authority == authority.key() @ AnsemError::Unauthorized
     )]
     pub escrow: Account<'info, PlayerEscrow>,
+    // Stamped for this round so commit_miner can always undelegate it (see above).
+    // Seeded on the signer wallet (matches init_miner), so anchor auto-derives it.
+    #[account(
+        mut, seeds = [MINER_SEED, authority.key().as_ref()], bump = miner.bump,
+        constraint = miner.authority == authority.key() @ AnsemError::Unauthorized
+    )]
+    pub miner: Account<'info, MinerPosition>,
 }
 
 pub fn join_round_handler(ctx: Context<JoinRound>, round_id: u64) -> Result<()> {
@@ -43,6 +62,14 @@ pub fn join_round_handler(ctx: Context<JoinRound>, round_id: u64) -> Result<()> 
     // Up-front withdraw-lock; NO debit (the debit happens on L1 reconcile_miner
     // after the ER round commits, from the committed block_stake snapshot).
     escrow.active_round = round_id;
+
+    // CRIT-1: stamp the miner for this round so it is always committable, even if
+    // the player never stakes. Matches stake.rs's new-round reset (which stays as
+    // a backstop for the miner's first ER stake). block_stake is zeroed so a
+    // stale cross-round snapshot can never leak into this round's accounting.
+    let miner = &mut ctx.accounts.miner;
+    miner.round_id = round_id;
+    miner.block_stake = [0u64; GRID_SIZE];
     Ok(())
 }
 

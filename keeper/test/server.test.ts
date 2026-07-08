@@ -43,4 +43,25 @@ describe("read server", () => {
     expect(msg.events[0].type).toBe("round.open");
     ws.close();
   });
+
+  it("keeps serving after a client aborts mid-session (a bad socket doesn't crash the keeper)", async () => {
+    let current: FullSnapshot | null = snap(100);
+    server = await startReadServer(0, () => current);
+    const bad = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    await new Promise<void>((res) => { bad.on("open", () => res()); bad.on("error", () => res()); });
+    bad.terminate(); // abrupt close — server-side socket may emit 'error'
+
+    // Broadcasting while the aborted socket is still in the set must not throw or crash.
+    current = snap(101);
+    expect(() => server.broadcast(current!, [])).not.toThrow();
+
+    // A fresh client still gets served -> the server survived the abort.
+    const good = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    const first = await new Promise<any>((resolve, reject) => {
+      good.on("message", (d) => resolve(JSON.parse(d.toString())));
+      good.on("error", reject);
+    });
+    expect(first.snapshot.roundId).toBe(101);
+    good.close();
+  });
 });

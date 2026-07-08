@@ -74,7 +74,127 @@ describe("enterRound (one-popup contract)", () => {
     });
     expect(order).toEqual(["landed", "waitJoined", "waitDelegated"]); // persisted before waits
   });
+
+  it("treats a confirmed value.err as DEFINITIVE failure — throws and persists nothing even if the wallet is already joined", async () => {
+    // Re-entry: join_round reverts (RoundAlreadyJoined), so the atomic entry — incl
+    // createSessionV2 — reverts and NO session token minted. But escrow.active_round is
+    // still set from the prior entry, so an escrow-based verifyLanded would false-positive.
+    // A confirmed value.err must be definitive: throw without consulting verifyLanded, so
+    // no phantom session is persisted. (verifyLanded injected true here proves it is ignored.)
+    const conn = new Connection("http://127.0.0.1:8899");
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({ blockhash: "11111111111111111111111111111111", lastValidBlockHeight: 1 } as any);
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigfail" as any);
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({ value: { err: { InstructionError: [3, "Custom"] } } } as any);
+    const walletKp = Keypair.generate();
+    const adapter = { publicKey: walletKp.publicKey, signTransaction: async (tx: Transaction) => { tx.partialSign(walletKp); return tx; }, signAllTransactions: async (t: Transaction[]) => t } as any;
+    const l1 = createProgram(conn, keypairWallet(walletKp));
+
+    let persisted = false;
+    await expect(enterRound({
+      l1, connection: conn, wallet: adapter, roundId: 7, validator: DEFAULT_ER_VALIDATOR,
+      includeInitMiner: false, validUntilSec: 1_900_000_000,
+      onLanded: () => { persisted = true; },
+      verifyLanded: async () => true,   // simulates the phantom "already joined" false-positive; must be IGNORED
+      waitJoined: async () => {}, waitDelegated: async () => {},
+    })).rejects.toThrow(/failed on-chain/);
+    expect(persisted).toBe(false);      // no phantom session for a failed entry
+  });
+
+  it("recovers the session when confirm throws but the DEFAULT verifyLanded finds the minted session token", async () => {
+    // Default verifyLanded checks THIS entry's unique product — the session token PDA —
+    // not escrow.active_round. Token present -> the entry landed -> recover the session.
+    const conn = new Connection("http://127.0.0.1:8899");
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({ blockhash: "11111111111111111111111111111111", lastValidBlockHeight: 1 } as any);
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("siglate" as any);
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(new Error("Transaction was not confirmed in 30.00 seconds"));
+    vi.spyOn(conn, "getAccountInfo").mockResolvedValue({ lamports: 1 } as any); // session token exists on-chain
+    const walletKp = Keypair.generate();
+    const adapter = { publicKey: walletKp.publicKey, signTransaction: async (tx: Transaction) => { tx.partialSign(walletKp); return tx; }, signAllTransactions: async (t: Transaction[]) => t } as any;
+    const l1 = createProgram(conn, keypairWallet(walletKp));
+
+    let persisted = false;
+    const res = await enterRound({
+      l1, connection: conn, wallet: adapter, roundId: 7, validator: DEFAULT_ER_VALIDATOR,
+      includeInitMiner: false, validUntilSec: 1_900_000_000,
+      onLanded: () => { persisted = true; },
+      waitJoined: async () => {}, waitDelegated: async () => {}, // default verifyLanded (token check) used
+    });
+    expect(persisted).toBe(true);       // session recovered via the token, not dropped
+    expect(res.signature).toBe("siglate");
+  });
+
+  it("throws (no phantom session) when confirm throws and the session token is absent (entry did not land)", async () => {
+    const conn = new Connection("http://127.0.0.1:8899");
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({ blockhash: "11111111111111111111111111111111", lastValidBlockHeight: 1 } as any);
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigmiss" as any);
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(new Error("Transaction was not confirmed in 30.00 seconds"));
+    vi.spyOn(conn, "getAccountInfo").mockResolvedValue(null); // session token never minted
+    const walletKp = Keypair.generate();
+    const adapter = { publicKey: walletKp.publicKey, signTransaction: async (tx: Transaction) => { tx.partialSign(walletKp); return tx; }, signAllTransactions: async (t: Transaction[]) => t } as any;
+    const l1 = createProgram(conn, keypairWallet(walletKp));
+
+    let persisted = false;
+    await expect(enterRound({
+      l1, connection: conn, wallet: adapter, roundId: 7, validator: DEFAULT_ER_VALIDATOR,
+      includeInitMiner: false, validUntilSec: 1_900_000_000,
+      onLanded: () => { persisted = true; },
+      waitJoined: async () => {}, waitDelegated: async () => {},
+    })).rejects.toThrow(/not confirmed/);
+    expect(persisted).toBe(false);
+  }, 15_000);
 });
+
+/**
+ * Fake ER that simulates the ON-CHAIN new-round reset: the first stake whose target
+ * round differs from the miner's stored round zeroes block_stake and restamps the
+ * round before applying `+= amount` (mirrors stake.rs). Lets us exercise the
+ * cross-round baseline: a miner that still holds LAST round's stake on the square.
+ */
+function fakeErReset(initial: bigint[], staleRound: number, currentRound: number) {
+  const state = { roundId: staleRound, blockStake: [...initial] };
+  let calls = 0;
+  const er = {
+    account: { minerPosition: { fetch: async () => ({
+      authority: { toBase58: () => "Owner1111" },
+      roundId: { toNumber: () => state.roundId },
+      blockStake: state.blockStake.map((v) => ({ toString: () => v.toString() })),
+    }) } },
+    methods: {
+      stake: (square: number, amount: { toString: () => string }) => ({
+        accountsPartial: () => ({
+          rpc: async () => {
+            if (state.roundId !== currentRound) { state.blockStake = Array(25).fill(0n); state.roundId = currentRound; }
+            state.blockStake[square] += BigInt(amount.toString());
+            calls++;
+          },
+        }),
+      }),
+    },
+  };
+  return { er, state, calls: () => calls };
+}
+
+/** Fake ER whose Nth miner fetch throws (transient RPC error -> fetchMiner swallows to null). */
+function fakeErFailOnFetch(failAt: number) {
+  const state = { roundId: 7, blockStake: Array(25).fill(0n) as bigint[] };
+  let calls = 0, fetches = 0;
+  const er = {
+    account: { minerPosition: { fetch: async () => {
+      if (++fetches === failAt) throw new Error("transient ER read failure");
+      return {
+        authority: { toBase58: () => "Owner1111" },
+        roundId: { toNumber: () => state.roundId },
+        blockStake: state.blockStake.map((v) => ({ toString: () => v.toString() })),
+      };
+    } } },
+    methods: {
+      stake: (square: number, amount: { toString: () => string }) => ({
+        accountsPartial: () => ({ rpc: async () => { state.blockStake[square] += BigInt(amount.toString()); calls++; } }),
+      }),
+    },
+  };
+  return { er, state, calls: () => calls };
+}
 
 describe("gaslessStake (additive, single-send)", () => {
   it("adds amount to the square's existing stake with exactly one send (no runaway, no no-op)", async () => {
@@ -87,4 +207,78 @@ describe("gaslessStake (additive, single-send)", () => {
     expect(state.blockStake[0]).toBe(300_000_000n); // 0.1 + 0.2, added (not overwritten to 0.2)
     expect(calls()).toBe(1);                        // single send — no runaway multiply
   }, 15_000);
+
+  it("does NOT over-stake when the ER miner still holds LAST round's stake on the square", async () => {
+    // 0.1 left over from round 6 on square 0; we stake 0.05 into round 7. The stale
+    // 0.1 must count as 0 for the round-7 baseline (it is zeroed on-chain by the
+    // first round-7 stake), so exactly ONE send lands and the square holds 0.05 —
+    // NOT the runaway multiply the pre-fix absolute baseline produced.
+    const initial = Array(25).fill(0n); initial[0] = 100_000_000n;
+    const { er, state, calls } = fakeErReset(initial, 6, 7);
+    await gaslessStake({
+      er: er as any, ownerWallet: Keypair.generate().publicKey, sessionSigner: Keypair.generate(),
+      tokenPda: Keypair.generate().publicKey, square: 0, amount: new BN(50_000_000), roundId: 7,
+    });
+    expect(state.blockStake[0]).toBe(50_000_000n); // exactly the new 0.05
+    expect(calls()).toBe(1);                       // one send — stale cross-round baseline ignored
+  }, 20_000);
+
+  it("does NOT double-send when a mid-loop read fails right after the stake landed", async () => {
+    // Fresh round 7. Send lands on the first attempt (fetch #2), then the very next
+    // read (fetch #3) throws. A transient read failure must read as "unknown", never
+    // as 0 — otherwise the non-idempotent additive stake is sent again (0.4 not 0.2).
+    const { er, state, calls } = fakeErFailOnFetch(3);
+    await gaslessStake({
+      er: er as any, ownerWallet: Keypair.generate().publicKey, sessionSigner: Keypair.generate(),
+      tokenPda: Keypair.generate().publicKey, square: 0, amount: new BN(200_000_000), roundId: 7,
+    });
+    expect(state.blockStake[0]).toBe(200_000_000n); // exactly 0.2 — not doubled
+    expect(calls()).toBe(1);                        // the failed read did not trigger a resend
+  }, 20_000);
+
+  it("does NOT silently drop an additive re-stake when the baseline read blips then recovers", async () => {
+    // 0.1 already on square 0 this round (7). A read blip fails the first few baseline reads;
+    // the baseline must RETRY past the blip to the real 0.1 — never degrade an unknown read to
+    // 0 (which would make the first live read look 'already landed' and drop the +0.2).
+    const state = { roundId: 7, blockStake: Array(25).fill(0n) as bigint[] };
+    state.blockStake[0] = 100_000_000n;
+    let fetches = 0, calls = 0;
+    const er = {
+      account: { minerPosition: { fetch: async () => {
+        if (++fetches <= 5) throw new Error("baseline read blip");
+        return { authority: { toBase58: () => "o" }, roundId: { toNumber: () => state.roundId }, blockStake: state.blockStake.map((v) => ({ toString: () => v.toString() })) };
+      } } },
+      methods: { stake: (sq: number, amt: { toString: () => string }) => ({ accountsPartial: () => ({ rpc: async () => { state.blockStake[sq] += BigInt(amt.toString()); calls++; } }) }) },
+    };
+    await gaslessStake({ er: er as any, ownerWallet: Keypair.generate().publicKey, sessionSigner: Keypair.generate(), tokenPda: Keypair.generate().publicKey, square: 0, amount: new BN(200_000_000), roundId: 7 });
+    expect(state.blockStake[0]).toBe(300_000_000n); // 0.1 + 0.2 — the blip did NOT poison the baseline
+    expect(calls).toBe(1);
+  }, 20_000);
+
+  it("throws instead of silently proceeding when the ER baseline is persistently unreadable (never guesses 0)", async () => {
+    const er = {
+      account: { minerPosition: { fetch: async () => { throw new Error("ER unreadable"); } } },
+      methods: { stake: () => ({ accountsPartial: () => ({ rpc: async () => {} }) }) },
+    };
+    await expect(gaslessStake({ er: er as any, ownerWallet: Keypair.generate().publicKey, sessionSigner: Keypair.generate(), tokenPda: Keypair.generate().publicKey, square: 0, amount: new BN(50_000_000), roundId: 7 })).rejects.toThrow();
+  }, 20_000);
+
+  it("does NOT double-send when the post-stake read lags with a stale cross-round snapshot", async () => {
+    // Fresh round 7 entry; miner still on round 6 (blockStake 0). After the stake lands
+    // (roundId->7), one lagging read still returns the pre-write round-6 snapshot — which must
+    // be treated as UNKNOWN (retry), not as "this round = 0" (which would resend the += stake).
+    const state = { roundId: 6, blockStake: Array(25).fill(0n) as bigint[] };
+    let calls = 0, staked = false, servedStale = false;
+    const snap = (rid: number, bs: bigint[]) => ({ authority: { toBase58: () => "o" }, roundId: { toNumber: () => rid }, blockStake: bs.map((v) => ({ toString: () => v.toString() })) });
+    const er = {
+      account: { minerPosition: { fetch: async () => {
+        if (staked && !servedStale) { servedStale = true; return snap(6, Array(25).fill(0n)); } // one lagging pre-write read
+        return snap(state.roundId, state.blockStake);
+      } } },
+      methods: { stake: (sq: number, amt: { toString: () => string }) => ({ accountsPartial: () => ({ rpc: async () => { state.roundId = 7; state.blockStake[sq] += BigInt(amt.toString()); staked = true; calls++; } }) }) },
+    };
+    await gaslessStake({ er: er as any, ownerWallet: Keypair.generate().publicKey, sessionSigner: Keypair.generate(), tokenPda: Keypair.generate().publicKey, square: 0, amount: new BN(50_000_000), roundId: 7 });
+    expect(state.blockStake[0]).toBe(50_000_000n); // exactly one increment despite the lagging read
+    expect(calls).toBe(1);
+  }, 20_000);
 });

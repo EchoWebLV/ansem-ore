@@ -11,6 +11,7 @@ import { erConnection, erProgramForSession } from "../lib/anchor.js";
 import { usePlayerState } from "../hooks/use-player-state.js";
 import { useSession } from "../hooks/use-session.js";
 import { enterRound, gaslessStake, type WalletAdapter } from "../lib/writes.js";
+import { enterWouldForfeit } from "../lib/claim-gate.js";
 import { EscrowPanel } from "./EscrowPanel.js";
 import { StakeRail } from "./StakeRail.js";
 import { ClaimPanel } from "./ClaimPanel.js";
@@ -26,7 +27,7 @@ export interface PlayControlsProps {
 export function PlayControls({ l1, wallet, snapshot, selectedSquare, onStaked }: PlayControlsProps) {
   const { connection } = useConnection();
   const owner = wallet.publicKey;
-  const { escrow, miner, refresh } = usePlayerState({ program: l1, wallet: owner });
+  const { escrow, miner, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
   const { session, signer, valid, persist } = useSession(owner.toBase58());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -79,9 +80,29 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquare, onStaked }:
   useEffect(() => {
     if (!unclaimed) { setStakedRoundState(null); return; }
     let live = true;
-    fetchRound(l1, roundPda(stakedRound)).then((r) => { if (live) setStakedRoundState(r.state); }).catch(() => { if (live) setStakedRoundState(null); });
-    return () => { live = false; };
+    const poll = () => fetchRound(l1, roundPda(stakedRound))
+      .then((r) => { if (live) setStakedRoundState(r.state); })
+      .catch(() => { if (live) setStakedRoundState(null); });
+    poll();
+    // Keep polling so the Claim/Refund panel appears the instant the keeper advances the
+    // staked round to Claimable/Closed — a single fetch leaves the payout invisible until
+    // a manual page reload (the round transitions without stakedRound/unclaimed changing).
+    const id = setInterval(poll, 5000);
+    return () => { live = false; clearInterval(id); };
   }, [l1, stakedRound, unclaimed]);
+
+  // Entering re-stamps miner.round_id (join_round), which would forfeit an unresolved
+  // staked round — a claimable-but-unclaimed payout, or a reconciled-but-unrefunded
+  // Closed round. Gate Enter until the player resolves it below.
+  const forfeit = enterWouldForfeit({
+    activeRound: escrow?.activeRound ?? 0, stakedRound,
+    lastClaimedRound: escrow?.lastClaimedRound ?? 0,
+    reconciledRound: escrow?.reconciledRound ?? 0, stakedRoundState,
+  });
+  // Fail-safe: never enable Enter until player state has loaded. Before then escrow/miner are
+  // null and collapse to "fresh player, nothing to forfeit", which would let a RETURNING player
+  // forfeit a pending payout by clicking Enter during the load window.
+  const enterBlocked = !loaded || forfeit;
 
   return (
     <div className="flex flex-col gap-3">
@@ -91,10 +112,19 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquare, onStaked }:
         busy={busy} onDeposit={doDeposit} onWithdraw={doWithdraw}
       />
       {needsEntry ? (
-        <button
-          disabled={busy || snapshot.state !== RoundState.Open} onClick={doEnter}
-          className="rounded bg-bull-green/20 text-bull-green py-2 text-sm disabled:opacity-40"
-        >Enter round · one popup</button>
+        <div className="flex flex-col gap-1">
+          <button
+            disabled={busy || snapshot.state !== RoundState.Open || enterBlocked} onClick={doEnter}
+            className="rounded bg-bull-green/20 text-bull-green py-2 text-sm disabled:opacity-40"
+          >Enter round · one popup</button>
+          {!loaded ? (
+            <p className="text-[10px] text-bull-muted">checking your prior round…</p>
+          ) : forfeit ? (
+            <p className="text-[10px] text-amber-400">
+              {stakedRoundState === RoundState.Closed ? "Refund" : "Claim"} round {stakedRound} below first — entering now forfeits it.
+            </p>
+          ) : null}
+        </div>
       ) : (
         <StakeRail selectedSquare={selectedSquare} sessionValid={canStake} busy={busy} onStake={doStake} />
       )}

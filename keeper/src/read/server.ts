@@ -29,9 +29,20 @@ export function startReadServer(
   });
 
   const wss = new WebSocketServer({ server: http });
+  // A server- or socket-level 'error' with no listener is an UNHANDLED 'error' event,
+  // which Node's EventEmitter rethrows — crashing the whole keeper process over a single
+  // misbehaving client (abrupt disconnect, protocol error, write-after-close).
+  wss.on("error", () => { /* swallow: a bad listener/socket must not take down the keeper */ });
+
+  const safeSend = (ws: WebSocket, payload: string) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(payload); } catch { /* client vanished mid-send — ignore */ }
+  };
+
   wss.on("connection", (ws: WebSocket) => {
+    ws.on("error", () => { /* abrupt disconnect / protocol error — swallow, don't crash */ });
     const snap = getSnapshot();
-    if (snap) ws.send(encode({ snapshot: snap, events: [] }));
+    if (snap) safeSend(ws, encode({ snapshot: snap, events: [] }));
   });
 
   return new Promise((resolve, reject) => {
@@ -43,7 +54,7 @@ export function startReadServer(
         port: actualPort,
         broadcast: (snapshot, events) => {
           const payload = encode({ snapshot, events });
-          for (const client of wss.clients) if (client.readyState === WebSocket.OPEN) client.send(payload);
+          for (const client of wss.clients) safeSend(client, payload);
         },
         close: () => new Promise<void>((res) => {
           for (const client of wss.clients) client.terminate(); // don't wait on live sockets to drain

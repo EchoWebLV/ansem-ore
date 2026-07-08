@@ -4,7 +4,7 @@ import {
   AnsemMiner, roundPda, minerPda, escrowPda,
   createRoundIx, delegateRoundIx, requestSettleIx, commitRoundIx, commitMinerIx,
   reconcileMinerIx, executeSwapMockIx, cancelRoundIx, setRoundDurationIx,
-  erRpcTolerant, retryPastDeadline, l1Send, awaitOwnerIs, flushCommit,
+  erRpcTolerant, retryPastDeadline, l1Send, awaitOwnerIs, flushCommit, fetchMiner,
   DLP_PROGRAM_ID, PROGRAM_ID,
 } from "@ansem/sdk";
 import type { Logger } from "../logger.js";
@@ -51,6 +51,21 @@ export async function commitToL1(_roundId: number, deps: CommitDeps): Promise<vo
   await deps.commitRound();
 }
 
+/**
+ * True when a commit_miner failure means "this miner isn't part of the CURRENT round".
+ * commit_miner's `round` account is seed-bound to miner.round_id (delegation.rs), so a
+ * miner stamped for another round fails ACCOUNT VALIDATION with ConstraintSeeds (2006),
+ * or AccountNotInitialized (3012) if that round's PDA was never created — NOT the
+ * handler's MinerRoundMismatch (which the seeds constraint makes unreachable; the old
+ * skip matched it and so never fired, wedging the round). Such a miner has nothing to
+ * contribute to this round's pot -> SKIP it so a stray account can't defer commit_round
+ * forever. Everything else (CommitTooEarly clock lag, ER confirm flake, RPC error) is
+ * retryable -> the caller rethrows and retries next tick.
+ */
+export function isNotThisRoundError(e: unknown): boolean {
+  return /ConstraintSeeds|AccountNotInitialized|\b2006\b|\b3012\b|MinerRoundMismatch/i.test(String(e));
+}
+
 export function liveCommitDeps(ctx: ActionCtx, roundId: number): CommitDeps {
   const rpda = roundPda(roundId);
   return {
@@ -58,16 +73,21 @@ export function liveCommitDeps(ctx: ActionCtx, roundId: number): CommitDeps {
     commitMiner: async (w) => {
       const mpda = minerPda(w);
       const info = await ctx.conn.getAccountInfo(mpda, "confirmed").catch(() => null);
-      if (info && info.owner.toBase58() === PROGRAM_ID.toBase58()) return; // already on L1
+      if (info && info.owner.toBase58() === PROGRAM_ID.toBase58()) return; // already undelegated to L1
+      // Positive skip: only a miner stamped for THIS round is committable (commit_miner's
+      // `round` is seed-bound to miner.round_id). Post the join_round-stamp fix every
+      // joined miner is this round, so this normally never skips — it's the backstop that
+      // keeps a stray/mismatched miner from deferring commit_round forever (the old wedge).
+      const erMiner = await fetchMiner(ctx.erProgram, mpda).catch(() => null);
+      if (erMiner && erMiner.roundId !== roundId) return;
       try {
         const sig = await commitMinerIx(ctx.erProgram, ctx.keeper, mpda, rpda)
           .rpc({ skipPreflight: true, commitment: "confirmed" });
         await flushCommit(sig, ctx.erConn);
       } catch (e) {
-        // Unstaked-this-round wallet: its miner.round_id != current round -> nothing
-        // to commit for the pot. Skip (don't block commit_round). Everything else
-        // (CommitTooEarly clock lag, ER confirm flake) is retry-able -> rethrow.
-        if (/MinerRoundMismatch/i.test(String(e))) return;
+        // If the pre-read missed it, the mismatch still surfaces here as a seeds/init
+        // error -> skip; otherwise it is retryable (see isNotThisRoundError).
+        if (isNotThisRoundError(e)) return;
         throw e;
       }
     },
