@@ -18,6 +18,55 @@ const HALF: Array<[number, number]> = [
   [4, -1],                                // horn tip
 ];
 
+/** One cell's SVG geometry in the prototype's 400x340 viewBox (docs/design/bull-board.html). */
+export interface SvgCell {
+  id: number;
+  cx: number;
+  cy: number;
+  r: number;      // outer hex radius for this cell
+  eye: boolean;
+  points: string; // flat-top hexagon polygon points (at r*0.92, like the prototype)
+}
+
+/** Flat-top hexagon polygon points, exactly as the design prototype computes them. */
+export function hexPoints(cx: number, cy: number, R: number): string {
+  const p: string[] = [];
+  for (let k = 0; k < 6; k++) {
+    const a = (60 * k * Math.PI) / 180;
+    p.push(`${(cx + R * Math.cos(a)).toFixed(1)},${(cy + R * Math.sin(a)).toFixed(1)}`);
+  }
+  return p.join(" ");
+}
+
+/** The design's SVG layout: 25 hex cells fitted into a 400x340 viewBox. */
+export function svgCells(): SvgCell[] {
+  const raw: Array<{ c: number; r: number }> = [];
+  for (const [c, r] of HALF) {
+    raw.push({ c, r });
+    if (c !== 0) raw.push({ c: -c, r });
+  }
+  const pts = raw.map(({ c, r }) => ({
+    c, r,
+    x: c * 1.5,
+    y: r * S3 + (Math.abs(c) % 2 === 1 ? S3 / 2 : 0),
+  }));
+  const W = 400, H = 340;
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const mnx = Math.min(...xs) - 1, mxx = Math.max(...xs) + 1;
+  const mny = Math.min(...ys) - 1, mxy = Math.max(...ys) + 1;
+  const s = Math.min((W - 20) / (mxx - mnx), (H - 20) / (mxy - mny));
+  const ox = (W - s * (mxx - mnx)) / 2 - s * mnx;
+  const oy = (H - s * (mxy - mny)) / 2 - s * mny;
+  return pts.map((p, id) => {
+    const cx = ox + s * p.x, cy = oy + s * p.y, r = s * 0.9;
+    return {
+      id, cx, cy, r,
+      eye: Math.abs(p.c) === 1 && p.r === 0,
+      points: hexPoints(cx, cy, r * 0.92),
+    };
+  });
+}
+
 /** Deterministic bull-head layout: 25 cells with normalized positions. */
 export function bullCells(): BullCell[] {
   const raw: Array<{ c: number; r: number }> = [];

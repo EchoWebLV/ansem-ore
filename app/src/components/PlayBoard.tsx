@@ -1,7 +1,9 @@
 "use client";
 import { useState } from "react";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
+import { RoundState } from "@ansem/sdk";
 import { useKeeperSnapshot } from "../hooks/use-keeper-snapshot.js";
+import { useReveal } from "../hooks/use-reveal.js";
 import type { KeeperClientOpts, KeeperClient } from "../lib/keeper-client.js";
 import { useL1Program } from "../lib/anchor.js";
 import type { WalletAdapter } from "../lib/writes.js";
@@ -23,6 +25,7 @@ export interface PlayBoardProps {
 
 export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardProps) {
   const { snapshot, events, status } = useKeeperSnapshot({ wsUrl, httpUrl, clientFactory });
+  const reveal = useReveal(snapshot);
   const l1 = useL1Program();
   const wallet = useAnchorWallet();
   const [selected, setSelected] = useState<number[]>([]);
@@ -38,8 +41,23 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
       </div>
       {snapshot ? (
         <>
-          <Hud snapshot={snapshot} nowMs={nowMs} />
-          <Board snapshot={snapshot} selectedSquares={selected} onSelect={canPlay ? toggleSquare : undefined} />
+          {/* The design card (docs/design/bull-board.html): label/big/sub + SVG board. */}
+          <div className="w-full mx-auto max-w-[460px] bg-[#0b0b0e] border border-[#23232a] rounded-[18px] p-[18px] text-center">
+            <Hud snapshot={snapshot} nowMs={nowMs} reveal={reveal} />
+            <Board
+              snapshot={snapshot}
+              selectedSquares={selected}
+              onSelect={canPlay ? toggleSquare : undefined}
+              revealed={reveal.revealed}
+              jackpotShown={reveal.jackpotShown}
+            />
+            {snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed && (
+              <button
+                onClick={reveal.replay}
+                className="mt-2 rounded-full border border-[#35e07a] bg-transparent px-[18px] py-[6px] text-[13px] text-[#35e07a] hover:bg-[rgba(53,224,122,0.15)]"
+              >▶ Replay reveal</button>
+            )}
+          </div>
           {canPlay && (
             <PlayControls
               l1={l1!} wallet={wallet as unknown as WalletAdapter} snapshot={snapshot}

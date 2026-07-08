@@ -1,30 +1,44 @@
 "use client";
-import { type WireSnapshot } from "@ansem/sdk";
+import { RoundState, type WireSnapshot } from "@ansem/sdk";
 import { formatSol, stateLabel } from "../lib/format.js";
 import { Countdown } from "./Countdown.js";
+import type { RevealView } from "../hooks/use-reveal.js";
 
-export interface HudProps { snapshot: WireSnapshot; nowMs?: number; }
-
-function Stat({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col items-center px-3">
-      <span className="text-[10px] tracking-widest text-bull-muted">{label}</span>
-      <span className="text-lg font-mono text-bull-green">{children}</span>
-    </div>
-  );
+export interface HudProps {
+  snapshot: WireSnapshot;
+  nowMs?: number;
+  /** Reveal overrides for the big counter + sub line (design prototype header). */
+  reveal?: Pick<RevealView, "counter" | "sub" | "jackpotShown">;
 }
 
-export function Hud({ snapshot, nowMs }: HudProps) {
+/**
+ * The design card header (docs/design/bull-board.html): .label / .big / .sub.
+ * label = round + state · big = countdown (open) or the reveal counter ·
+ * sub = pot line (open), "the bull awaits…" (settling), or the reveal line.
+ */
+export function Hud({ snapshot, nowMs, reveal }: HudProps) {
+  const open = snapshot.state === RoundState.Open;
+  const settling = snapshot.state === RoundState.VrfPending || snapshot.state === RoundState.Swapping;
+  const gold = reveal?.sub?.gold === true;
   return (
-    <div className="rounded-xl border border-bull-edge bg-bull-bg py-3 px-2">
-      <div className="flex items-center justify-between px-3 pb-2">
-        <span className="font-mono text-sm text-white">Round {snapshot.roundId}</span>
-        <span className="font-mono text-xs tracking-widest text-bull-green">{stateLabel(snapshot.state)}</span>
+    <div className="text-center">
+      <div className="text-[12px] tracking-[2px] text-[#8a8a93]">
+        ROUND {snapshot.roundId} · <span>{stateLabel(snapshot.state)}</span>
       </div>
-      <div className="flex flex-wrap items-center justify-center gap-y-2">
-        <Stat label="POOL">{formatSol(snapshot.pot)}</Stat>
-        <Stat label="JACKPOT">{formatSol(snapshot.jackpotPool)}</Stat>
-        <Stat label="ENDS IN"><Countdown deadlineTs={snapshot.deadlineTs} nowMs={nowMs} /></Stat>
+      <div
+        className="font-mono text-[40px] font-medium my-[2px] transition-colors duration-200"
+        style={{ color: gold ? "#e8c452" : "#35e07a" }}
+      >
+        {reveal?.counter ?? (open ? <Countdown deadlineTs={snapshot.deadlineTs} nowMs={nowMs} /> : "—")}
+      </div>
+      <div className="text-[12px] min-h-[16px] text-[#8a8a93]">
+        {reveal?.sub ? (
+          <span style={gold ? { color: "#e8c452" } : undefined}>{reveal.sub.text}</span>
+        ) : settling ? (
+          "the bull awaits…"
+        ) : (
+          <>pot {formatSol(snapshot.pot)} · jackpot {formatSol(snapshot.jackpotPool)}</>
+        )}
       </div>
     </div>
   );

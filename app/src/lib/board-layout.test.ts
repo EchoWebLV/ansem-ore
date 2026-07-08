@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bullCells } from "./board-layout.js";
+import { bullCells, svgCells } from "./board-layout.js";
 
 describe("bullCells", () => {
   const cells = bullCells();
@@ -31,5 +31,27 @@ describe("bullCells", () => {
     }
     // Exactly the 5 center-column cells sit on the axis of symmetry.
     expect(cells.filter((c) => Math.abs(c.left - 0.5) < 1e-9)).toHaveLength(5);
+  });
+});
+
+describe("svgCells (design-prototype SVG geometry)", () => {
+  const cells = svgCells();
+
+  it("produces 25 hex cells with 2 eyes, ids in order", () => {
+    expect(cells).toHaveLength(25);
+    expect(cells.map((c) => c.id)).toEqual(Array.from({ length: 25 }, (_, i) => i));
+    expect(cells.filter((c) => c.eye)).toHaveLength(2);
+  });
+
+  it("fits every cell center inside the 400x340 viewBox with margin", () => {
+    for (const c of cells) {
+      expect(c.cx).toBeGreaterThan(0);
+      expect(c.cx).toBeLessThan(400);
+      expect(c.cy).toBeGreaterThan(0);
+      expect(c.cy).toBeLessThan(340);
+      expect(c.r).toBeGreaterThan(0);
+      // flat-top hexagon: 6 "x,y" pairs
+      expect(c.points.split(" ")).toHaveLength(6);
+    }
   });
 });

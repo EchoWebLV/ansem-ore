@@ -1,8 +1,15 @@
 "use client";
 import { RoundState, type WireSnapshot } from "@ansem/sdk";
-import { bullCells } from "../lib/board-layout.js";
+import { svgCells } from "../lib/board-layout.js";
 
-const CELLS = bullCells();
+const CELLS = svgCells();
+
+// Design tokens — docs/design/bull-board.html (the user's prototype).
+const C = {
+  green: "#35e07a", greenf: "rgba(53,224,122,0.15)",
+  gold: "#e8c452", goldf: "rgba(232,196,82,0.24)",
+  dim: "#2c4034",
+} as const;
 
 export interface BoardProps {
   snapshot: WireSnapshot;
@@ -10,23 +17,39 @@ export interface BoardProps {
   selectedSquares?: number[];
   /** When set, tiles are clickable; clicking toggles membership upstream. */
   onSelect?: (id: number) => void;
+  /** Reveal theater: ids unveiled so far (null = live board shows real stakes). */
+  revealed?: number[] | null;
+  /** Finale flag: the jackpot square flashes gold. */
+  jackpotShown?: boolean;
 }
 
-export function Board({ snapshot, selectedSquares = [], onSelect }: BoardProps) {
-  const pot = BigInt(snapshot.pot || "0");
+export function Board({ snapshot, selectedSquares = [], onSelect, revealed = null, jackpotShown }: BoardProps) {
   const settled = snapshot.state >= RoundState.Settled;
+  const revealSet = revealed === null ? null : new Set(revealed);
   return (
-    <div className="relative w-full aspect-[400/340] mx-auto max-w-[460px]">
+    <svg
+      viewBox="0 0 400 340"
+      role="img"
+      aria-label="Bull-head board of 25 hex cells"
+      className="block w-full my-[10px] mb-[4px]"
+    >
+      <defs>
+        <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="2.6" />
+        </filter>
+      </defs>
       {CELLS.map((cell) => {
         const stake = BigInt(snapshot.blockSol[cell.id] ?? "0");
-        const lit = stake > 0n;
-        const jackpot = settled && snapshot.jackpotSquare === cell.id;
-        // stake share [0,1] -> glow opacity; guard div-by-zero.
-        const share = pot > 0n ? Number((stake * 1000n) / pot) / 1000 : 0;
-        const glow = jackpot ? "0 0 18px 4px #e8c452" : lit ? `0 0 ${6 + share * 22}px 2px #35e07a` : "none";
+        // Live board lights real stakes; during the reveal, cells light as unveiled.
+        const lit = revealSet === null ? stake > 0n : revealSet.has(cell.id);
+        // The jackpot flashes gold once settled — during the reveal only at the finale.
+        const jackpot = settled && snapshot.jackpotSquare === cell.id && (revealSet === null || jackpotShown === true);
         const selected = selectedSquares.includes(cell.id);
+        const stroke = selected ? "#ffffff" : jackpot ? C.gold : lit ? C.green : C.dim;
+        const fill = jackpot ? C.goldf : lit ? C.greenf : "transparent";
+        const glow = jackpot ? C.gold : lit ? C.green : "none";
         return (
-          <div
+          <g
             key={cell.id}
             data-testid={`tile-${cell.id}`}
             data-square={cell.id}
@@ -34,25 +57,23 @@ export function Board({ snapshot, selectedSquares = [], onSelect }: BoardProps) 
             data-jackpot={jackpot ? "true" : "false"}
             data-selected={selected ? "true" : "false"}
             onClick={onSelect ? () => onSelect(cell.id) : undefined}
-            className={`absolute -translate-x-1/2 -translate-y-1/2 aspect-square rounded-md transition-all duration-300${onSelect ? " cursor-pointer" : ""}`}
-            style={{
-              left: `${cell.left * 100}%`,
-              top: `${cell.top * 100}%`,
-              width: "17%",
-              boxShadow: glow,
-              // Prototype palette (docs/design/bull-board.html): transparent square,
-              // green-tint fill when staked, gold-tint on the jackpot square.
-              background: jackpot ? "rgba(232,196,82,0.24)" : lit ? "rgba(53,224,122,0.15)" : "transparent",
-              outline: selected ? "2px solid #fff" : jackpot ? "2px solid #e8c452" : lit ? "1px solid #35e07a" : "1px solid #2c4034",
-              opacity: lit || jackpot || selected ? 1 : 0.5,
-            }}
+            className={onSelect ? "cursor-pointer" : undefined}
           >
+            <polygon points={cell.points} fill="none" stroke={glow} strokeWidth={3} filter="url(#glow)" />
+            <polygon
+              points={cell.points}
+              fill={fill}
+              stroke={stroke}
+              strokeWidth={jackpot ? 2.8 : selected ? 2.2 : 1.5}
+              strokeLinejoin="round"
+              style={{ transition: "all .18s" }}
+            />
             {cell.eye && (
-              <span className="absolute inset-0 m-auto h-1/4 w-1/4 rounded-full bg-bull-green/80 blur-[1px]" />
+              <circle cx={cell.cx} cy={cell.cy} r={cell.r * (0.24 / 0.9)} fill={C.green} opacity={0.85} filter="url(#glow)" />
             )}
-          </div>
+          </g>
         );
       })}
-    </div>
+    </svg>
   );
 }
