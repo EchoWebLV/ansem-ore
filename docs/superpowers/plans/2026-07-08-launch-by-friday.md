@@ -400,7 +400,7 @@ vercel                            # preview URL — verify before prod
 vercel --prod
 ```
 
-- [ ] **Step 4: Verify the deployed read path** — open the prod URL: bull-head board renders (25 webp tiles — proves `prebuild` ran), `KEEPER: CONNECTED`, live round + countdown ticking, disclaimer visible. Check the browser console for errors and that the WS connects to the Railway domain (Network tab).
+- [ ] **Step 4: Verify the deployed read path** — open the prod URL: bull-head board renders (25 outlined SQUARES — the PNG tile pipeline was removed 2026-07-08; no prebuild step exists anymore), `KEEPER: CONNECTED`, live round + countdown ticking, disclaimer visible. Check the browser console for errors and that the WS connects to the Railway domain (Network tab).
 
 - [x] **Step 5: Commit**
 
