@@ -103,10 +103,14 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }
     lastClaimedRound: escrow?.lastClaimedRound ?? 0,
     reconciledRound: escrow?.reconciledRound ?? 0, stakedRoundState,
   });
+  // join_round requires an existing escrow with >= min_stake (0.01 SOL) — without a
+  // deposit the entry tx reverts on-chain with AccountNotInitialized. Gate + hint.
+  const MIN_STAKE_LAMPORTS = 10_000_000n;
+  const noFunds = loaded && (escrow?.balance ?? 0n) < MIN_STAKE_LAMPORTS;
   // Fail-safe: never enable Enter until player state has loaded. Before then escrow/miner are
   // null and collapse to "fresh player, nothing to forfeit", which would let a RETURNING player
   // forfeit a pending payout by clicking Enter during the load window.
-  const enterBlocked = !loaded || forfeit;
+  const enterBlocked = !loaded || forfeit || noFunds;
 
   return (
     <div className="flex flex-col gap-3">
@@ -127,6 +131,8 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }
             <p className="text-[10px] text-amber-400">
               {stakedRoundState === RoundState.Closed ? "Refund" : "Claim"} round {stakedRound} below first — entering now forfeits it.
             </p>
+          ) : noFunds ? (
+            <p className="text-[10px] text-amber-400">Deposit at least 0.01 SOL to your escrow first.</p>
           ) : null}
         </div>
       ) : (
