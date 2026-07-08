@@ -360,15 +360,17 @@ describe("ansem-miner (M3 devnet)", () => {
       .remainingAccounts(validatorMeta).rpc({ skipPreflight: true, commitment: "confirmed" }));
     await awaitOwnerIs(provider.connection, roundPda, DLP_PROGRAM_ID); // poll until delegation propagates
     console.log("   ✓ round delegated to DLP");
+    // CRIT-1 interface: join_round stamps the miner, so it needs the PROGRAM-owned
+    // miner — join strictly BEFORE delegate_miner (the SDK entry batch does the same).
+    await l1Send(() => program.methods.joinRound(new anchor.BN(id))
+      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc());
+    await awaitJoined(escrowPda, id);
+
     await l1Send(() => program.methods.delegateMiner()
       .accounts({ payer: player.publicKey, miner: minerPda })
       .remainingAccounts(validatorMeta).signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
     await awaitOwnerIs(provider.connection, minerPda, DLP_PROGRAM_ID);
     console.log("   ✓ miner delegated to DLP");
-
-    await l1Send(() => program.methods.joinRound(new anchor.BN(id))
-      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc());
-    await awaitJoined(escrowPda, id);
 
     // Stake in the ER via the US regional endpoint (cold first-write can clone-lag → idempotent retry).
     for (let i = 0; i < 8; i++) {
@@ -412,18 +414,19 @@ describe("ansem-miner (M3 devnet)", () => {
       .catch((e: any) => { if (!/already in use/.test(String(e))) throw e; });
     const { id, pda: roundPda } = await createFreshRound(90);
 
-    // Delegate -> join -> ER stake -> commit (same proven Phase-2 flow).
+    // Delegate round -> join -> delegate miner -> ER stake -> commit (Phase-2 flow).
     await l1Send(() => program.methods.delegateRound(new anchor.BN(id))
       .accounts({ payer: admin.publicKey, round: roundPda })
       .remainingAccounts(validatorMeta).rpc({ skipPreflight: true, commitment: "confirmed" }));
     await awaitOwnerIs(provider.connection, roundPda, DLP_PROGRAM_ID);
+    // CRIT-1 interface: join (stamps the program-owned miner) BEFORE delegate_miner.
+    await l1Send(() => program.methods.joinRound(new anchor.BN(id))
+      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc());
+    await awaitJoined(escrowPda, id);
     await l1Send(() => program.methods.delegateMiner()
       .accounts({ payer: player.publicKey, miner: minerPda })
       .remainingAccounts(validatorMeta).signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
     await awaitOwnerIs(provider.connection, minerPda, DLP_PROGRAM_ID);
-    await l1Send(() => program.methods.joinRound(new anchor.BN(id))
-      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc());
-    await awaitJoined(escrowPda, id);
     for (let i = 0; i < 8; i++) {
       const m: any = await ephemeralProgram.account.minerPosition.fetch(minerPda).catch(() => null);
       if (m && m.blockStake[0].toString() === STAKE.toString()) break;
@@ -502,13 +505,14 @@ describe("ansem-miner (M3 devnet)", () => {
       .accounts({ payer: admin.publicKey, round: roundPda })
       .remainingAccounts(validatorMeta).rpc({ skipPreflight: true, commitment: "confirmed" }));
     await awaitOwnerIs(provider.connection, roundPda, DLP_PROGRAM_ID);
+    // CRIT-1 interface: join (stamps the program-owned miner) BEFORE delegate_miner.
+    await l1Send(() => program.methods.joinRound(new anchor.BN(id))
+      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc());
+    await awaitJoined(escrowPda, id);
     await l1Send(() => program.methods.delegateMiner()
       .accounts({ payer: player.publicKey, miner: minerPda })
       .remainingAccounts(validatorMeta).signers([player]).rpc({ skipPreflight: true, commitment: "confirmed" }));
     await awaitOwnerIs(provider.connection, minerPda, DLP_PROGRAM_ID);
-    await l1Send(() => program.methods.joinRound(new anchor.BN(id))
-      .accounts({ authority: player.publicKey, config: configPda, escrow: escrowPda }).signers([player]).rpc());
-    await awaitJoined(escrowPda, id);
 
     // ER stake signed ONLY by the ephemeral session key — the player wallet never
     // signs the stake (the gasless headline). authority = sessionKp; token supplied.
