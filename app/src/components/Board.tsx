@@ -74,7 +74,8 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
         const selected = selectedSquares.includes(cell.id);
         const stroke = selected ? "#ffffff" : jackpot ? C.gold : lit ? C.green : C.dim;
         const fill = jackpot ? "url(#faceGold)" : lit ? "url(#faceLit)" : "url(#faceIdle)";
-        const glow = jackpot ? C.gold : lit ? C.green : "none";
+        // Selected picks glow white so they pop against lit/idle neighbours.
+        const glow = selected ? "rgba(255,255,255,0.85)" : jackpot ? C.gold : lit ? C.green : "none";
         const side = jackpot ? "#3a2c10" : lit ? "#0d2b1a" : "#060609";
         const faceClass =
           "cell-face" +

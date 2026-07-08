@@ -18,6 +18,10 @@ export function EscrowPanel({ balanceLamports, walletLamports = null, locked, bu
   const parsed = solToLamports(amount);
   const overWallet = parsed !== null && walletLamports !== null &&
     BigInt(parsed.toString()) + FEE_BUFFER_LAMPORTS > walletLamports;
+  // A withdraw beyond the escrow (incl. an EMPTY escrow — the account doesn't even
+  // exist before the first deposit) reverts on-chain with AccountNotInitialized/
+  // InsufficientEscrow. Gate it here with a human hint instead.
+  const overEscrow = parsed !== null && BigInt(parsed.toString()) > balanceLamports;
   return (
     <section className="rounded-lg border border-white/10 p-3 flex flex-col gap-2">
       <div className="flex items-center justify-between text-sm">
@@ -43,11 +47,18 @@ export function EscrowPanel({ balanceLamports, walletLamports = null, locked, bu
           className="flex-1 rounded-lg bg-bull-green/20 text-bull-green py-2.5 text-sm font-medium disabled:opacity-40 active:scale-[0.98] transition-transform"
         >Deposit</button>
         <button
-          disabled={busy || locked || !parsed} onClick={() => parsed && onWithdraw(parsed)}
+          disabled={busy || locked || !parsed || overEscrow} onClick={() => parsed && onWithdraw(parsed)}
           title={locked ? "Locked while a round is active" : undefined}
           className="flex-1 rounded-lg border border-white/15 py-2.5 text-sm disabled:opacity-40 active:scale-[0.98] transition-transform"
         >Withdraw</button>
       </div>
+      {overEscrow && !locked && (
+        <p className="text-[10px] text-bull-muted">
+          {balanceLamports === 0n
+            ? "Nothing in escrow to withdraw yet — deposit first."
+            : "That's more than your escrow holds."}
+        </p>
+      )}
       {locked && <p className="text-[10px] text-bull-muted">Withdraw unlocks after the round finalizes.</p>}
     </section>
   );

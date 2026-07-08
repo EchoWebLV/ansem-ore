@@ -47,10 +47,16 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
     return () => { live = false; clearInterval(id); };
   }, [connection, owner]);
 
+  // Raw AnchorErrors are for us, not players — translate the ones a player can hit.
+  const friendly = (m: string) =>
+    /AccountNotInitialized|3012/.test(m)
+      ? "No escrow account yet — make your first deposit to create it."
+      : m;
+
   const run = async (fn: () => Promise<void>) => {
     setBusy(true); setErr(null);
     try { await fn(); refresh(); }
-    catch (e) { setErr(String((e as Error)?.message ?? e)); }
+    catch (e) { setErr(friendly(String((e as Error)?.message ?? e))); }
     finally { setBusy(false); }
   };
 

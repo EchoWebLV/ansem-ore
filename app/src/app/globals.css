@@ -133,6 +133,14 @@ button, a, [data-square] { touch-action: manipulation; }
   100% { transform: scale(1); }
 }
 
+/* Clickable tiles advertise it on hover: lift + green halo (pointer devices only). */
+@media (hover: hover) {
+  g[data-square].cursor-pointer:hover .cell-face { transform: translateY(-2px); }
+  g[data-square].cursor-pointer:hover .cell-face polygon:first-of-type {
+    stroke: rgba(53, 224, 122, 0.5);
+  }
+}
+
 /* Staked cells breathe on the live board. */
 .glow-live { animation: glow-live 2.4s ease-in-out infinite; }
 @keyframes glow-live {
