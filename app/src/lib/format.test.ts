@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { RoundState } from "@ansem/sdk";
-import { lamportsToSol, formatSol, stateLabel, secondsLeft, formatCountdown, shortAddr, eventToText } from "./format.js";
+import { lamportsToSol, formatSol, formatAnsem, stateLabel, secondsLeft, formatCountdown, shortAddr, eventToText } from "./format.js";
 
 describe("format helpers", () => {
   it("lamportsToSol parses stringified lamports without precision loss", () => {
@@ -12,6 +12,12 @@ describe("format helpers", () => {
   it("formatSol renders a trimmed SOL string", () => {
     expect(formatSol("1000000000")).toBe("1 SOL");
     expect(formatSol("20000000")).toBe("0.02 SOL");
+  });
+
+  it("formatAnsem renders 1e6 base units as a trimmed ANSEM string", () => {
+    expect(formatAnsem("27720000")).toBe("27.72 ANSEM");
+    expect(formatAnsem("3044903400")).toBe("3044.9 ANSEM");
+    expect(formatAnsem("0")).toBe("0 ANSEM");
   });
 
   it("stateLabel maps each RoundState", () => {

@@ -14,6 +14,13 @@ export function formatSol(lamports: string): string {
   return `${s} SOL`;
 }
 
+/** ANSEM base units (1e6) -> "N ANSEM", trimmed to <=2 decimals. */
+export function formatAnsem(baseUnits: string): string {
+  const n = Number(BigInt(baseUnits)) / 1_000_000;
+  const s = n.toFixed(2).replace(/\.?0+$/, "");
+  return `${s} ANSEM`;
+}
+
 export function stateLabel(state: RoundState): string {
   switch (state) {
     case RoundState.Open: return "OPEN";
