@@ -188,6 +188,10 @@ async function createFreshRound(durationSecs = 25): Promise<{ id: number; pda: P
   const newId = cfg.currentRoundId.toNumber() + 1;
   const pda = nextRoundPda(newId);
   await program.methods.createRound().accounts({ payer: admin.publicKey, round: pda }).rpc();
+  // Devnet propagation guard (same class as awaitJoined below): a follow-up
+  // join_round's preflight may simulate on a replica that hasn't seen this
+  // createRound yet -> NotCurrentRound. Block until the cursor advance is visible.
+  await awaitEr(() => program.account.config.fetch(configPda), (c: any) => c.currentRoundId.toNumber() === newId, 30);
   return { id: newId, pda };
 }
 
