@@ -116,4 +116,18 @@ pub mod ansem_miner {
     pub fn reconcile_miner(ctx: Context<ReconcileMiner>, round_id: u64) -> Result<()> {
         instructions::round_entry::reconcile_miner_handler(ctx, round_id)
     }
+
+    // ---- Direct-stake engine (ORE model): wallet -> pot in the stake tx; no
+    // escrow, no session, no delegation in the player path. Pull-claims. ----
+    pub fn stake_direct(ctx: Context<StakeDirect>, round_id: u64, block: u8, amount: u64) -> Result<()> {
+        instructions::direct::stake_direct_handler(ctx, round_id, block, amount)
+    }
+
+    pub fn claim_direct(ctx: Context<ClaimDirect>, round_id: u64) -> Result<()> {
+        instructions::direct::claim_direct_handler(ctx, round_id)
+    }
+
+    pub fn refund_direct(ctx: Context<RefundDirect>, round_id: u64) -> Result<()> {
+        instructions::direct::refund_direct_handler(ctx, round_id)
+    }
 }
