@@ -56,10 +56,10 @@ devnet-pow mine -k ~/.config/solana/ansem-devnet.json -u dev -t 5000000000 --rew
 
 ```bash
 source scripts/devnet-env.sh
-yarn run ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 1" tests/ansem-miner-devnet.ts  # L1 flow + session CPI
-yarn run ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 2" tests/ansem-miner-devnet.ts  # ER stake + commit
-yarn run ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 3" tests/ansem-miner-devnet.ts  # VRF settle via real oracle
-yarn run ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 4" tests/ansem-miner-devnet.ts  # full gasless e2e
+pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 1" tests/ansem-miner-devnet.ts  # L1 flow + session CPI
+pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 2" tests/ansem-miner-devnet.ts  # ER stake + commit
+pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 3" tests/ansem-miner-devnet.ts  # VRF settle via real oracle
+pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 4" tests/ansem-miner-devnet.ts  # full gasless e2e
 ```
 Run phases **individually** — the dev-tier Helius key rate-limits a long combined run (each phase is green in isolation; a paid RPC tier would allow the full suite in one pass).
 

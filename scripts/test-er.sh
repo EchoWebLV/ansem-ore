@@ -188,4 +188,4 @@ fi
 
 echo "Running ER test suite: $TEST_FILE"
 echo ""
-yarn run ts-mocha -p ./tsconfig.json -t 1000000 "$TEST_FILE"
+pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 "$TEST_FILE"
