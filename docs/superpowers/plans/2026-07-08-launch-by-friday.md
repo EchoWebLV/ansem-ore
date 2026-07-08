@@ -35,7 +35,7 @@ M4b ground truth: `--use-rpc` stalled at ~9% and self-inflicted a 429 spiral; dr
 **Files:**
 - Modify: `scripts/deploy-devnet.sh`
 
-- [ ] **Step 1: Edit the deploy invocation**
+- [x] **Step 1: Edit the deploy invocation**
 
 Replace the `solana program deploy` block at the bottom of `scripts/deploy-devnet.sh`:
 
@@ -60,7 +60,7 @@ solana program show "$PROGRAM_ID" --url "$DEPLOY_RPC"
 
 (Exactly the command that landed the M4b deploy, parameterized. `--use-rpc` removed; `--max-sign-attempts` 60 → 300.)
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add scripts/deploy-devnet.sh
@@ -71,7 +71,7 @@ git commit -m "fix(deploy): drop --use-rpc + deploy via public devnet RPC (M4b l
 
 The CRIT-1 fix added a `mut miner` account to `JoinRound` (`round_entry.rs`) — the IDL changed. The SDK IDL (`packages/sdk/src/idl/ansem_miner.{json,ts}`) is GITIGNORED and must be regenerated. `anchor build` also overwrites `target/deploy/ansem_miner.so` with a v2-flags artifact, so this task runs BEFORE the v3 build (Task 3), never after.
 
-- [ ] **Step 1: Check whether the working-tree IDL already has the fix**
+- [x] **Step 1: Check whether the working-tree IDL already has the fix**
 
 ```bash
 python3 -c "
@@ -94,7 +94,7 @@ pnpm --filter @ansem/sdk sync-idl
 pnpm --filter @ansem/sdk build
 ```
 
-- [ ] **Step 3: Re-run the automated gates against the tree that will deploy**
+- [x] **Step 3: Re-run the automated gates against the tree that will deploy**
 
 ```bash
 pnpm -r test && pnpm -r typecheck
@@ -102,7 +102,7 @@ pnpm -r test && pnpm -r typecheck
 
 Expected: SDK 19 / keeper 42 (+2 gated ITs self-skip) / app 71 — all green (matches commit `9d84e03`).
 
-- [ ] **Step 4: Commit if Step 2 changed the SDK dist inputs** (IDL itself is gitignored; only commit if any tracked file moved)
+- [x] **Step 4: Commit if Step 2 changed the SDK dist inputs** (IDL itself is gitignored; only commit if any tracked file moved)
 
 ```bash
 git status --short   # expect empty; if tracked files changed, commit them
@@ -110,14 +110,14 @@ git status --short   # expect empty; if tracked files changed, commit them
 
 ### Task 3: Build the sBPF v3 artifact
 
-- [ ] **Step 1: Build**
+- [x] **Step 1: Build**
 
 ```bash
 cd programs/ansem-miner   # or repo root — build-sbf resolves the workspace
 cargo build-sbf --arch v3 --tools-version v1.54
 ```
 
-- [ ] **Step 2: Verify v3 flags (the deploy script also guards this)**
+- [x] **Step 2: Verify v3 flags (the deploy script also guards this)**
 
 ```bash
 "$(ls ~/.cache/solana/*/platform-tools/llvm/bin/llvm-readelf | head -1)" -h target/deploy/ansem_miner.so | grep Flags
@@ -220,7 +220,7 @@ The keeper is one Node 22 process (`node dist/main.js`), HTTP+WS on one port, he
 - Create: `keeper/Dockerfile`
 - Create: `keeper/Dockerfile.dockerignore` (BuildKit per-Dockerfile ignore — a plain `keeper/.dockerignore` is INERT when the build context is the repo root)
 
-- [ ] **Step 1: Write `keeper/Dockerfile`** (build context = repo root)
+- [x] **Step 1: Write `keeper/Dockerfile`** (build context = repo root)
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -242,7 +242,7 @@ EXPOSE 8787
 CMD ["/entrypoint.sh"]
 ```
 
-- [ ] **Step 2: Write `keeper/Dockerfile.dockerignore`** (paths relative to the CONTEXT root = repo root; keep `app/package.json` — the pnpm workspace install needs every workspace manifest)
+- [x] **Step 2: Write `keeper/Dockerfile.dockerignore`** (paths relative to the CONTEXT root = repo root; keep `app/package.json` — the pnpm workspace install needs every workspace manifest)
 
 ```
 .git
@@ -316,7 +316,7 @@ Unofficial fan project marketing someone else's brand — the disclaimer ships b
 - Create: `app/src/components/Disclaimer.test.tsx`
 - Modify: `app/src/app/page.tsx` (render `<Disclaimer />` after the board/write column)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```tsx
 // app/src/components/Disclaimer.test.tsx
@@ -336,9 +336,9 @@ describe("Disclaimer", () => {
 });
 ```
 
-- [ ] **Step 2: Run it — expect FAIL** (`pnpm --filter @ansem/app test Disclaimer`)
+- [x] **Step 2: Run it — expect FAIL** (`pnpm --filter @ansem/app test Disclaimer`)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```tsx
 // app/src/components/Disclaimer.tsx
@@ -359,9 +359,9 @@ export function Disclaimer() {
 
 Then render it in `app/src/app/page.tsx` (import `{ Disclaimer }` and place it as the last child of the page container).
 
-- [ ] **Step 4: Run tests + typecheck — expect PASS** (`pnpm --filter @ansem/app test && pnpm --filter @ansem/app typecheck`)
+- [x] **Step 4: Run tests + typecheck — expect PASS** (`pnpm --filter @ansem/app test && pnpm --filter @ansem/app typecheck`)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/components/Disclaimer.tsx app/src/components/Disclaimer.test.tsx app/src/app/page.tsx
@@ -375,7 +375,7 @@ App already reads `NEXT_PUBLIC_KEEPER_WS`/`NEXT_PUBLIC_KEEPER_HTTP` (`page.tsx:3
 **Files:**
 - Create: `app/vercel.json`
 
-- [ ] **Step 1: Write `app/vercel.json`**
+- [x] **Step 1: Write `app/vercel.json`**
 
 ```json
 {
@@ -402,7 +402,7 @@ vercel --prod
 
 - [ ] **Step 4: Verify the deployed read path** — open the prod URL: bull-head board renders (25 webp tiles — proves `prebuild` ran), `KEEPER: CONNECTED`, live round + countdown ticking, disclaimer visible. Check the browser console for errors and that the WS connects to the Railway domain (Network tab).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/vercel.json
