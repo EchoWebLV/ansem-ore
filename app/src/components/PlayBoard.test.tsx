@@ -18,7 +18,7 @@ vi.mock("../lib/anchor.js", () => ({
 }));
 vi.mock("@solana/wallet-adapter-react", () => ({
   useAnchorWallet: () => ctl.wallet,
-  useConnection: () => ({ connection: { getAccountInfo: async () => null } }),
+  useConnection: () => ({ connection: { getAccountInfo: async () => null, getBalance: async () => 59_102_330 } }),
 }));
 vi.mock("../hooks/use-player-state.js", () => ({
   usePlayerState: () => ({

@@ -32,6 +32,18 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Wallet SOL balance — lets EscrowPanel block deposits the wallet can't cover.
+  const [walletLamports, setWalletLamports] = useState<bigint | null>(null);
+  useEffect(() => {
+    let live = true;
+    const poll = () => connection.getBalance(owner, "confirmed")
+      .then((b) => { if (live) setWalletLamports(BigInt(b)); })
+      .catch(() => { /* keep last known value */ });
+    poll();
+    const id = setInterval(poll, 10_000);
+    return () => { live = false; clearInterval(id); };
+  }, [connection, owner]);
+
   const run = async (fn: () => Promise<void>) => {
     setBusy(true); setErr(null);
     try { await fn(); refresh(); }
@@ -116,6 +128,7 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }
     <div className="flex flex-col gap-3">
       <EscrowPanel
         balanceLamports={escrow?.balance ?? 0n}
+        walletLamports={walletLamports}
         locked={(escrow?.activeRound ?? 0) !== 0}
         busy={busy} onDeposit={doDeposit} onWithdraw={doWithdraw}
       />

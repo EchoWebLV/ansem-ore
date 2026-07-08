@@ -19,4 +19,15 @@ describe("EscrowPanel", () => {
     render(<EscrowPanel balanceLamports={50_000_000n} locked onDeposit={vi.fn()} onWithdraw={vi.fn()} busy={false} />);
     expect(screen.getByRole("button", { name: /withdraw/i })).toBeDisabled();
   });
+  it("shows the wallet balance and blocks a deposit larger than the wallet holds", () => {
+    const onDeposit = vi.fn();
+    render(<EscrowPanel balanceLamports={0n} walletLamports={59_102_330n} locked={false} onDeposit={onDeposit} onWithdraw={vi.fn()} busy={false} />);
+    expect(screen.getByText(/wallet 0\.0591/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/amount/i), { target: { value: "0.1" } });
+    expect(screen.getByRole("button", { name: /deposit/i })).toBeDisabled();
+    expect(screen.getByText(/more than your wallet holds/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/amount/i), { target: { value: "0.03" } });
+    fireEvent.click(screen.getByRole("button", { name: /deposit/i }));
+    expect(onDeposit).toHaveBeenCalledTimes(1);
+  });
 });

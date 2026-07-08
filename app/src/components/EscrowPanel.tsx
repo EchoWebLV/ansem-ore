@@ -3,28 +3,43 @@ import { useState } from "react";
 import type { BN } from "@ansem/sdk";
 import { solToLamports, lamportsToSolStr } from "../lib/amount.js";
 
+// Keep a little SOL in the wallet for transaction fees.
+const FEE_BUFFER_LAMPORTS = 1_000_000n; // 0.001 SOL
+
 export interface EscrowPanelProps {
   balanceLamports: bigint; locked: boolean; busy: boolean;
+  /** Wallet SOL balance; when known, deposits larger than it are blocked. */
+  walletLamports?: bigint | null;
   onDeposit: (lamports: BN) => void; onWithdraw: (lamports: BN) => void;
 }
 
-export function EscrowPanel({ balanceLamports, locked, busy, onDeposit, onWithdraw }: EscrowPanelProps) {
+export function EscrowPanel({ balanceLamports, walletLamports = null, locked, busy, onDeposit, onWithdraw }: EscrowPanelProps) {
   const [amount, setAmount] = useState("");
   const parsed = solToLamports(amount);
+  const overWallet = parsed !== null && walletLamports !== null &&
+    BigInt(parsed.toString()) + FEE_BUFFER_LAMPORTS > walletLamports;
   return (
     <section className="rounded-lg border border-white/10 p-3 flex flex-col gap-2">
       <div className="flex items-center justify-between text-sm">
         <span className="text-bull-muted tracking-widest text-[10px]">ESCROW</span>
         <span className="font-mono text-bull-green">{lamportsToSolStr(balanceLamports)} SOL</span>
       </div>
+      {walletLamports !== null && (
+        <div className="flex justify-end">
+          <span className="font-mono text-[10px] text-bull-muted">wallet {lamportsToSolStr(walletLamports)} SOL</span>
+        </div>
+      )}
       <input
         inputMode="decimal" placeholder="amount (SOL)" value={amount}
         onChange={(e) => setAmount(e.target.value)}
         className="bg-black border border-white/15 rounded px-2 py-1 font-mono text-sm"
       />
+      {overWallet && (
+        <p className="text-[10px] text-amber-400">That&apos;s more than your wallet holds — deposit less or grab devnet SOL below.</p>
+      )}
       <div className="flex gap-2">
         <button
-          disabled={busy || !parsed} onClick={() => parsed && onDeposit(parsed)}
+          disabled={busy || !parsed || overWallet} onClick={() => parsed && onDeposit(parsed)}
           className="flex-1 rounded bg-bull-green/20 text-bull-green py-1 text-sm disabled:opacity-40"
         >Deposit</button>
         <button
