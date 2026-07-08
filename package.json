@@ -1,9 +1,9 @@
 {
   "scripts": {
     "test": "anchor test",
-    "build": "turbo run build",
-    "test:pkg": "turbo run test",
-    "typecheck": "turbo run typecheck",
+    "build": "pnpm -r run build",
+    "test:pkg": "pnpm --filter @ansem/sdk run build && pnpm -r run test",
+    "typecheck": "pnpm --filter @ansem/sdk run build && pnpm -r run typecheck",
     "sdk:sync-idl": "node packages/sdk/scripts/sync-idl.mjs",
     "keeper:dev": "pnpm --filter @ansem/keeper dev",
     "keeper:it": "KEEPER_DEVNET_IT=1 pnpm --filter @ansem/keeper test devnet-round",
