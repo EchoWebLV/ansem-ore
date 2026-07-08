@@ -104,9 +104,14 @@ async function ensureInitialized() {
   const info = await provider.connection.getAccountInfo(configPda, "confirmed").catch(() => null);
   if (info) {
     await program.methods.closeConfig().accounts({ admin: admin.publicKey }).rpc();
+    // Propagation guard: the close must be visible before initialize's strict init
+    // preflight simulates (a lagging replica still shows the account as in-use).
+    await awaitEr(() => provider.connection.getAccountInfo(configPda, "confirmed"), (i: any) => i === null, 30);
     console.log("   M4b migration: closed old-layout config");
   }
   await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
+  // Propagation guard: follow-up admin calls preflight against config existing.
+  await awaitEr(() => program.account.config.fetch(configPda).catch(() => null), (c: any) => c !== null, 30);
   // Flat 50% return band so a sole ER staker always mines > 0 ANSEM regardless of
   // which square is the VRF-picked jackpot square.
   await program.methods.setReturnBand(5000, 5000).accounts({ admin: admin.publicKey }).rpc();
