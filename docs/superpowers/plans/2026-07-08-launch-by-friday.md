@@ -448,6 +448,8 @@ Parallel work items, each its own plan later: real Jupiter `begin_swap`/`record_
 6. Optional: auto-sweep escrow remainders post-claim to shrink the custody window to minutes (trades away the session-budget UX; withdraw-anytime already exists).
 Caveat recorded: code-custody ≠ gambling-law immunity — legal review still gates mainnet regardless.
 
+**Direct-stake revision (user directive 2026-07-08, candidate HEADLINE of the mainnet program rev — folds into the swap-change/audit cycle, NOT Friday):** kill the escrow lifecycle entirely. `stake_direct(squares, amount)`: one wallet approval moves exactly the stake wallet→pot and records the squares (no escrow PDA, no session key, no player-side delegation, no deposit/withdraw/lock UI). Payouts become keeper-PUSHED after settle (crank pays each participant; players do nothing) with pull-claim as fallback. Custody window shrinks to one round (~90s). Removes the whole escrow-shaped failure class (deposit-vs-wallet confusion, AccountNotInitialized entries, withdraw locks, forfeit gates). Trade-off accepted: one stake action per round (mid-round re-stake = another popup); ER/session-key gasless clicking stops being player-facing — keep the rails for an optional future rapid-mode. Friday still ships the proven escrow model.
+
 ---
 
 ## Self-review notes
