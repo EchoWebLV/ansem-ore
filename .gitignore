@@ -23,5 +23,3 @@ wallet-keypair.json
 **/node_modules
 **/dist
 .turbo
-packages/sdk/src/idl/ansem_miner.json
-packages/sdk/src/idl/ansem_miner.ts

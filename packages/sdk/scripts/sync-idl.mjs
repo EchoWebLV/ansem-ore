@@ -14,7 +14,13 @@ const pairs = [
 ];
 for (const [src, dst] of pairs) {
   if (!existsSync(src)) {
-    console.error(`sync-idl: missing ${src} — run \`anchor build\` at the repo root first.`);
+    if (existsSync(dst)) {
+      // No local anchor build (docker/Vercel/fresh clone) — the committed IDL is
+      // the ABI of the DEPLOYED program; building against it is the intent.
+      console.log(`sync-idl: no ${src}; using committed ${dst}`);
+      continue;
+    }
+    console.error(`sync-idl: missing ${src} and no committed ${dst} — run \`anchor build\` at the repo root first.`);
     process.exit(1);
   }
   copyFileSync(src, dst);
