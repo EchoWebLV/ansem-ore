@@ -25,7 +25,9 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
   const { snapshot, events, status } = useKeeperSnapshot({ wsUrl, httpUrl, clientFactory });
   const l1 = useL1Program();
   const wallet = useAnchorWallet();
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number[]>([]);
+  const toggleSquare = (id: number) =>
+    setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   const canPlay = !!l1 && !!wallet;
 
   return (
@@ -37,11 +39,11 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
       {snapshot ? (
         <>
           <Hud snapshot={snapshot} nowMs={nowMs} />
-          <Board snapshot={snapshot} selectedSquare={selected} onSelect={canPlay ? setSelected : undefined} />
+          <Board snapshot={snapshot} selectedSquares={selected} onSelect={canPlay ? toggleSquare : undefined} />
           {canPlay && (
             <PlayControls
               l1={l1!} wallet={wallet as unknown as WalletAdapter} snapshot={snapshot}
-              selectedSquare={selected} onStaked={() => setSelected(null)}
+              selectedSquares={selected} onStaked={() => setSelected([])}
             />
           )}
           <Leaderboard leaderboard={snapshot.leaderboard} />

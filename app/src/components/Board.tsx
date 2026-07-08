@@ -6,12 +6,13 @@ const CELLS = bullCells();
 
 export interface BoardProps {
   snapshot: WireSnapshot;
-  /** When set, tiles are clickable for staking. */
-  selectedSquare?: number | null;
+  /** Squares currently picked for staking (multi-select, ORE-style). */
+  selectedSquares?: number[];
+  /** When set, tiles are clickable; clicking toggles membership upstream. */
   onSelect?: (id: number) => void;
 }
 
-export function Board({ snapshot, selectedSquare = null, onSelect }: BoardProps) {
+export function Board({ snapshot, selectedSquares = [], onSelect }: BoardProps) {
   const pot = BigInt(snapshot.pot || "0");
   const settled = snapshot.state >= RoundState.Settled;
   return (
@@ -23,7 +24,7 @@ export function Board({ snapshot, selectedSquare = null, onSelect }: BoardProps)
         // stake share [0,1] -> glow opacity; guard div-by-zero.
         const share = pot > 0n ? Number((stake * 1000n) / pot) / 1000 : 0;
         const glow = jackpot ? "0 0 18px 4px #e8c452" : lit ? `0 0 ${6 + share * 22}px 2px #35e07a` : "none";
-        const selected = selectedSquare === cell.id;
+        const selected = selectedSquares.includes(cell.id);
         return (
           <div
             key={cell.id}

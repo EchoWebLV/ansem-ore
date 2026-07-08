@@ -20,11 +20,11 @@ export interface PlayControlsProps {
   l1: Program<AnsemMiner>;
   wallet: WalletAdapter;
   snapshot: WireSnapshot;
-  selectedSquare: number | null;
+  selectedSquares: number[];
   onStaked?: () => void;
 }
 
-export function PlayControls({ l1, wallet, snapshot, selectedSquare, onStaked }: PlayControlsProps) {
+export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }: PlayControlsProps) {
   const { connection } = useConnection();
   const owner = wallet.publicKey;
   const { escrow, miner, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
@@ -63,10 +63,14 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquare, onStaked }:
     });
   });
 
-  const doStake = (square: number, amount: BN) => run(async () => {
+  const doStake = (squares: number[], amountPerSquare: BN) => run(async () => {
     if (!signer || !session) throw new Error("no active session — enter the round first");
     const er = erProgramForSession(erConnection(), signer);
-    await gaslessStake({ er, ownerWallet: owner, sessionSigner: signer, tokenPda: new PublicKey(session.tokenPda), square, amount, roundId });
+    // Sequential on purpose: gaslessStake's landed-signal logic is per-square, and a
+    // mid-loop failure leaves earlier squares genuinely staked (the board shows them).
+    for (const square of squares) {
+      await gaslessStake({ er, ownerWallet: owner, sessionSigner: signer, tokenPda: new PublicKey(session.tokenPda), square, amount: amountPerSquare, roundId });
+    }
     onStaked?.();
   });
 
@@ -126,7 +130,7 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquare, onStaked }:
           ) : null}
         </div>
       ) : (
-        <StakeRail selectedSquare={selectedSquare} sessionValid={canStake} busy={busy} onStake={doStake} />
+        <StakeRail selectedSquares={selectedSquares} sessionValid={canStake} busy={busy} onStake={doStake} />
       )}
       {unclaimed && stakedRoundState !== null && (
         <ClaimPanel

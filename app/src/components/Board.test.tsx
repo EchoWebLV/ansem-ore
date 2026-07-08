@@ -41,13 +41,15 @@ describe("Board", () => {
     expect(screen.getByTestId("tile-7")).toHaveAttribute("data-jackpot", "false");
   });
 
-  it("calls onSelect with the square id when a tile is clicked and highlights the selection", () => {
+  it("calls onSelect with the square id when a tile is clicked and highlights every selected square", () => {
     const onSelect = vi.fn();
-    const { container, rerender } = render(<Board snapshot={snap()} onSelect={onSelect} selectedSquare={null} />);
+    const { container, rerender } = render(<Board snapshot={snap()} onSelect={onSelect} selectedSquares={[]} />);
     const tiles = container.querySelectorAll("[data-square]");
     fireEvent.click(tiles[3]);
     expect(onSelect).toHaveBeenCalledWith(3);
-    rerender(<Board snapshot={snap()} onSelect={onSelect} selectedSquare={3} />);
+    rerender(<Board snapshot={snap()} onSelect={onSelect} selectedSquares={[3, 7]} />);
     expect(container.querySelector('[data-square="3"]')?.getAttribute("data-selected")).toBe("true");
+    expect(container.querySelector('[data-square="7"]')?.getAttribute("data-selected")).toBe("true");
+    expect(container.querySelector('[data-square="0"]')?.getAttribute("data-selected")).toBe("false");
   });
 });
