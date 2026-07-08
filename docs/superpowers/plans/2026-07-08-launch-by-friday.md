@@ -127,7 +127,7 @@ Expected: `Flags: 0x3`
 
 ### Task 4: Deploy to devnet
 
-- [ ] **Step 1: Pre-flight — deploy wallet balance**
+- [x] **Step 1: Pre-flight — deploy wallet balance**
 
 ```bash
 solana balance 9FuMzZyQaTabe5PhXYZxSxRDgxx5576aByJtNXucBVbF --url https://api.devnet.solana.com
@@ -135,7 +135,7 @@ solana balance 9FuMzZyQaTabe5PhXYZxSxRDgxx5576aByJtNXucBVbF --url https://api.de
 
 Expected: ~7.2 SOL (M4b left it there). Need ≥ ~4.3 transient for the upgrade buffer (rent returns on finalize). If short, mine: `devnet-pow mine -k ~/.config/solana/ansem-devnet.json -u dev -t 5000000000 --reward 0.02 -d 3 --no-infer` (stop with `pkill -f devnet-pow` before ER tests). If the balance RPC 429s, back off ~30s and retry (per-IP, transient).
 
-- [ ] **Step 2: Deploy**
+- [x] **Step 2: Deploy**
 
 ```bash
 bash scripts/deploy-devnet.sh
@@ -143,7 +143,7 @@ bash scripts/deploy-devnet.sh
 
 Expected: finishes in ~1 min; `solana program show` output at the end.
 
-- [ ] **Step 3: Verify the deploy actually advanced**
+- [x] **Step 3: Verify the deploy actually advanced**
 
 ```bash
 solana program show 8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz --url https://api.devnet.solana.com | grep "Last Deployed In Slot"
@@ -155,7 +155,7 @@ Expected: slot **> 474633473** (the pre-fix deploy). This is the check that fail
 
 Round 474653546 (Open, delegated, pot 0, past deadline — created by the pre-fix T4 spike) wedges the keeper on start. `set_round_cursor` finalizes the cursor so the keeper opens the next fresh round. Accepted loss: the throwaway spike wallet's 0.05 devnet SOL escrow.
 
-- [ ] **Step 1: Probe current state**
+- [x] **Step 1: Probe current state**
 
 ```bash
 node scripts/_cursor.mjs
@@ -163,7 +163,7 @@ node scripts/_cursor.mjs
 
 Expected: `admin==wallet: true`, `current_round_id: 474653546`, `finalized: false`, round PDA owner = DLP (delegated).
 
-- [ ] **Step 2: Set the cursor**
+- [x] **Step 2: Set the cursor**
 
 ```bash
 node scripts/_cursor.mjs --set
@@ -175,7 +175,7 @@ Expected: `set_round_cursor(...)` tx signature printed; re-probe shows `finalize
 
 The join-without-stake committability fix has only been proven on local L1 (23/23) — the ER path proof happens here, on real MagicBlock devnet infra.
 
-- [ ] **Step 1: Keeper hands-off round IT (drives a scripted gasless session player)**
+- [x] **Step 1: Keeper hands-off round IT (drives a scripted gasless session player)**
 
 ```bash
 source scripts/devnet-env.sh
@@ -186,7 +186,7 @@ KEEPER_DEVNET_IT=1 pnpm --filter @ansem/keeper test devnet-round
 
 Expected: PASS — keeper opens+delegates → commits → real-VRF settles → swaps → scripted player claims ANSEM.
 
-- [ ] **Step 2: Devnet smoke phases (run individually — public RPC rate limits a combined run)**
+- [x] **Step 2: Devnet smoke phases (run individually — public RPC rate limits a combined run)**
 
 ```bash
 yarn run ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 1" tests/ansem-miner-devnet.ts
@@ -197,7 +197,7 @@ yarn run ts-mocha -p ./tsconfig.json -t 1000000 -g "phase 4" tests/ansem-miner-d
 
 Expected: each phase green in isolation (L1 flow / ER stake+commit / VRF settle / full gasless e2e).
 
-- [ ] **Step 3: Explicit CRIT-1 probe — join WITHOUT staking, watch the keeper commit it.** Start the keeper locally (`pnpm run keeper:dev` with the public-RPC overrides above), use the app (Task 7 stack) or the entry IT (`ENTRY_BATCH_IT=1 pnpm --filter @ansem/keeper run entry-it`) to enter a round and stake NOTHING, then let the deadline pass.
+- [x] **Step 3: Explicit CRIT-1 probe — join WITHOUT staking, watch the keeper commit it.** Start the keeper locally (`pnpm run keeper:dev` with the public-RPC overrides above), use the app (Task 7 stack) or the entry IT (`ENTRY_BATCH_IT=1 pnpm --filter @ansem/keeper run entry-it`) to enter a round and stake NOTHING, then let the deadline pass.
 
 Expected keeper logs: `round committed back to L1` → `request_settle posted` → `round swapped -> CLAIMABLE`, and the NEXT round opens — no ConstraintSeeds(2006) wedge, no deferred-forever commit_round. This is the exact failure mode that poisoned devnet; it must pass before anything public.
 
@@ -260,7 +260,7 @@ app/*
 !app/package.json
 ```
 
-- [ ] **Step 3: Local container proof before any host**
+- [x] **Step 3: Local container proof before any host**
 
 ```bash
 docker build -f keeper/Dockerfile -t ansem-keeper .
