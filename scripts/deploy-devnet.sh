@@ -22,16 +22,19 @@ FLAGS=$("$LLVM_READELF" -h "$SO" | awk '/Flags/{print $2}')
 # command works for an initial deploy and an upgrade.
 [ -f "$BUFFER_KP" ] || solana-keygen new --no-bip39-passphrase -s -o "$BUFFER_KP" >/dev/null
 
+# Deploy RPC: public devnet, NOT Helius (dev key is hard rate-limited) and NOT
+# --use-rpc (chunk writes via rate-limited RPC 429-spiral; TPU/QUIC lands in <45s).
+DEPLOY_RPC="${DEPLOY_RPC:-https://api.devnet.solana.com}"
+
 echo "Deploying $SO ($(stat -f%z "$SO") bytes, sBPF v3) -> $PROGRAM_ID on devnet ..."
 solana program deploy "$SO" \
   --program-id "$PROGRAM_KP" \
   --buffer "$BUFFER_KP" \
   --keypair "$DEVNET_WALLET" \
-  --url "$ANCHOR_PROVIDER_URL" \
-  --use-rpc \
+  --url "$DEPLOY_RPC" \
   --with-compute-unit-price 50000 \
-  --max-sign-attempts 60
+  --max-sign-attempts 300
 
 echo ""
 echo "Deployed. Verifying ..."
-solana program show "$PROGRAM_ID" --url "$ANCHOR_PROVIDER_URL"
+solana program show "$PROGRAM_ID" --url "$DEPLOY_RPC"
