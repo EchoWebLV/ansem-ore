@@ -2,3 +2,13 @@ packages:
   - "packages/*"
   - "keeper"
   - "app"
+
+# Dependency postinstall scripts allowed to run (pnpm 10 blocks them by default).
+# Needed by fresh environments (Docker keeper image, Vercel) — local approvals
+# live in machine state and don't travel with the repo.
+onlyBuiltDependencies:
+  - bigint-buffer
+  - bufferutil
+  - esbuild
+  - sharp
+  - utf-8-validate
