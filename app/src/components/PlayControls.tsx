@@ -15,6 +15,7 @@ import { enterWouldForfeit } from "../lib/claim-gate.js";
 import { EscrowPanel } from "./EscrowPanel.js";
 import { StakeRail } from "./StakeRail.js";
 import { ClaimPanel } from "./ClaimPanel.js";
+import type { ReceiptInput } from "./VerifyPanel.js";
 
 export interface PlayControlsProps {
   l1: Program<AnsemMiner>;
@@ -22,9 +23,11 @@ export interface PlayControlsProps {
   snapshot: WireSnapshot;
   selectedSquares: number[];
   onStaked?: () => void;
+  /** Fired with an explorer-linkable artifact after every landed action. */
+  onReceipt?: (r: ReceiptInput) => void;
 }
 
-export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }: PlayControlsProps) {
+export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, onReceipt }: PlayControlsProps) {
   const { connection } = useConnection();
   const owner = wallet.publicKey;
   const { escrow, miner, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
@@ -57,13 +60,19 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }
   const canStake = valid && !!signer && joinedThisRound;
   const needsEntry = !joinedThisRound || !valid;
 
-  const doDeposit = (lamports: BN) => run(async () => { await depositIx(l1, owner, lamports).rpc(); });
-  const doWithdraw = (lamports: BN) => run(async () => { await withdrawIx(l1, owner, lamports).rpc(); });
+  const doDeposit = (lamports: BN) => run(async () => {
+    const sig = await depositIx(l1, owner, lamports).rpc();
+    onReceipt?.({ label: "deposit → escrow", sig });
+  });
+  const doWithdraw = (lamports: BN) => run(async () => {
+    const sig = await withdrawIx(l1, owner, lamports).rpc();
+    onReceipt?.({ label: "withdraw ← escrow", sig });
+  });
 
   const doEnter = () => run(async () => {
     // Decide init_miner by the RAW account (fetchMiner is null while delegated too — would double-init).
     const info = await connection.getAccountInfo(minerPda(owner));
-    await enterRound({
+    const landed = await enterRound({
       l1, connection, wallet, roundId, validator: DEFAULT_ER_VALIDATOR,
       includeInitMiner: info === null, validUntilSec: Math.floor(Date.now() / 1000) + 3600,
       // Persist the moment the entry confirms (before propagation waits) so a slow wait
@@ -73,6 +82,7 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }
         tokenPda: tokenPda.toBase58(), validUntil,
       }),
     });
+    onReceipt?.({ label: `enter round ${roundId} · one popup`, sig: landed.signature });
   });
 
   const doStake = (squares: number[], amountPerSquare: BN) => run(async () => {
@@ -83,11 +93,20 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }
     for (const square of squares) {
       await gaslessStake({ er, ownerWallet: owner, sessionSigner: signer, tokenPda: new PublicKey(session.tokenPda), square, amount: amountPerSquare, roundId });
     }
+    // Gasless stakes live on the ephemeral rollup — the L1 artifact is the miner
+    // account, where they land at settle via ProcessUndelegation.
+    onReceipt?.({ label: `stake ×${squares.length} · gasless (ER)`, addr: minerPda(owner).toBase58() });
     onStaked?.();
   });
 
-  const doClaim = (rid: number) => run(async () => { await claimIx(l1, owner, rid).rpc(); });
-  const doRefund = (rid: number) => run(async () => { await refundIx(l1, owner, rid).rpc(); });
+  const doClaim = (rid: number) => run(async () => {
+    const sig = await claimIx(l1, owner, rid).rpc();
+    onReceipt?.({ label: `claim round ${rid}`, sig });
+  });
+  const doRefund = (rid: number) => run(async () => {
+    const sig = await refundIx(l1, owner, rid).rpc();
+    onReceipt?.({ label: `refund round ${rid}`, sig });
+  });
 
   // The claimable round is the player's STAKED round (miner.roundId), not the live snapshot round.
   const stakedRound = miner?.roundId ?? 0;
@@ -136,7 +155,7 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked }
         <div className="flex flex-col gap-1">
           <button
             disabled={busy || snapshot.state !== RoundState.Open || enterBlocked} onClick={doEnter}
-            className="rounded bg-bull-green/20 text-bull-green py-2 text-sm disabled:opacity-40"
+            className="rounded-lg bg-bull-green/20 text-bull-green py-3 text-sm font-medium disabled:opacity-40 active:scale-[0.98] transition-transform"
           >Enter round · one popup</button>
           {!loaded ? (
             <p className="text-[10px] text-bull-muted">checking your prior round…</p>

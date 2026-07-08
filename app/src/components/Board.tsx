@@ -11,6 +11,9 @@ const C = {
   dim: "#2c4034",
 } as const;
 
+// How far each hex face floats above its prism side (viewBox units).
+const DEPTH = 5;
+
 export interface BoardProps {
   snapshot: WireSnapshot;
   /** Squares currently picked for staking (multi-select, ORE-style). */
@@ -23,21 +26,45 @@ export interface BoardProps {
   jackpotShown?: boolean;
 }
 
+/**
+ * The prototype's hex bull-head, extruded: every cell is a glass prism (dark side
+ * layer + gradient face), lit cells breathe, revealed cells pop in, the jackpot
+ * detonates a gold shockwave ring. All state/testid contracts unchanged.
+ */
 export function Board({ snapshot, selectedSquares = [], onSelect, revealed = null, jackpotShown }: BoardProps) {
   const settled = snapshot.state >= RoundState.Settled;
   const revealSet = revealed === null ? null : new Set(revealed);
   return (
     <svg
-      viewBox="0 0 400 340"
+      viewBox="0 0 400 348"
       role="img"
       aria-label="Bull-head board of 25 hex cells"
-      className="block w-full my-[10px] mb-[4px]"
+      className="block w-full my-[10px] mb-[4px] select-none touch-manipulation"
     >
       <defs>
         <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
           <feGaussianBlur stdDeviation="2.6" />
         </filter>
+        {/* Face gradients: light falls from the top edge, prism-style. */}
+        <linearGradient id="faceIdle" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(255,255,255,0.055)" />
+          <stop offset="100%" stopColor="rgba(8,8,12,0.6)" />
+        </linearGradient>
+        <linearGradient id="faceLit" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(53,224,122,0.34)" />
+          <stop offset="100%" stopColor="rgba(53,224,122,0.07)" />
+        </linearGradient>
+        <linearGradient id="faceGold" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(232,196,82,0.45)" />
+          <stop offset="100%" stopColor="rgba(232,196,82,0.12)" />
+        </linearGradient>
+        <radialGradient id="floorGlow">
+          <stop offset="0%" stopColor="rgba(53,224,122,0.16)" />
+          <stop offset="100%" stopColor="rgba(53,224,122,0)" />
+        </radialGradient>
       </defs>
+      {/* Soft floor glow the bull hovers over. */}
+      <ellipse cx={200} cy={338} rx={160} ry={9} fill="url(#floorGlow)" />
       {CELLS.map((cell) => {
         const stake = BigInt(snapshot.blockSol[cell.id] ?? "0");
         // Live board lights real stakes; during the reveal, cells light as unveiled.
@@ -46,8 +73,14 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
         const jackpot = settled && snapshot.jackpotSquare === cell.id && (revealSet === null || jackpotShown === true);
         const selected = selectedSquares.includes(cell.id);
         const stroke = selected ? "#ffffff" : jackpot ? C.gold : lit ? C.green : C.dim;
-        const fill = jackpot ? C.goldf : lit ? C.greenf : "transparent";
+        const fill = jackpot ? "url(#faceGold)" : lit ? "url(#faceLit)" : "url(#faceIdle)";
         const glow = jackpot ? C.gold : lit ? C.green : "none";
+        const side = jackpot ? "#3a2c10" : lit ? "#0d2b1a" : "#060609";
+        const faceClass =
+          "cell-face" +
+          (selected ? " lift" : "") +
+          (revealSet !== null && lit && !jackpot ? " pop" : "") +
+          (jackpot ? " burst" : "");
         return (
           <g
             key={cell.id}
@@ -59,18 +92,58 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
             onClick={onSelect ? () => onSelect(cell.id) : undefined}
             className={onSelect ? "cursor-pointer" : undefined}
           >
-            <polygon points={cell.points} fill="none" stroke={glow} strokeWidth={3} filter="url(#glow)" />
+            {/* Prism side: the dark extrusion the face floats above. */}
             <polygon
+              data-depth
               points={cell.points}
-              fill={fill}
-              stroke={stroke}
-              strokeWidth={jackpot ? 2.8 : selected ? 2.2 : 1.5}
+              transform={`translate(0 ${DEPTH})`}
+              fill={side}
+              stroke="#000"
+              strokeOpacity={0.55}
+              strokeWidth={1}
               strokeLinejoin="round"
-              style={{ transition: "all .18s" }}
             />
-            {cell.eye && (
-              <circle cx={cell.cx} cy={cell.cy} r={cell.r * (0.24 / 0.9)} fill={C.green} opacity={0.85} filter="url(#glow)" />
-            )}
+            <g className={faceClass}>
+              <polygon
+                points={cell.points}
+                fill="none"
+                stroke={glow}
+                strokeWidth={3}
+                filter="url(#glow)"
+                className={revealSet === null && lit ? "glow-live" : undefined}
+              />
+              <polygon
+                points={cell.points}
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={jackpot ? 2.8 : selected ? 2.2 : 1.5}
+                strokeLinejoin="round"
+                style={{ transition: "all .18s" }}
+              />
+              {cell.eye && (
+                <circle
+                  className="bull-eye"
+                  cx={cell.cx}
+                  cy={cell.cy}
+                  r={cell.r * (0.24 / 0.9)}
+                  fill={C.green}
+                  opacity={0.85}
+                  filter="url(#glow)"
+                />
+              )}
+              {jackpot && (
+                <circle
+                  data-testid={`ring-${cell.id}`}
+                  className="jackpot-ring"
+                  cx={cell.cx}
+                  cy={cell.cy}
+                  r={cell.r * 1.05}
+                  fill="none"
+                  stroke={C.gold}
+                  strokeWidth={2}
+                />
+              )}
+            </g>
           </g>
         );
       })}

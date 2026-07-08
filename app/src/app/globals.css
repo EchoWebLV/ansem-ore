@@ -4,4 +4,105 @@
 
 :root { color-scheme: dark; }
 html, body { background: #000; color: #e6e6ea; }
-body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; }
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; overflow-x: hidden; }
+button, a, [data-square] { touch-action: manipulation; }
+
+/* ---------- ambient stage (behind everything) ---------- */
+
+.bg-aura {
+  position: fixed; inset: 0; z-index: -2; pointer-events: none;
+  background:
+    radial-gradient(620px 460px at 50% 16%, rgba(53, 224, 122, 0.10), transparent 70%),
+    radial-gradient(520px 400px at 82% 92%, rgba(232, 196, 82, 0.05), transparent 70%);
+}
+
+/* Drifting dust: two radial-dot layers, period = background-size for a seamless loop. */
+.dust {
+  position: fixed; top: -340px; right: 0; bottom: 0; left: 0;
+  z-index: -1; pointer-events: none; opacity: 0.5;
+  background-image:
+    radial-gradient(1.6px 1.6px at 25% 25%, rgba(53, 224, 122, 0.55), transparent 55%),
+    radial-gradient(1.2px 1.2px at 70% 60%, rgba(53, 224, 122, 0.40), transparent 55%),
+    radial-gradient(1.1px 1.1px at 42% 82%, rgba(232, 196, 82, 0.35), transparent 55%),
+    radial-gradient(1.4px 1.4px at 86% 18%, rgba(53, 224, 122, 0.35), transparent 55%),
+    radial-gradient(1px 1px at 10% 62%, rgba(53, 224, 122, 0.30), transparent 55%),
+    radial-gradient(1px 1px at 58% 8%, rgba(53, 224, 122, 0.28), transparent 55%);
+  background-size: 340px 340px;
+  animation: dust-drift 70s linear infinite;
+}
+@keyframes dust-drift {
+  from { transform: translateY(0); }
+  to   { transform: translateY(340px); }
+}
+
+/* ---------- holo-card stage ---------- */
+
+.stage { perspective: 1000px; }
+.stage-card {
+  transform-style: preserve-3d;
+  will-change: transform;
+  transition: transform 0.25s ease-out;
+}
+
+.board-float { animation: board-float 6s ease-in-out infinite; }
+@keyframes board-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-5px); }
+}
+
+/* ---------- hex cell life ---------- */
+
+.cell-face {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.18s ease;
+}
+.cell-face.lift { transform: translateY(-3px) scale(1.03); }
+.cell-face.pop { animation: cell-pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.cell-face.burst { animation: cell-burst 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+
+@keyframes cell-pop {
+  0%   { transform: scale(0.55); opacity: 0.2; }
+  70%  { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); }
+}
+@keyframes cell-burst {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+
+/* Staked cells breathe on the live board. */
+.glow-live { animation: glow-live 2.4s ease-in-out infinite; }
+@keyframes glow-live {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+/* The bull's eyes never stop smoldering. */
+.bull-eye { animation: eye-glow 3.2s ease-in-out infinite; }
+@keyframes eye-glow {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 0.45; }
+}
+
+/* Gold shockwave on the jackpot square. */
+.jackpot-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ring-out 1.15s ease-out 0.05s both;
+}
+@keyframes ring-out {
+  0%   { transform: scale(0.4); opacity: 0.9; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+/* ---------- accessibility ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .dust, .board-float, .cell-face.pop, .cell-face.burst,
+  .glow-live, .bull-eye, .jackpot-ring, .stage-card {
+    animation: none !important;
+    transition: none !important;
+  }
+}

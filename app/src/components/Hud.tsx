@@ -27,7 +27,10 @@ export function Hud({ snapshot, nowMs, reveal }: HudProps) {
       </div>
       <div
         className="font-mono text-[40px] font-medium my-[2px] transition-colors duration-200"
-        style={{ color: gold ? "#e8c452" : "#35e07a" }}
+        style={{
+          color: gold ? "#e8c452" : "#35e07a",
+          textShadow: gold ? "0 0 26px rgba(232,196,82,0.5)" : "0 0 20px rgba(53,224,122,0.35)",
+        }}
       >
         {reveal?.counter ?? (open ? <Countdown deadlineTs={snapshot.deadlineTs} nowMs={nowMs} /> : "—")}
       </div>

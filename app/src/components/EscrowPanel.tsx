@@ -32,7 +32,7 @@ export function EscrowPanel({ balanceLamports, walletLamports = null, locked, bu
       <input
         inputMode="decimal" placeholder="amount (SOL)" value={amount}
         onChange={(e) => setAmount(e.target.value)}
-        className="bg-black border border-white/15 rounded px-2 py-1 font-mono text-sm"
+        className="bg-black border border-white/15 rounded-lg px-3 py-2 font-mono text-sm"
       />
       {overWallet && (
         <p className="text-[10px] text-amber-400">That&apos;s more than your wallet holds — deposit less or grab devnet SOL below.</p>
@@ -40,12 +40,12 @@ export function EscrowPanel({ balanceLamports, walletLamports = null, locked, bu
       <div className="flex gap-2">
         <button
           disabled={busy || !parsed || overWallet} onClick={() => parsed && onDeposit(parsed)}
-          className="flex-1 rounded bg-bull-green/20 text-bull-green py-1 text-sm disabled:opacity-40"
+          className="flex-1 rounded-lg bg-bull-green/20 text-bull-green py-2.5 text-sm font-medium disabled:opacity-40 active:scale-[0.98] transition-transform"
         >Deposit</button>
         <button
           disabled={busy || locked || !parsed} onClick={() => parsed && onWithdraw(parsed)}
           title={locked ? "Locked while a round is active" : undefined}
-          className="flex-1 rounded border border-white/15 py-1 text-sm disabled:opacity-40"
+          className="flex-1 rounded-lg border border-white/15 py-2.5 text-sm disabled:opacity-40 active:scale-[0.98] transition-transform"
         >Withdraw</button>
       </div>
       {locked && <p className="text-[10px] text-bull-muted">Withdraw unlocks after the round finalizes.</p>}

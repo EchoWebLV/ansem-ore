@@ -29,7 +29,7 @@ export function StakeRail({ selectedSquares, sessionValid, busy, onStake }: Stak
       <input
         inputMode="decimal" placeholder="amount (SOL)" value={amount}
         onChange={(e) => setAmount(e.target.value)}
-        className="bg-black border border-white/15 rounded px-2 py-1 font-mono text-sm"
+        className="bg-black border border-white/15 rounded-lg px-3 py-2 font-mono text-sm"
       />
       {n > 1 && parsed && (
         <p className="text-[10px] text-bull-muted font-mono">
@@ -38,7 +38,7 @@ export function StakeRail({ selectedSquares, sessionValid, busy, onStake }: Stak
       )}
       <button
         disabled={!canStake} onClick={() => canStake && onStake(selectedSquares, parsed!)}
-        className="rounded bg-bull-green/20 text-bull-green py-1 text-sm disabled:opacity-40"
+        className="rounded-lg bg-bull-green/20 text-bull-green py-2.5 text-sm font-medium disabled:opacity-40 active:scale-[0.98] transition-transform"
       >Stake · gasless</button>
     </section>
   );

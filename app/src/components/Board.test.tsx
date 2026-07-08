@@ -41,6 +41,17 @@ describe("Board", () => {
     expect(screen.getByTestId("tile-7")).toHaveAttribute("data-jackpot", "false");
   });
 
+  it("renders the 3D prism: one extrusion layer under every face", () => {
+    const { container } = render(<Board snapshot={snap()} />);
+    expect(container.querySelectorAll("[data-depth]")).toHaveLength(25);
+  });
+
+  it("fires the gold shockwave ring on the jackpot square once settled", () => {
+    render(<Board snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7 })} />);
+    expect(screen.getByTestId("ring-7")).toBeInTheDocument();
+    expect(screen.queryByTestId("ring-3")).toBeNull();
+  });
+
   it("calls onSelect with the square id when a tile is clicked and highlights every selected square", () => {
     const onSelect = vi.fn();
     const { container, rerender } = render(<Board snapshot={snap()} onSelect={onSelect} selectedSquares={[]} />);
