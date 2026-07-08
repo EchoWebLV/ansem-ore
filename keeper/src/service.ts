@@ -22,7 +22,7 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
   const ctx: ActionCtx = {
     conn: chain.conn, erConn: chain.erConn, program: chain.program, erProgram: chain.erProgram,
     keeper: cfg.adminKeypair.publicKey, validator: cfg.validator, vrfQueue: cfg.vrfQueue,
-    roundDurationSecs: cfg.roundDurationSecs, log,
+    roundDurationSecs: cfg.roundDurationSecs, directMode: cfg.directMode, log,
   };
   let latest: FullSnapshot | null = null;
   let server: ReadServer | undefined;

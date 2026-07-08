@@ -16,6 +16,8 @@ export interface KeeperConfig {
   graceSecs: number;
   pollMs: number;
   httpPort: number;
+  /** KEEPER_DIRECT_MODE=1: rounds stay on L1 for stake_direct (never delegated). */
+  directMode: boolean;
 }
 
 const req = (env: NodeJS.ProcessEnv, key: string): string => {
@@ -44,6 +46,7 @@ export function loadKeeperConfig(
     graceSecs: num(env, "KEEPER_GRACE_SECS", 180),
     pollMs: num(env, "KEEPER_POLL_MS", 4000),
     httpPort: num(env, "KEEPER_HTTP_PORT", 8787),
+    directMode: env.KEEPER_DIRECT_MODE === "1",
   };
 }
 

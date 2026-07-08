@@ -19,6 +19,9 @@ export interface ActionCtx {
   validator: PublicKey;
   vrfQueue: PublicKey;
   roundDurationSecs: number;
+  /** Direct-stake mode: rounds stay on L1 (never delegated) so players can
+   *  stake_direct against them; the commit/reconcile stages never fire. */
+  directMode?: boolean;
   log: Logger;
 }
 
@@ -138,10 +141,17 @@ export function liveFinalizeDeps(ctx: ActionCtx, roundId: number): FinalizeDeps 
 
 // ---- Single-shot L1 actions ----
 
-/** finalized/terminal -> set duration, open + delegate the next round (id = current + 1). */
+/** finalized/terminal -> set duration, open (+ delegate unless direct mode) the next round. */
 export async function createAndDelegate(ctx: ActionCtx, nextRoundId: number): Promise<void> {
   await l1Send(() => setRoundDurationIx(ctx.program, ctx.keeper, ctx.roundDurationSecs).rpc());
   await l1Send(() => createRoundIx(ctx.program, ctx.keeper, nextRoundId).rpc());
+  if (ctx.directMode) {
+    // Direct-stake: the round stays program-owned on L1 so stake_direct txs can
+    // write it. No delegation, no commit later — the keeper goes straight to
+    // settle at the deadline.
+    ctx.log.info("round opened (direct L1)", { roundId: nextRoundId });
+    return;
+  }
   await l1Send(() => delegateRoundIx(ctx.program, ctx.keeper, nextRoundId, ctx.validator)
     .rpc({ skipPreflight: true, commitment: "confirmed" }));
   await awaitOwnerIs(ctx.conn, roundPda(nextRoundId), DLP_PROGRAM_ID.toBase58());

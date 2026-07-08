@@ -2,7 +2,7 @@
 import { Connection, PublicKey, Keypair, Transaction, TransactionInstruction } from "@solana/web3.js";
 import type { Program, Wallet } from "@coral-xyz/anchor";
 import {
-  buildEntryInstructions, stakeIx, escrowPda, minerPda, fetchEscrow, fetchMiner,
+  buildEntryInstructions, stakeIx, stakeDirectIx, escrowPda, minerPda, fetchEscrow, fetchMiner,
   awaitEr, awaitOwnerIs, erRpcTolerant, sleep, DLP_PROGRAM_ID, BN, type AnsemMiner, type EscrowState,
 } from "@ansem/sdk";
 
@@ -23,6 +23,32 @@ export interface EnterRoundArgs {
   verifyLanded?: () => Promise<boolean>;
   waitJoined?: (fetchEsc: () => Promise<EscrowState | null>) => Promise<void>;
   waitDelegated?: () => Promise<void>;
+}
+
+// ---- Direct-stake engine (ORE model): ONE wallet approval, SOL moves
+// wallet -> pot inside the tx. Multi-square = N stake_direct instructions in
+// one transaction. No escrow, no session key, no delegation.
+
+export interface DirectStakeArgs {
+  l1: Program<AnsemMiner>;
+  owner: PublicKey;
+  roundId: number;
+  squares: number[];
+  amountPerSquare: BN;
+  /** Injectable sender (tests). Defaults to the provider's sendAndConfirm (the single popup). */
+  send?: (tx: Transaction) => Promise<string>;
+}
+
+export async function directStake(a: DirectStakeArgs): Promise<string> {
+  if (a.squares.length === 0) throw new Error("pick at least one square");
+  const ixs: TransactionInstruction[] = [];
+  for (const sq of a.squares) {
+    ixs.push(await stakeDirectIx(a.l1, a.owner, a.roundId, sq, a.amountPerSquare).instruction());
+  }
+  const tx = new Transaction().add(...ixs);
+  const send = a.send ?? ((t: Transaction) =>
+    (a.l1.provider as unknown as { sendAndConfirm: (tx: Transaction) => Promise<string> }).sendAndConfirm(t));
+  return await send(tx);
 }
 
 /** ONE-POPUP entry: build the batch, session co-sign, wallet sign (single popup), send skipPreflight, wait. */

@@ -22,8 +22,8 @@ vi.mock("@solana/wallet-adapter-react", () => ({
 }));
 vi.mock("../hooks/use-player-state.js", () => ({
   usePlayerState: () => ({
-    escrow: { balance: 50_000_000n, activeRound: 0, reconciledRound: 0, lastClaimedRound: 0 },
-    miner: null, config: null, refresh: () => {},
+    escrow: null,
+    miner: null, config: null, loaded: true, refresh: () => {},
   }),
 }));
 vi.mock("../hooks/use-session.js", () => ({
@@ -68,14 +68,18 @@ describe("PlayBoard", () => {
 
   it("hides the write column until a wallet + L1 program are present", () => {
     renderWithSnapshot(); // ctl.l1 = null, ctl.wallet = null
-    expect(screen.queryByText(/ESCROW/)).toBeNull();
+    expect(screen.queryByText(/STAKE/)).toBeNull();
   });
 
-  it("shows the write column (escrow + one-popup entry) once connected", async () => {
+  it("shows the direct-stake write column (one-approval rail + wallet balance) once connected", async () => {
     ctl.l1 = {}; ctl.wallet = { publicKey: { toBase58: () => "Wallet1111" } };
     renderWithSnapshot();
-    await waitFor(() => expect(screen.getByText(/ESCROW/)).toBeInTheDocument());
-    expect(screen.getByText(/0\.05 SOL/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /enter round/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("STAKE")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /stake · one approval/i })).toBeInTheDocument();
+    // No escrow lifecycle anywhere in direct mode.
+    expect(screen.queryByText(/ESCROW/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /enter round/i })).toBeNull();
+    // Wallet balance surfaces so unaffordable stakes are self-explanatory.
+    await waitFor(() => expect(screen.getByText(/wallet 0\.0591/i)).toBeInTheDocument());
   });
 });

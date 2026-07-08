@@ -45,3 +45,23 @@ export const refundIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: num
     authority: wallet, config: configPda(), round: roundPda(roundId),
     escrow: escrowPda(wallet), miner: minerPda(wallet),
   });
+
+// ---- Direct-stake engine (ORE model): wallet -> pot inside the stake tx.
+// No escrow, no session, no delegation. Multi-square = several stakeDirect
+// instructions batched into ONE transaction (single wallet approval).
+
+export const stakeDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number, square: number, amount: BN) =>
+  p.methods.stakeDirect(new BN(roundId), square, amount).accountsPartial({
+    authority: wallet, config: configPda(), round: roundPda(roundId), miner: minerPda(wallet),
+  });
+
+export const claimDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>
+  p.methods.claimDirect(new BN(roundId)).accountsPartial({
+    authority: wallet, config: configPda(), round: roundPda(roundId), miner: minerPda(wallet),
+    ansemMint: ansemMintPda(), vaultAuthority: vaultAuthPda(), payoutVault: payoutVault(), playerAta: playerAta(wallet),
+  });
+
+export const refundDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>
+  p.methods.refundDirect(new BN(roundId)).accountsPartial({
+    authority: wallet, config: configPda(), round: roundPda(roundId), miner: minerPda(wallet),
+  });

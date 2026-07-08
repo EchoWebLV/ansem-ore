@@ -33,6 +33,11 @@ describe("loadKeeperConfig", () => {
     expect(cfg.httpPort).toBe(9000);
   });
 
+  it("direct mode is off by default and on with KEEPER_DIRECT_MODE=1", () => {
+    expect(loadKeeperConfig(baseEnv as any, fakeLoad).directMode).toBe(false);
+    expect(loadKeeperConfig({ ...baseEnv, KEEPER_DIRECT_MODE: "1" } as any, fakeLoad).directMode).toBe(true);
+  });
+
   it("throws when a required var is missing", () => {
     expect(() => loadKeeperConfig({ WS_ENDPOINT: "x", DEVNET_WALLET: "y" } as any, fakeLoad))
       .toThrow(/ANCHOR_PROVIDER_URL/);
