@@ -1,0 +1,14 @@
+# BuildKit per-Dockerfile ignore (context = repo root). Paths relative to context root.
+.git
+**/node_modules
+**/dist
+target
+test-ledger
+magicblock-test-storage
+generated
+docs
+tests
+scripts
+programs
+app/*
+!app/package.json
