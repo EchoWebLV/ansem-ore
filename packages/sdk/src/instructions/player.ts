@@ -2,7 +2,8 @@ import { Program } from "@coral-xyz/anchor";
 import { BN } from "../bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { AnsemMiner } from "../idl/ansem_miner.js";
-import { configPda, roundPda, minerPda, escrowPda, playerAta, payoutVault, vaultAuthPda, ansemMintPda } from "../pdas.js";
+import { configPda, roundPda, minerPda, escrowPda, playerAta, payoutVault, vaultAuthPda, ansemMintPda,
+  beefConfigPda, beefMinerPda, beefRoundPda, playerBeefAta } from "../pdas.js";
 
 export const depositIx = (p: Program<AnsemMiner>, wallet: PublicKey, lamports: BN) =>
   p.methods.deposit(lamports).accountsPartial({ authority: wallet });
@@ -64,4 +65,26 @@ export const claimDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId
 export const refundDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>
   p.methods.refundDirect(new BN(roundId)).accountsPartial({
     authority: wallet, config: configPda(), round: roundPda(roundId), miner: minerPda(wallet),
+  });
+
+// ---- BEEF vault emission layer ----
+// ORDERING INVARIANT: rollBeef must run BEFORE any block_stake-zeroing ix in
+// the same bundle — claimDirect zeroes stakes and stakeDirect re-stamps the
+// miner to a new round, either of which forfeits the un-rolled BEEF share.
+//   harvest bundle:  [rollBeef(r), claimDirect(r), claimBeef]
+//   restake bundle:  [rollBeef(prevR), stakeDirect(newR)...]
+// rollBeef is a no-op (never an error) when already rolled / nothing to roll,
+// so including it defensively can never block the ANSEM game.
+
+export const rollBeefIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>
+  p.methods.rollBeef(new BN(roundId)).accountsPartial({
+    authority: wallet, round: roundPda(roundId), miner: minerPda(wallet),
+    beefRound: beefRoundPda(roundId), beefConfig: beefConfigPda(), beefMiner: beefMinerPda(wallet),
+  });
+
+export const claimBeefIx = (p: Program<AnsemMiner>, wallet: PublicKey, beefMint: PublicKey, beefVault: PublicKey) =>
+  p.methods.claimBeef().accountsPartial({
+    authority: wallet, beefConfig: beefConfigPda(), beefMiner: beefMinerPda(wallet),
+    beefMint, vaultAuthority: vaultAuthPda(), beefVault,
+    playerBeefAta: playerBeefAta(beefMint, wallet),
   });

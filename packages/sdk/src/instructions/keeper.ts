@@ -2,7 +2,8 @@ import { Program } from "@coral-xyz/anchor";
 import { BN } from "../bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { AnsemMiner } from "../idl/ansem_miner.js";
-import { configPda, roundPda, payoutVault, vaultAuthPda, mintAuthPda, potVaultPda, treasuryPda, ansemMintPda } from "../pdas.js";
+import { configPda, roundPda, payoutVault, vaultAuthPda, mintAuthPda, potVaultPda, treasuryPda, ansemMintPda,
+  beefConfigPda, beefRoundPda } from "../pdas.js";
 import { VRF_BASE_QUEUE } from "../constants.js";
 
 const validatorMeta = (v: PublicKey) => [{ pubkey: v, isSigner: false, isWritable: false }];
@@ -44,3 +45,23 @@ export const setRoundDurationIx = (p: Program<AnsemMiner>, admin: PublicKey, sec
   p.methods.setRoundDuration(new BN(secs)).accountsPartial({ admin });
 export const setReturnBandIx = (p: Program<AnsemMiner>, admin: PublicKey, minBps: number, maxBps: number) =>
   p.methods.setReturnBand(minBps, maxBps).accountsPartial({ admin });
+
+// ---- BEEF vault emission layer (admin/keeper) ----
+
+export const initBeefIx = (
+  p: Program<AnsemMiner>, admin: PublicKey, beefMint: PublicKey, beefVault: PublicKey,
+  divisor: BN, tickBps: number, bonusCapBps: number, activityWindowSecs: BN, secsPerTick: BN,
+) => p.methods.initBeef(divisor, tickBps, bonusCapBps, activityWindowSecs, secsPerTick)
+  .accountsPartial({ admin, beefMint, vaultAuthority: vaultAuthPda(), beefVault });
+
+export const setBeefParamsIx = (
+  p: Program<AnsemMiner>, admin: PublicKey,
+  divisor: BN, tickBps: number, bonusCapBps: number, activityWindowSecs: BN, secsPerTick: BN,
+) => p.methods.setBeefParams(divisor, tickBps, bonusCapBps, activityWindowSecs, secsPerTick)
+  .accountsPartial({ admin, config: configPda(), beefConfig: beefConfigPda() });
+
+export const stampBeefIx = (p: Program<AnsemMiner>, payer: PublicKey, roundId: number, beefVault: PublicKey) =>
+  p.methods.stampBeef(new BN(roundId)).accountsPartial({
+    payer, config: configPda(), round: roundPda(roundId),
+    beefConfig: beefConfigPda(), beefVault, beefRound: beefRoundPda(roundId),
+  });

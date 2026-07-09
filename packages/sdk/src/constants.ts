@@ -13,6 +13,9 @@ export const SEED = {
   vaultAuth: "vault_auth",
   mintAuth: "mint_auth",
   ansemMint: "ansem_mint",
+  beefConfig: "beef_config",
+  beefMiner: "beef_miner",
+  beefRound: "beef_round",
   sessionTokenV2: "session_token_v2", // gum
 } as const;
 
@@ -23,6 +26,13 @@ export const RETURN_MAX_BPS = 5000; // non-jackpot squares capped at 50%
 export const DEFAULT_ROUND_DURATION_SECS = 60;
 export const SWAP_MODE_MOCK = 0;
 export const SWAP_MODE_JUPITER = 1;
+
+// BEEF vault emission layer defaults (mirror programs/ansem-miner/src/constants.rs)
+export const DEFAULT_BEEF_DIVISOR = 1_800_000;
+export const DEFAULT_BEEF_TICK_BPS = 3;
+export const DEFAULT_BEEF_BONUS_CAP_BPS = 30_000;
+export const DEFAULT_BEEF_ACTIVITY_WINDOW_SECS = 86_400;
+export const DEFAULT_BEEF_SECS_PER_TICK = 60;
 
 // Round.state values
 export enum RoundState {

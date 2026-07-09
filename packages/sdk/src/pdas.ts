@@ -26,3 +26,11 @@ export const playerAta = (wallet: PublicKey) => getAssociatedTokenAddressSync(an
 /** Gum SessionTokenV2 PDA: ["session_token_v2", targetProgram, sessionSigner, authorityWallet]. */
 export const sessionTokenPda = (sessionSigner: PublicKey, authorityWallet: PublicKey, target = PROGRAM_ID) =>
   pda([enc(SEED.sessionTokenV2), target.toBuffer(), sessionSigner.toBuffer(), authorityWallet.toBuffer()], GUM_PROGRAM_ID);
+
+// ---- BEEF vault emission layer ----
+export const beefConfigPda = () => pda([enc(SEED.beefConfig)]);
+export const beefMinerPda = (wallet: PublicKey) => pda([enc(SEED.beefMiner), wallet.toBuffer()]);
+export const beefRoundPda = (roundId: number | bigint) => pda([enc(SEED.beefRound), u64le(roundId)]);
+/** Player's BEEF ATA (mint comes from BeefConfig, passed by the caller). */
+export const playerBeefAta = (beefMint: PublicKey, wallet: PublicKey) =>
+  getAssociatedTokenAddressSync(beefMint, wallet);

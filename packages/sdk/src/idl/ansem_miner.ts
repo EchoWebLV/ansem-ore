@@ -403,6 +403,209 @@ export type AnsemMiner = {
       ]
     },
     {
+      "name": "claimBeef",
+      "discriminator": [
+        109,
+        91,
+        91,
+        120,
+        195,
+        206,
+        3,
+        25
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "beefConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  101,
+                  102,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefMiner",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  101,
+                  102,
+                  95,
+                  109,
+                  105,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefMint"
+        },
+        {
+          "name": "vaultAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefVault",
+          "writable": true
+        },
+        {
+          "name": "playerBeefAta",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "authority"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "beefMint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associatedTokenProgram",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claimDirect",
       "discriminator": [
         182,
@@ -1688,6 +1891,122 @@ export type AnsemMiner = {
       "args": []
     },
     {
+      "name": "initBeef",
+      "discriminator": [
+        138,
+        105,
+        57,
+        24,
+        13,
+        158,
+        246,
+        29
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefMint"
+        },
+        {
+          "name": "vaultAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefVault"
+        },
+        {
+          "name": "beefConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  101,
+                  102,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "divisor",
+          "type": "u64"
+        },
+        {
+          "name": "tickBps",
+          "type": "u16"
+        },
+        {
+          "name": "bonusCapBps",
+          "type": "u16"
+        },
+        {
+          "name": "activityWindowSecs",
+          "type": "i64"
+        },
+        {
+          "name": "secsPerTick",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "initMiner",
       "discriminator": [
         144,
@@ -2441,6 +2760,238 @@ export type AnsemMiner = {
       ]
     },
     {
+      "name": "rollBeef",
+      "discriminator": [
+        34,
+        158,
+        178,
+        178,
+        243,
+        65,
+        218,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "round",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "roundId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "miner",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefRound",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  101,
+                  102,
+                  95,
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "roundId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  101,
+                  102,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefMiner",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  101,
+                  102,
+                  95,
+                  109,
+                  105,
+                  110,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "roundId",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "setBeefParams",
+      "discriminator": [
+        219,
+        3,
+        165,
+        224,
+        216,
+        158,
+        186,
+        184
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  101,
+                  102,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "divisor",
+          "type": "u64"
+        },
+        {
+          "name": "tickBps",
+          "type": "u16"
+        },
+        {
+          "name": "bonusCapBps",
+          "type": "u16"
+        },
+        {
+          "name": "activityWindowSecs",
+          "type": "i64"
+        },
+        {
+          "name": "secsPerTick",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "setReturnBand",
       "discriminator": [
         207,
@@ -2962,6 +3513,129 @@ export type AnsemMiner = {
       ]
     },
     {
+      "name": "stampBeef",
+      "discriminator": [
+        149,
+        45,
+        85,
+        88,
+        243,
+        114,
+        169,
+        197
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "round",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "roundId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  101,
+                  102,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefVault"
+        },
+        {
+          "name": "beefRound",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  101,
+                  102,
+                  95,
+                  114,
+                  111,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "roundId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "roundId",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "withdraw",
       "discriminator": [
         183,
@@ -3057,6 +3731,45 @@ export type AnsemMiner = {
     }
   ],
   "accounts": [
+    {
+      "name": "beefConfig",
+      "discriminator": [
+        8,
+        13,
+        155,
+        128,
+        138,
+        150,
+        251,
+        242
+      ]
+    },
+    {
+      "name": "beefMiner",
+      "discriminator": [
+        144,
+        62,
+        3,
+        9,
+        17,
+        186,
+        119,
+        164
+      ]
+    },
+    {
+      "name": "beefRound",
+      "discriminator": [
+        221,
+        124,
+        174,
+        45,
+        115,
+        154,
+        66,
+        207
+      ]
+    },
     {
       "name": "config",
       "discriminator": [
@@ -3235,9 +3948,154 @@ export type AnsemMiner = {
       "code": 6024,
       "name": "badReturnBand",
       "msg": "Invalid return band (require min <= max <= RETURN_MAX_BPS)"
+    },
+    {
+      "code": 6025,
+      "name": "badBeefVault",
+      "msg": "Beef vault token account has wrong owner or mint"
+    },
+    {
+      "code": 6026,
+      "name": "badBeefParams",
+      "msg": "Invalid beef params (divisor and secs_per_tick must be > 0)"
     }
   ],
   "types": [
+    {
+      "name": "beefConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "beefMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "beefVault",
+            "docs": [
+              "SPL token account holding the emission supply. Owner = the existing",
+              "vault_authority PDA. Ops-side this sits at a vanity BEEF... address;",
+              "the program only cares that this pubkey matches."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "divisor",
+            "docs": [
+              "emission_per_round = free_vault / divisor (free = vault - total_owed)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "tickBps",
+            "type": "u16"
+          },
+          {
+            "name": "bonusCapBps",
+            "type": "u16"
+          },
+          {
+            "name": "activityWindowSecs",
+            "type": "i64"
+          },
+          {
+            "name": "secsPerTick",
+            "type": "i64"
+          },
+          {
+            "name": "totalOwed",
+            "docs": [
+              "Solvency ledger: every stamped emission and accrued bonus is recognized",
+              "here the moment it becomes claimable; claims subtract their payout.",
+              "free_vault = vault.amount - total_owed can never go negative-spendable."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "beefMiner",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "unclaimed",
+            "docs": [
+              "Rolled-in, not-yet-claimed BEEF (base units)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bonusBps",
+            "docs": [
+              "Hold-to-grow bonus in bps (0..=cap). Payout = unclaimed*(10000+bonus)/10000."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "lastTickTs",
+            "docs": [
+              "Accrual cursor: ticks are counted from here; every touch sets it to now",
+              "(dead gate-closed gaps are skipped, never re-scanned)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "lastActiveTs",
+            "docs": [
+              "Last stake-accompanied touch (roll_beef). The activity gate: ticks stop",
+              "accruing past last_active_ts + activity_window_secs."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "lastRolledRoundId",
+            "docs": [
+              "Monotonic double-roll guard (rounds are strictly increasing and a",
+              "MinerPosition only ever holds one round at a time)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "beefRound",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "roundId",
+            "type": "u64"
+          },
+          {
+            "name": "emission",
+            "docs": [
+              "Frozen at stamp time (order-independent claims, same pattern as",
+              "Round.jackpot_pool). Shares divide this against Round.pot."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
     {
       "name": "config",
       "type": {

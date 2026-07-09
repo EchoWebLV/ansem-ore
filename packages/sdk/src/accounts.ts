@@ -72,3 +72,7 @@ export function toBoardSnapshot(round: RoundStateData, config: ConfigState, upda
 
 /** Grid width guard for consumers; blockSol/blockStake are fixed-length GRID_SIZE arrays. */
 export const isFullGrid = (arr: unknown[]): boolean => arr.length === GRID_SIZE;
+
+/** BEEF config (raw anchor-decoded: beefMint/beefVault are PublicKey, numeric fields BN). */
+export const fetchBeefConfig = (p: Program<AnsemMiner>, pda: PublicKey) =>
+  p.account.beefConfig.fetch(pda);
