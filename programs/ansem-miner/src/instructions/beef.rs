@@ -104,3 +104,58 @@ pub fn set_beef_params_handler(
     bc.secs_per_tick = secs_per_tick;
     Ok(())
 }
+
+#[derive(Accounts)]
+#[instruction(round_id: u64)]
+pub struct StampBeef<'info> {
+    // Permissionless: the payer just funds BeefRound rent. Emission math is
+    // deterministic from frozen round + live vault state; a griefing deposit
+    // into the vault only ever RAISES the players' emission.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(seeds = [CONFIG_SEED], bump = config.config_bump)]
+    pub config: Box<Account<'info, Config>>,
+
+    #[account(seeds = [ROUND_SEED, round_id.to_le_bytes().as_ref()], bump = round.bump,
+        constraint = round.round_id == round_id @ AnsemError::MinerRoundMismatch)]
+    pub round: Box<Account<'info, Round>>,
+
+    #[account(mut, seeds = [BEEF_CONFIG_SEED], bump = beef_config.bump)]
+    pub beef_config: Box<Account<'info, BeefConfig>>,
+
+    #[account(address = beef_config.beef_vault @ AnsemError::BadBeefVault)]
+    pub beef_vault: Box<Account<'info, TokenAccount>>,
+
+    // `init` (not init_if_needed) = the once-only stamp guard.
+    #[account(init, payer = payer, space = 8 + BeefRound::INIT_SPACE,
+        seeds = [BEEF_ROUND_SEED, round_id.to_le_bytes().as_ref()], bump)]
+    pub beef_round: Box<Account<'info, BeefRound>>,
+
+    pub system_program: Program<'info, System>,
+}
+
+pub fn stamp_beef_handler(ctx: Context<StampBeef>, round_id: u64) -> Result<()> {
+    let round = &ctx.accounts.round;
+    require!(round.state == STATE_CLAIMABLE, AnsemError::BadRoundState);
+    // Only the newest round is stampable: an abandoned old round can never be
+    // retro-stamped into a permanent total_owed leak (its shares would be
+    // unrollable — every MinerPosition has moved on).
+    require!(
+        round_id == ctx.accounts.config.current_round_id,
+        AnsemError::NotCurrentRound
+    );
+
+    let bc = &mut ctx.accounts.beef_config;
+    let free = ctx.accounts.beef_vault.amount.saturating_sub(bc.total_owed);
+    // Empty rounds emit nothing (a quiet night never drains the vault).
+    let emission = if round.pot == 0 { 0 } else { free / bc.divisor };
+
+    let br = &mut ctx.accounts.beef_round;
+    br.round_id = round_id;
+    br.emission = emission;
+    br.bump = ctx.bumps.beef_round;
+
+    bc.total_owed = bc.total_owed.checked_add(emission).ok_or(AnsemError::Overflow)?;
+    Ok(())
+}

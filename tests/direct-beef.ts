@@ -125,4 +125,67 @@ describe("beef vault emission", () => {
       assert.fail("non-admin must not set params");
     } catch (e: any) { assert.include(e.toString(), "Unauthorized"); }
   });
+
+  const stampAccts = (roundId: number, roundPda: PublicKey) => ({
+    payer: admin.publicKey, config: configPda, round: roundPda,
+    beefConfig: beefConfigPda, beefVault, beefRound: beefRoundOf(roundId),
+  });
+
+  let p1: Keypair, p2: Keypair;
+  let round1: { id: number; pda: PublicKey };
+  const P1_STAKE = 300_000_000;
+  const P2_STAKE = 100_000_000;
+
+  it("stamp_beef freezes emission = free_vault/divisor and recognizes the liability", async () => {
+    p1 = await fundedPlayer();
+    p2 = await fundedPlayer();
+    round1 = await freshRound(STAKE_WINDOW);
+    await program.methods.stakeDirect(new anchor.BN(round1.id), 3, new anchor.BN(P1_STAKE))
+      .accounts(stakeDirectAccts(p1.publicKey, round1.pda)).signers([p1]).rpc();
+    await program.methods.stakeDirect(new anchor.BN(round1.id), 7, new anchor.BN(P2_STAKE))
+      .accounts(stakeDirectAccts(p2.publicKey, round1.pda)).signers([p2]).rpc();
+
+    // pre-CLAIMABLE stamp must fail
+    try {
+      await program.methods.stampBeef(new anchor.BN(round1.id)).accounts(stampAccts(round1.id, round1.pda)).rpc();
+      assert.fail("stamp before swap must fail");
+    } catch (e: any) { assert.include(e.toString(), "BadRoundState"); }
+
+    await settleAfterDeadline(round1.pda, Buffer.alloc(32, 7));
+    await program.methods.executeSwapMock().accounts(swapAccounts(round1.pda)).rpc();
+    await program.methods.stampBeef(new anchor.BN(round1.id)).accounts(stampAccts(round1.id, round1.pda)).rpc();
+
+    const br = await program.account.beefRound.fetch(beefRoundOf(round1.id));
+    assert.equal(br.emission.toNumber(), VAULT_FILL / DIVISOR); // 1_000_000
+    const bc = await program.account.beefConfig.fetch(beefConfigPda);
+    assert.equal(bc.totalOwed.toNumber(), VAULT_FILL / DIVISOR);
+
+    // double-stamp: BeefRound is `init` -> second call fails at account level
+    try {
+      await program.methods.stampBeef(new anchor.BN(round1.id)).accounts(stampAccts(round1.id, round1.pda)).rpc();
+      assert.fail("double stamp must fail");
+    } catch (e: any) { assert.include(e.toString(), "already in use"); }
+  });
+
+  it("stamp_beef rejects a non-current round (anti retro-stamp grief)", async () => {
+    // Settle+swap an old round but leave it UNSTAMPED, then open a newer round.
+    // Stamping the now-old (still unstamped) round must hit the current_round_id
+    // gate — the anti retro-stamp guard. (duration 0: no stakers, settle at once.)
+    const rOld = await freshRound(0);
+    await settleAfterDeadline(rOld.pda, Buffer.alloc(32, 4));
+    await program.methods.executeSwapMock().accounts(swapAccounts(rOld.pda)).rpc();
+    const rNew = await freshRound(0);
+    try {
+      await program.methods.stampBeef(new anchor.BN(rOld.id)).accounts(stampAccts(rOld.id, rOld.pda)).rpc();
+      assert.fail("stamping an old (non-current) round must fail");
+    } catch (e: any) { assert.include(e.toString(), "NotCurrentRound"); }
+
+    // finish rNew clean: empty pot -> emission 0, leaving state finalized for the
+    // roll tests that follow.
+    await settleAfterDeadline(rNew.pda, Buffer.alloc(32, 3));
+    await program.methods.executeSwapMock().accounts(swapAccounts(rNew.pda)).rpc();
+    await program.methods.stampBeef(new anchor.BN(rNew.id)).accounts(stampAccts(rNew.id, rNew.pda)).rpc();
+    const br = await program.account.beefRound.fetch(beefRoundOf(rNew.id));
+    assert.equal(br.emission.toNumber(), 0);
+  });
 });

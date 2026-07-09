@@ -147,4 +147,8 @@ pub mod ansem_miner {
     ) -> Result<()> {
         instructions::beef::set_beef_params_handler(ctx, divisor, tick_bps, bonus_cap_bps, activity_window_secs, secs_per_tick)
     }
+
+    pub fn stamp_beef(ctx: Context<StampBeef>, round_id: u64) -> Result<()> {
+        instructions::beef::stamp_beef_handler(ctx, round_id)
+    }
 }
