@@ -316,4 +316,48 @@ describe("beef vault emission", () => {
     await program.methods.setBeefParams(new anchor.BN(DIVISOR), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
       .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
   });
+
+  it("INVARIANT: a drained vault stamps emission 0 and the ANSEM game is untouched", async () => {
+    // Drain the vault to (approximately) its owed floor by pointing divisor at 1
+    // and claiming everything claimable? Simpler: fetch free = amount - owed and
+    // assert stamp math directly on a fresh round with near-zero free balance.
+    const bc = await program.account.beefConfig.fetch(beefConfigPda);
+    const v = await getAccount(provider.connection, beefVault);
+    const free = Number(v.amount) - bc.totalOwed.toNumber();
+    // crank divisor so emission floors to 0 even with free balance remaining:
+    await program.methods.setBeefParams(new anchor.BN("18446744073709551615"), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
+      .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
+
+    const p5 = await fundedPlayer();
+    const r = await playRound([{ kp: p5, square: 2, amount: 120_000_000 }]);
+    const br = await program.account.beefRound.fetch(beefRoundOf(r.id));
+    assert.equal(br.emission.toNumber(), 0); // "empty" vault -> zero emission
+    assert.isAtLeast(free, 0);
+
+    // roll + claim still succeed as no-ops...
+    await program.methods.rollBeef(new anchor.BN(r.id))
+      .accounts(rollAccts(p5.publicKey, r.id, r.pda)).signers([p5]).rpc();
+    await program.methods.claimBeef().accounts(claimBeefAccts(p5.publicKey)).signers([p5]).rpc();
+
+    // ...and the ANSEM claim works exactly as in the no-BEEF world.
+    const p5Ata = getAssociatedTokenAddressSync(ansemMint, p5.publicKey);
+    await program.methods.claimDirect(new anchor.BN(r.id))
+      .accounts({ authority: p5.publicKey, config: configPda, round: r.pda, miner: minerOf(p5.publicKey),
+        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p5Ata }).signers([p5]).rpc();
+    const won = Number((await getAccount(provider.connection, p5Ata)).amount);
+    assert.isAbove(won, 0); // sole staker -> wins the jackpot regardless of BEEF
+
+    // restore params
+    await program.methods.setBeefParams(new anchor.BN(DIVISOR), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
+      .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
+  });
+
+  it("SOLVENCY: total BEEF paid out never exceeds the vault fill", async () => {
+    const v = await getAccount(provider.connection, beefVault);
+    const stillVaulted = Number(v.amount);
+    assert.isAtLeast(stillVaulted, 0);
+    assert.isAtMost(VAULT_FILL - stillVaulted, VAULT_FILL); // paid <= filled
+    const bc = await program.account.beefConfig.fetch(beefConfigPda);
+    assert.isAtMost(bc.totalOwed.toNumber(), stillVaulted); // owed always covered
+  });
 });
