@@ -155,4 +155,8 @@ pub mod ansem_miner {
     pub fn roll_beef(ctx: Context<RollBeef>, round_id: u64) -> Result<()> {
         instructions::beef::roll_beef_handler(ctx, round_id)
     }
+
+    pub fn claim_beef(ctx: Context<ClaimBeef>) -> Result<()> {
+        instructions::beef::claim_beef_handler(ctx)
+    }
 }

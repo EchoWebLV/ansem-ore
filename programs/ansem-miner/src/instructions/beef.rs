@@ -235,3 +235,72 @@ pub fn roll_beef_handler(ctx: Context<RollBeef>, round_id: u64) -> Result<()> {
     bm.last_active_ts = now;
     Ok(())
 }
+
+#[derive(Accounts)]
+pub struct ClaimBeef<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [BEEF_CONFIG_SEED], bump = beef_config.bump)]
+    pub beef_config: Box<Account<'info, BeefConfig>>,
+
+    #[account(mut, seeds = [BEEF_MINER_SEED, authority.key().as_ref()], bump = beef_miner.bump,
+        constraint = beef_miner.authority == authority.key() @ AnsemError::Unauthorized)]
+    pub beef_miner: Box<Account<'info, BeefMiner>>,
+
+    #[account(address = beef_config.beef_mint @ AnsemError::BadBeefVault)]
+    pub beef_mint: Box<Account<'info, Mint>>,
+
+    /// CHECK: same vault authority PDA that signs ANSEM payouts.
+    #[account(seeds = [VAULT_AUTH_SEED], bump)]
+    pub vault_authority: UncheckedAccount<'info>,
+
+    #[account(mut, address = beef_config.beef_vault @ AnsemError::BadBeefVault)]
+    pub beef_vault: Box<Account<'info, TokenAccount>>,
+
+    #[account(init_if_needed, payer = authority,
+        associated_token::mint = beef_mint, associated_token::authority = authority)]
+    pub player_beef_ata: Box<Account<'info, TokenAccount>>,
+
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn claim_beef_handler(ctx: Context<ClaimBeef>) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    let bm = &mut ctx.accounts.beef_miner;
+    let bc = &mut ctx.accounts.beef_config;
+
+    // final accrual, then pay unclaimed * (1 + bonus)
+    accrue_bonus(bm, bc, now)?;
+    let payout = math::beef_payout(bm.unclaimed, bm.bonus_bps);
+
+    if payout > 0 {
+        // ctx.bumps carries the verified bump for any seeds-checked account —
+        // no find_program_address re-derivation needed.
+        let va_seeds: &[&[u8]] = &[VAULT_AUTH_SEED, &[ctx.bumps.vault_authority]];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                TokenTransfer {
+                    from: ctx.accounts.beef_vault.to_account_info(),
+                    to: ctx.accounts.player_beef_ata.to_account_info(),
+                    authority: ctx.accounts.vault_authority.to_account_info(),
+                },
+                &[va_seeds],
+            ),
+            payout,
+        )?;
+    }
+
+    // saturating: floor-rounding interplay can leave dust either side; the
+    // stamp-side floors leave a permanently growing free buffer that dominates.
+    bc.total_owed = bc.total_owed.saturating_sub(payout);
+
+    // THE reset: any claim restarts the hold-to-grow ramp from 1x.
+    bm.unclaimed = 0;
+    bm.bonus_bps = 0;
+    bm.last_tick_ts = now;
+    Ok(())
+}

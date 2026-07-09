@@ -258,4 +258,62 @@ describe("beef vault emission", () => {
     const bm = await program.account.beefMiner.fetch(beefMinerOf(p4.publicKey));
     assert.equal(bm.unclaimed.toNumber(), 0);
   });
+
+  const claimBeefAccts = (pk: PublicKey) => ({
+    authority: pk, beefConfig: beefConfigPda, beefMiner: beefMinerOf(pk),
+    beefMint, vaultAuthority: vaultAuth, beefVault,
+    playerBeefAta: getAssociatedTokenAddressSync(beefMint, pk),
+  });
+
+  it("claim_beef pays unclaimed*(1+bonus), decrements owed, resets; double-claim pays zero", async () => {
+    // p1 holds 750_000 from round1; secs_per_tick=1 & tick=1000bps mean real
+    // seconds have been accruing bonus since the roll. Claim and check bounds.
+    const bcBefore = await program.account.beefConfig.fetch(beefConfigPda);
+    const bmBefore = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
+    const base = bmBefore.unclaimed.toNumber();
+
+    await program.methods.claimBeef().accounts(claimBeefAccts(p1.publicKey)).signers([p1]).rpc();
+
+    const ata = getAssociatedTokenAddressSync(beefMint, p1.publicKey);
+    const got = Number((await getAccount(provider.connection, ata)).amount);
+    assert.isAtLeast(got, base);            // at least the base
+    assert.isAtMost(got, base * 4);         // never beyond the 4x cap
+
+    const bm = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
+    assert.equal(bm.unclaimed.toNumber(), 0);  // full reset
+    assert.equal(bm.bonusBps, 0);
+    const bc = await program.account.beefConfig.fetch(beefConfigPda);
+    assert.isBelow(bc.totalOwed.toNumber(), bcBefore.totalOwed.toNumber()); // owed shrank
+
+    // double claim: nothing moves
+    await program.methods.claimBeef().accounts(claimBeefAccts(p1.publicKey)).signers([p1]).rpc();
+    const got2 = Number((await getAccount(provider.connection, ata)).amount);
+    assert.equal(got2, got);
+  });
+
+  it("hold-to-grow: bonus caps at 4x and dilution waters a new share down", async () => {
+    // crank ticks way up so p2's held balance pins the cap in seconds
+    await program.methods.setBeefParams(new anchor.BN(DIVISOR), 30_000, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
+      .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
+    await sleep(3000); // >=1 tick at 30_000bps -> instantly capped
+
+    // p2 rolls a NEW round's share on top of the capped balance -> dilution
+    const r = await playRound([{ kp: p2, square: 9, amount: 100_000_000 }]);
+    await program.methods.rollBeef(new anchor.BN(r.id))
+      .accounts(rollAccts(p2.publicKey, r.id, r.pda)).signers([p2]).rpc();
+    const bm = await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey));
+    assert.isBelow(bm.bonusBps, CAP_BPS); // new share diluted the capped bonus
+    assert.isAbove(bm.bonusBps, 0);
+
+    // claim: payout is (1+bonus)x of the combined balance, bounded by 4x
+    const base = bm.unclaimed.toNumber();
+    await program.methods.claimBeef().accounts(claimBeefAccts(p2.publicKey)).signers([p2]).rpc();
+    const ata = getAssociatedTokenAddressSync(beefMint, p2.publicKey);
+    const got = Number((await getAccount(provider.connection, ata)).amount);
+    assert.isAtLeast(got, base);
+    assert.isAtMost(got, base * 4);
+    // restore fast-but-sane params for later tests
+    await program.methods.setBeefParams(new anchor.BN(DIVISOR), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
+      .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
+  });
 });
