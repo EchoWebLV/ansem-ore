@@ -34,3 +34,17 @@ pub const DEFAULT_MOCK_RATE: u64 = 2_800 * 1_000_000;
 // swap modes
 pub const SWAP_MODE_MOCK: u8 = 0;
 pub const SWAP_MODE_JUPITER: u8 = 1;
+
+// ---- BEEF vault emission layer (plan 2026-07-09-beef-vault-emission) ----
+pub const BEEF_CONFIG_SEED: &[u8] = b"beef_config";
+pub const BEEF_MINER_SEED: &[u8] = b"beef_miner";
+pub const BEEF_ROUND_SEED: &[u8] = b"beef_round";
+
+// Emission divisor: emission_per_round = free_vault / divisor. 720_000 would be
+// 0.2%/day (yearly halving) at 60s rounds; 1_800_000 pre-scales for the expected
+// ~2.5x average hold-to-grow claim multiplier so NET drain stays on that curve.
+pub const DEFAULT_BEEF_DIVISOR: u64 = 1_800_000;
+pub const DEFAULT_BEEF_TICK_BPS: u16 = 3; // +0.03% per tick while held
+pub const DEFAULT_BEEF_BONUS_CAP_BPS: u16 = 30_000; // +300% -> 4x payout, ~7 days
+pub const DEFAULT_BEEF_ACTIVITY_WINDOW_SECS: i64 = 86_400; // daily-streak gate
+pub const DEFAULT_BEEF_SECS_PER_TICK: i64 = 60; // one tick per round-length

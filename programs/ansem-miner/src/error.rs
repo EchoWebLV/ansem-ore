@@ -27,4 +27,6 @@ pub enum AnsemError {
     #[msg("Miner already reconciled for this round")] AlreadyReconciled,
     #[msg("Cannot commit a miner while its round is still open (staking not closed)")] CommitTooEarly,
     #[msg("Invalid return band (require min <= max <= RETURN_MAX_BPS)")] BadReturnBand,
+    #[msg("Beef vault token account has wrong owner or mint")] BadBeefVault,
+    #[msg("Invalid beef params (divisor and secs_per_tick must be > 0)")] BadBeefParams,
 }
