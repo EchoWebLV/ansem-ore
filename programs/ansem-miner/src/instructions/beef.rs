@@ -159,3 +159,79 @@ pub fn stamp_beef_handler(ctx: Context<StampBeef>, round_id: u64) -> Result<()> 
     bc.total_owed = bc.total_owed.checked_add(emission).ok_or(AnsemError::Overflow)?;
     Ok(())
 }
+
+#[derive(Accounts)]
+#[instruction(round_id: u64)]
+pub struct RollBeef<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(seeds = [ROUND_SEED, round_id.to_le_bytes().as_ref()], bump = round.bump,
+        constraint = round.round_id == round_id @ AnsemError::MinerRoundMismatch)]
+    pub round: Box<Account<'info, Round>>,
+
+    // READ-ONLY: roll never mutates the ANSEM-path position.
+    #[account(seeds = [MINER_SEED, authority.key().as_ref()], bump = miner.bump,
+        constraint = miner.authority == authority.key() @ AnsemError::Unauthorized)]
+    pub miner: Box<Account<'info, MinerPosition>>,
+
+    #[account(seeds = [BEEF_ROUND_SEED, round_id.to_le_bytes().as_ref()], bump = beef_round.bump)]
+    pub beef_round: Box<Account<'info, BeefRound>>,
+
+    #[account(mut, seeds = [BEEF_CONFIG_SEED], bump = beef_config.bump)]
+    pub beef_config: Box<Account<'info, BeefConfig>>,
+
+    #[account(init_if_needed, payer = authority, space = 8 + BeefMiner::INIT_SPACE,
+        seeds = [BEEF_MINER_SEED, authority.key().as_ref()], bump)]
+    pub beef_miner: Box<Account<'info, BeefMiner>>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Accrue the hold-to-grow bonus up to `now`, recognizing the new liability.
+/// Shared by roll (before dilution) and claim (before payout). Always sets
+/// last_tick_ts = now so gate-closed dead time is skipped, never re-scanned.
+fn accrue_bonus(bm: &mut BeefMiner, bc: &mut BeefConfig, now: i64) -> Result<()> {
+    let ticks = math::beef_ticks(now, bm.last_tick_ts, bm.last_active_ts, bc.activity_window_secs, bc.secs_per_tick);
+    let delta = math::beef_bonus_delta(ticks, bc.tick_bps, bm.bonus_bps, bc.bonus_cap_bps);
+    if delta > 0 {
+        let owed = math::beef_owed_delta(bm.unclaimed, delta);
+        bm.bonus_bps += delta; // safe: beef_bonus_delta clamps to cap headroom
+        bc.total_owed = bc.total_owed.checked_add(owed).ok_or(AnsemError::Overflow)?;
+    }
+    bm.last_tick_ts = now;
+    Ok(())
+}
+
+pub fn roll_beef_handler(ctx: Context<RollBeef>, round_id: u64) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    let bm = &mut ctx.accounts.beef_miner;
+    if bm.authority == Pubkey::default() {
+        bm.authority = ctx.accounts.authority.key();
+        bm.bump = ctx.bumps.beef_miner;
+        bm.last_tick_ts = now;
+        bm.last_active_ts = now;
+    }
+
+    // INVARIANT: roll never errors on game-state grounds — a failed roll would
+    // abort the whole [roll, stake]/[roll, claim] bundle and block the player
+    // from the ANSEM game. Already-rolled and moved-on positions are no-ops.
+    if bm.last_rolled_round_id >= round_id || ctx.accounts.miner.round_id != round_id {
+        return Ok(());
+    }
+
+    let bc = &mut ctx.accounts.beef_config;
+    // 1. accrue the existing balance's bonus BEFORE the new share dilutes it
+    accrue_bonus(bm, bc, now)?;
+
+    // 2. pro-rata share of the frozen emission, then weighted-average dilution
+    let stake_sum: u64 = ctx.accounts.miner.block_stake.iter().sum();
+    let share = math::beef_share(ctx.accounts.beef_round.emission, stake_sum, ctx.accounts.round.pot);
+    bm.bonus_bps = math::beef_dilute(bm.bonus_bps, bm.unclaimed, share);
+    bm.unclaimed = bm.unclaimed.checked_add(share).ok_or(AnsemError::Overflow)?;
+
+    // 3. this touch accompanies a played round -> keeps the daily streak alive
+    bm.last_rolled_round_id = round_id;
+    bm.last_active_ts = now;
+    Ok(())
+}

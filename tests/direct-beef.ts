@@ -188,4 +188,74 @@ describe("beef vault emission", () => {
     const br = await program.account.beefRound.fetch(beefRoundOf(rNew.id));
     assert.equal(br.emission.toNumber(), 0);
   });
+
+  const rollAccts = (pk: PublicKey, roundId: number, roundPda: PublicKey) => ({
+    authority: pk, round: roundPda, miner: minerOf(pk), beefRound: beefRoundOf(roundId),
+    beefConfig: beefConfigPda, beefMiner: beefMinerOf(pk),
+  });
+
+  // Full stake -> settle -> swap -> stamp lifecycle used by later tests.
+  async function playRound(stakes: Array<{ kp: Keypair; square: number; amount: number }>) {
+    const round = await freshRound(STAKE_WINDOW);
+    for (const s of stakes) {
+      await program.methods.stakeDirect(new anchor.BN(round.id), s.square, new anchor.BN(s.amount))
+        .accounts(stakeDirectAccts(s.kp.publicKey, round.pda)).signers([s.kp]).rpc();
+    }
+    await settleAfterDeadline(round.pda, Buffer.alloc(32, 9));
+    await program.methods.executeSwapMock().accounts(swapAccounts(round.pda)).rpc();
+    await program.methods.stampBeef(new anchor.BN(round.id)).accounts(stampAccts(round.id, round.pda)).rpc();
+    return round;
+  }
+
+  it("roll_beef credits pro-rata shares; second roll is a no-op (never an error)", async () => {
+    await program.methods.rollBeef(new anchor.BN(round1.id))
+      .accounts(rollAccts(p1.publicKey, round1.id, round1.pda)).signers([p1]).rpc();
+    await program.methods.rollBeef(new anchor.BN(round1.id))
+      .accounts(rollAccts(p2.publicKey, round1.id, round1.pda)).signers([p2]).rpc();
+
+    const emission = VAULT_FILL / DIVISOR; // 1_000_000
+    const bm1 = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
+    const bm2 = await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey));
+    assert.equal(bm1.unclaimed.toNumber(), (emission * P1_STAKE) / (P1_STAKE + P2_STAKE)); // 750_000
+    assert.equal(bm2.unclaimed.toNumber(), (emission * P2_STAKE) / (P1_STAKE + P2_STAKE)); // 250_000
+    assert.equal(bm1.lastRolledRoundId.toNumber(), round1.id);
+
+    // idempotent: second roll changes nothing and does NOT throw (bundle safety)
+    await program.methods.rollBeef(new anchor.BN(round1.id))
+      .accounts(rollAccts(p1.publicKey, round1.id, round1.pda)).signers([p1]).rpc();
+    const again = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
+    assert.equal(again.unclaimed.toNumber(), bm1.unclaimed.toNumber());
+  });
+
+  it("bundle order [roll_beef, claim_direct] in ONE tx preserves the BEEF share", async () => {
+    const p3 = await fundedPlayer();
+    const r = await playRound([{ kp: p3, square: 5, amount: 200_000_000 }]);
+    const p3Ata = getAssociatedTokenAddressSync(ansemMint, p3.publicKey);
+
+    const rollIx = await program.methods.rollBeef(new anchor.BN(r.id))
+      .accounts(rollAccts(p3.publicKey, r.id, r.pda)).instruction();
+    const claimIx = await program.methods.claimDirect(new anchor.BN(r.id))
+      .accounts({ authority: p3.publicKey, config: configPda, round: r.pda, miner: minerOf(p3.publicKey),
+        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p3Ata }).instruction();
+    await provider.sendAndConfirm(new Transaction().add(rollIx, claimIx), [p3]);
+
+    const bm = await program.account.beefMiner.fetch(beefMinerOf(p3.publicKey));
+    assert.isAbove(bm.unclaimed.toNumber(), 0); // share survived the zeroing claim
+    // and the miner's stakes are zeroed by claim_direct as before
+    const m = await program.account.minerPosition.fetch(minerOf(p3.publicKey));
+    assert.equal(m.blockStake.reduce((a: number, b: any) => a + b.toNumber(), 0), 0);
+  });
+
+  it("roll after ANSEM-claim-first rolls ZERO (stakes gone) — documented forfeit, still no error", async () => {
+    const p4 = await fundedPlayer();
+    const r = await playRound([{ kp: p4, square: 1, amount: 150_000_000 }]);
+    const p4Ata = getAssociatedTokenAddressSync(ansemMint, p4.publicKey);
+    await program.methods.claimDirect(new anchor.BN(r.id))
+      .accounts({ authority: p4.publicKey, config: configPda, round: r.pda, miner: minerOf(p4.publicKey),
+        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p4Ata }).signers([p4]).rpc();
+    await program.methods.rollBeef(new anchor.BN(r.id))
+      .accounts(rollAccts(p4.publicKey, r.id, r.pda)).signers([p4]).rpc();
+    const bm = await program.account.beefMiner.fetch(beefMinerOf(p4.publicKey));
+    assert.equal(bm.unclaimed.toNumber(), 0);
+  });
 });
