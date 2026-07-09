@@ -71,3 +71,24 @@ Run phases **individually** — the dev-tier Helius key rate-limits a long combi
 4. **No genesis reset.** Smokes are idempotent: create-or-skip init, fresh player + round id per run, and `createFreshRound` self-heals a stranded round — including committing an ER-**delegated** stranded round back to L1 before cancelling.
 5. **Validator-clock lag on devnet too.** Deadline-gated `settle`/`cancel` are retried until the on-chain clock passes the deadline (`retryPastDeadline`).
 6. **Propagation races.** After `join_round`, poll `escrow.active_round == id` before staking (else `NotCurrentRound`); after `delegate`, poll owner == DLP before proceeding.
+
+## BEEF emission layer (post-launch add-on)
+
+The admin keypair defaults to `~/.config/solana/ansem-devnet.json`; override with
+`ADMIN_KEYPAIR=<path>` (it MUST equal the on-chain `Config.admin`). `RPC` selects the cluster.
+
+1. Grind the vanity vault address (ops cosmetics; each extra exact char ×58 cost):
+   `solana-keygen grind --starts-with BEEF:1` → move the JSON to a safe path.
+2. Create vault + init (devnet, with mock mint + fill):
+   `RPC=$DEVNET_RPC node scripts/beef-init.mjs --vault-keypair <ground.json> --fill 500000000`
+   Mainnet (real CA from the pump.fun launch, fill by transfer from the dev-buy):
+   `RPC=$MAINNET_RPC node scripts/beef-init.mjs --vault-keypair <ground.json> --beef-mint <CA>`
+   (`beef-init` prints `BEEF INITIALIZED` with `divisor`, `vaultBalance`, `totalOwed: 0`.)
+3. DELETE the ground keypair file — the address key is powerless post-creation.
+4. Restart the keeper — it auto-detects BeefConfig and logs "BEEF emission enabled".
+5. Verify: next settled round with a pot logs "beef emission stamped"; check
+   `BeefRound.emission ≈ vault/divisor` and `BeefConfig.total_owed` grew by it.
+6. Tuning: `set_beef_params` (divisor/tick/cap/window) — loosen with data, never
+   tighten a promised schedule.
+7. Invariant: BEEF never blocks the game — an empty/missing vault stamps emission 0,
+   `roll_beef` no-ops on already-rolled/mismatch, and the keeper stamp is best-effort.
