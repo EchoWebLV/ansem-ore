@@ -1,5 +1,7 @@
 // Ops tool: probe the live devnet Config; with --launch-defaults, reset the fields
-// the test suites override (return band -> (0,5000), round duration -> 60s).
+// the test suites override (return band -> (0,0) WINNER-TAKE-ALL, round duration -> 60s).
+// Band (0,0) = every non-jackpot square returns 0, the ENTIRE pot + rollover goes to
+// the jackpot square (user call 2026-07-09: "one square takes the whole pot").
 // Usage: RPC=<url> node scripts/_config.mjs [--launch-defaults]
 import { Connection, Keypair } from "@solana/web3.js";
 import { Wallet } from "@coral-xyz/anchor";
@@ -19,8 +21,8 @@ const show = async (label) => {
 
 await show("CONFIG:");
 if (process.argv.includes("--launch-defaults")) {
-  console.log("setting launch defaults: return band (0, 5000), round duration 60s ...");
-  await program.methods.setReturnBand(0, 5000)
+  console.log("setting launch defaults: return band (0, 0) winner-take-all, round duration 60s ...");
+  await program.methods.setReturnBand(0, 0)
     .accountsPartial({ admin: kp.publicKey, config: configPda() }).rpc({ commitment: "confirmed" });
   await program.methods.setRoundDuration(new BN(60))
     .accountsPartial({ admin: kp.publicKey, config: configPda() }).rpc({ commitment: "confirmed" });

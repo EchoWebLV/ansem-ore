@@ -1,17 +1,18 @@
 # ANSEM Miner — launch announcement drafts (Friday 2026-07-10)
 
 > STATUS: DRAFT — user approval required before anything is posted. Replace `<URL>` with the production URL, `<GIF>` with the demo capture.
+> Rewritten 2026-07-09 late for the DIRECT-STAKE + WINNER-TAKE-ALL engine (band (0,0) live on devnet; escrow/session copy removed).
 
 ## X thread (post from user's account)
 
 **1/**
 ANSEM MINER is live. 🐂
 
-A fully on-chain mining game on @solana — stake SOL on the bull board, VRF decides the squares, the pot converts to $ANSEM, winners claim.
+25 bulls. 60 seconds. ONE square takes the ENTIRE pot.
 
-Gasless. Popup-free. Rounds every 60 seconds, around the clock.
+Stake SOL on the bull board, verifiable VRF picks the winning square, the whole pot pays out in $ANSEM. Nobody hits? It ALL rolls into the next round — and the jackpot keeps growing until someone takes it.
 
-Play the devnet beta now → <URL>
+Play the devnet beta → <URL>
 
 <GIF>
 
@@ -19,19 +20,19 @@ Play the devnet beta now → <URL>
 How it works:
 
 1. Grab free devnet SOL (faucet linked in-app)
-2. Deposit + enter the round — ONE wallet popup, total
-3. Click bulls, stake gasless — zero popups, ~50ms confirms
-4. VRF settles the round on-chain → claim your ANSEM
+2. Pick your bull(s) and stake — ONE wallet approval, straight from your wallet
+3. VRF settles on-chain every 60 seconds
+4. Hit the square → claim the whole pot in $ANSEM. Nobody hit → watch the jackpot roll and fatten
 
-No signups. No emails. Just a wallet.
+No signups. No emails. No deposits held anywhere — your SOL moves only when you stake.
 
 **3/**
 Under the hood (for the builders):
 
-• Anchor program on Solana devnet — every payout backed 1:1 by the round's swap, solvency by construction
-• @magicblock ephemeral rollup runs the staking hot path — that's the gasless ~50ms feel
-• Ephemeral VRF settles every round — verifiable randomness, no admin dice
-• Session keys: one approval, then zero popups
+• Anchor program on Solana devnet — stakes go wallet→pot inside the stake tx, payouts are pull-claims, solvency by construction
+• @magicblock ephemeral VRF settles every round — verifiable randomness, no admin dice
+• A keeper cranks rounds hands-off, around the clock
+• Every round, stake and payout is a public transaction — the app links you straight to the explorer to check the math
 
 **4/**
 The fine print (read it):
@@ -42,11 +43,11 @@ Real thing is being built in the open. Bulls first. 🐂
 
 ## MagicBlock Discord drop (ecosystem/showcase channel)
 
-> Shipped: ANSEM Miner — a grid mining game running its whole staking hot path in an ephemeral rollup (gasless session-key staking, zero popups), settled by ephemeral VRF each round, value custody on L1. Continuous hands-off rounds via a keeper. Devnet beta: <URL> — feedback very welcome. Happy to write up the ER/VRF/session-key integration notes if useful.
+> Shipped: ANSEM Miner — a winner-take-all grid game settled by MagicBlock ephemeral VRF every 60 seconds, cranked hands-off by a keeper (1,000+ consecutive devnet rounds and counting). One square takes the whole pot; unhit pots roll over on-chain. Devnet beta: <URL> — feedback very welcome. (The ER + session-key rails are built and tested too — they're our upcoming gasless "automation mode"; happy to write up integration notes.)
 
 ## Landing hook (if we add a hero line to the app later — post-launch backlog)
 
-"Mine $ANSEM on the bull board. Gasless. Every 60 seconds."
+"25 bulls. One takes the whole pot. Every 60 seconds."
 
 ## Do-NOT list (legal/brand discipline)
 
