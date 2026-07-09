@@ -130,4 +130,21 @@ pub mod ansem_miner {
     pub fn refund_direct(ctx: Context<RefundDirect>, round_id: u64) -> Result<()> {
         instructions::direct::refund_direct_handler(ctx, round_id)
     }
+
+    // ---- BEEF vault emission layer: per-round vault emission to all stakers,
+    // hold-to-grow bonus. All-new accounts; the ANSEM path takes no BEEF
+    // accounts and cannot be blocked by this layer. ----
+    pub fn init_beef(
+        ctx: Context<InitBeef>, divisor: u64, tick_bps: u16, bonus_cap_bps: u16,
+        activity_window_secs: i64, secs_per_tick: i64,
+    ) -> Result<()> {
+        instructions::beef::init_beef_handler(ctx, divisor, tick_bps, bonus_cap_bps, activity_window_secs, secs_per_tick)
+    }
+
+    pub fn set_beef_params(
+        ctx: Context<SetBeefParams>, divisor: u64, tick_bps: u16, bonus_cap_bps: u16,
+        activity_window_secs: i64, secs_per_tick: i64,
+    ) -> Result<()> {
+        instructions::beef::set_beef_params_handler(ctx, divisor, tick_bps, bonus_cap_bps, activity_window_secs, secs_per_tick)
+    }
 }
