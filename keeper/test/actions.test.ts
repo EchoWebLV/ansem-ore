@@ -74,3 +74,37 @@ describe("isNotThisRoundError (commit_miner skip classifier)", () => {
     expect(isNotThisRoundError(new Error("failed to send transaction: rpc flake / blockhash not found"))).toBe(false);
   });
 });
+
+describe("finalizeSettled + BEEF stamp", () => {
+  it("stamps AFTER the swap", async () => {
+    const calls: string[] = [];
+    await finalizeSettled(7, {
+      joinedWallets: async () => [],
+      reconcileMiner: async () => { calls.push("rec"); },
+      executeSwap: async () => { calls.push("swap"); },
+      stampBeef: async () => { calls.push("stamp"); },
+    });
+    expect(calls).toEqual(["swap", "stamp"]);
+  });
+
+  it("a throwing stamp is swallowed — BEEF never blocks finalize", async () => {
+    const calls: string[] = [];
+    await finalizeSettled(7, {
+      joinedWallets: async () => [],
+      reconcileMiner: async () => {},
+      executeSwap: async () => { calls.push("swap"); },
+      stampBeef: async () => { throw new Error("vault missing"); },
+    });
+    expect(calls).toEqual(["swap"]); // finalize completed despite the throw
+  });
+
+  it("no stampBeef dep (BEEF disabled) -> finalize unchanged", async () => {
+    const calls: string[] = [];
+    await finalizeSettled(7, {
+      joinedWallets: async () => [],
+      reconcileMiner: async () => {},
+      executeSwap: async () => { calls.push("swap"); },
+    });
+    expect(calls).toEqual(["swap"]);
+  });
+});

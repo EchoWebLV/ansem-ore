@@ -1,6 +1,7 @@
 import {
   ConfigState, RoundStateData, fetchConfig, fetchRound, fetchMiner,
   configPda, roundPda, minerPda, sleep, DLP_PROGRAM_ID,
+  fetchBeefConfig, beefConfigPda,
 } from "@ansem/sdk";
 import type { KeeperConfig } from "./env.js";
 import { buildChain, Chain } from "./chain.js";
@@ -67,6 +68,17 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
     async start() {
       server = await startReadServer(cfg.httpPort, () => latest);
       log.info("keeper up", { httpPort: server.port, keeper: ctx.keeper.toBase58() });
+
+      // BEEF emission layer: enabled iff BeefConfig exists on-chain at startup.
+      try {
+        const bc = await fetchBeefConfig(ctx.program, beefConfigPda());
+        ctx.beefEnabled = true;
+        ctx.beefVault = bc.beefVault;
+        ctx.log.info("BEEF emission enabled", { vault: bc.beefVault.toBase58() });
+      } catch {
+        ctx.log.info("BEEF not initialized — emission stamping disabled");
+      }
+
       running = true;
       let state: TickState = { prevSnapshot: null, vrfPendingSinceSec: null };
       while (running) {

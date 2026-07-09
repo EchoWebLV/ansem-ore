@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import {
   AnsemMiner, roundPda, minerPda, escrowPda,
   createRoundIx, delegateRoundIx, requestSettleIx, commitRoundIx, commitMinerIx,
-  reconcileMinerIx, executeSwapMockIx, cancelRoundIx, setRoundDurationIx,
+  reconcileMinerIx, executeSwapMockIx, cancelRoundIx, setRoundDurationIx, stampBeefIx,
   erRpcTolerant, retryPastDeadline, l1Send, awaitOwnerIs, flushCommit, fetchMiner,
   DLP_PROGRAM_ID, PROGRAM_ID,
 } from "@ansem/sdk";
@@ -22,6 +22,9 @@ export interface ActionCtx {
   /** Direct-stake mode: rounds stay on L1 (never delegated) so players can
    *  stake_direct against them; the commit/reconcile stages never fire. */
   directMode?: boolean;
+  /** BEEF emission layer: set at startup if BeefConfig exists on-chain. */
+  beefEnabled?: boolean;
+  beefVault?: PublicKey;
   log: Logger;
 }
 
@@ -112,6 +115,9 @@ export interface FinalizeDeps {
   joinedWallets: () => Promise<PublicKey[]>;
   reconcileMiner: (wallet: PublicKey) => Promise<void>;
   executeSwap: () => Promise<void>;
+  /** BEEF emission stamp — best-effort, always after the swap. Optional: absent
+   *  when BEEF isn't initialized. A throw here must never block finalize. */
+  stampBeef?: () => Promise<void>;
 }
 
 /**
@@ -125,6 +131,10 @@ export async function finalizeSettled(_roundId: number, deps: FinalizeDeps): Pro
     await deps.reconcileMiner(w);
   }
   await deps.executeSwap();
+  if (deps.stampBeef) {
+    try { await deps.stampBeef(); }
+    catch { /* best-effort: BEEF never blocks the game (invariant) */ }
+  }
 }
 
 export function liveFinalizeDeps(ctx: ActionCtx, roundId: number): FinalizeDeps {
@@ -136,6 +146,10 @@ export function liveFinalizeDeps(ctx: ActionCtx, roundId: number): FinalizeDeps 
       await l1Send(() => executeSwapMockIx(ctx.program, ctx.keeper, roundId).rpc());
       ctx.log.info("round swapped -> CLAIMABLE", { roundId });
     },
+    stampBeef: ctx.beefEnabled && ctx.beefVault ? async () => {
+      await l1Send(() => stampBeefIx(ctx.program, ctx.keeper, roundId, ctx.beefVault!).rpc());
+      ctx.log.info("beef emission stamped", { roundId });
+    } : undefined,
   };
 }
 
