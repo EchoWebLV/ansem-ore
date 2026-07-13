@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey, Keypair, Transaction } from "@solana/web3.js";
 import { assert } from "chai";
-import { createMint, createAccount, mintTo, getAccount, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { createMint, createAccount, mintTo, transfer, getAccount, getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 const enc = (s: string) => Buffer.from(s);
 const u64le = (n: number) => new anchor.BN(n).toArrayLike(Buffer, "le", 8);
@@ -359,5 +359,84 @@ describe("beef vault emission", () => {
     assert.isAtMost(VAULT_FILL - stillVaulted, VAULT_FILL); // paid <= filled
     const bc = await program.account.beefConfig.fetch(beefConfigPda);
     assert.isAtMost(bc.totalOwed.toNumber(), stillVaulted); // owed always covered
+  });
+
+  // ---- Task 4: sweep_beef_excess (admin-gated, solvency-bounded token exit) ----
+  // Only BEEF ABOVE the total_owed solvency ledger may leave the vault. The fixtures
+  // above have accrued a real liability (rolled, still-unclaimed shares -> total_owed>0)
+  // AND a large free surplus, so the boundary `amount <= vault.amount - total_owed` is
+  // meaningfully exercised. This test is placed AFTER the suite's last vault-balance
+  // assertion (the SOLVENCY invariant above) and additionally RESTORES the vault to its
+  // exact pre-sweep balance at the end, so it cannot disturb any earlier assertion.
+  const sweepBeefAccounts = (destAta: PublicKey, adminPk: PublicKey) => ({
+    admin: adminPk,
+    config: configPda,
+    beefConfig: beefConfigPda,
+    vaultAuthority: vaultAuth,
+    beefVault,
+    destinationAta: destAta,
+  });
+
+  it("sweep_beef_excess: exact free surplus leaves; +1 unit and non-admin fail; vault restored", async () => {
+    const bc0 = await program.account.beefConfig.fetch(beefConfigPda);
+    const v0 = await getAccount(provider.connection, beefVault);
+    const vaultAmt = v0.amount;
+    const owed = BigInt(bc0.totalOwed.toString());
+    const free = vaultAmt - owed;
+    // Fixtures must give us a real liability AND a real surplus for the boundary to bite.
+    assert.isAbove(bc0.totalOwed.toNumber(), 0, "fixtures left a real BEEF liability (total_owed > 0)");
+    assert.isAbove(Number(free), 0, "there is free BEEF above the owed floor to sweep");
+
+    // Admin-owned destination token account for the beef mint (any owner is allowed;
+    // the ix only constrains token::mint == beef_config.beef_mint).
+    const destAta = await createAccount(
+      provider.connection, admin.payer, beefMint, admin.publicKey, Keypair.generate()
+    );
+
+    // (a) non-admin signer -> Unauthorized (no tokens move).
+    const outsider = await fundedPlayer(1);
+    try {
+      await (program.methods as any)
+        .sweepBeefExcess(new anchor.BN(free.toString()))
+        .accounts(sweepBeefAccounts(destAta, outsider.publicKey))
+        .signers([outsider])
+        .rpc();
+      assert.fail("a non-admin must not be able to sweep BEEF");
+    } catch (e: any) {
+      assert.include(e.toString(), "Unauthorized");
+    }
+
+    // (b) one base unit ABOVE the free surplus -> InsufficientBalance (solvency floor).
+    try {
+      await (program.methods as any)
+        .sweepBeefExcess(new anchor.BN((free + 1n).toString()))
+        .accounts(sweepBeefAccounts(destAta, admin.publicKey))
+        .rpc();
+      assert.fail("sweeping into the owed floor must be rejected");
+    } catch (e: any) {
+      assert.include(e.toString(), "InsufficientBalance");
+    }
+
+    // (c) exactly the free surplus succeeds and drains the vault down to total_owed.
+    await (program.methods as any)
+      .sweepBeefExcess(new anchor.BN(free.toString()))
+      .accounts(sweepBeefAccounts(destAta, admin.publicKey))
+      .rpc();
+
+    const vaultAfter = (await getAccount(provider.connection, beefVault)).amount;
+    const destAfter = (await getAccount(provider.connection, destAta)).amount;
+    const bc1 = await program.account.beefConfig.fetch(beefConfigPda);
+    assert.equal(destAfter.toString(), free.toString(), "destination received exactly the free surplus");
+    assert.equal(vaultAfter.toString(), owed.toString(), "vault drained down to exactly total_owed");
+    assert.equal(bc1.totalOwed.toString(), bc0.totalOwed.toString(), "total_owed ledger unchanged by the sweep");
+    // Solvency invariant still holds: the vault fully covers everything owed.
+    assert.isAtLeast(Number(vaultAfter), bc1.totalOwed.toNumber());
+
+    // RESTORE: deposit the swept BEEF back so the vault balance is exactly as before
+    // (plain permissionless SPL transfer, admin ATA -> vault). Proves no interference:
+    // the suite's vault ends identical to its pre-sweep state.
+    await transfer(provider.connection, admin.payer, destAta, beefVault, admin.payer, free);
+    const vaultRestored = (await getAccount(provider.connection, beefVault)).amount;
+    assert.equal(vaultRestored.toString(), vaultAmt.toString(), "vault fully restored to its pre-sweep balance");
   });
 });

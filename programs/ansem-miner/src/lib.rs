@@ -189,4 +189,17 @@ pub mod ansem_miner {
     pub fn claim_beef(ctx: Context<ClaimBeef>) -> Result<()> {
         instructions::beef::claim_beef_handler(ctx)
     }
+
+    // ---- Task 4: solvency-bounded owner exits (mainnet wind-down) ----
+    // Ungated (live mainnet paths, present in the no-feature binary). Both are
+    // admin-gated on config.admin inside their account structs. sweep_treasury moves
+    // treasury SOL to any destination while keeping the PDA rent-alive; sweep_beef_excess
+    // moves BEEF above the total_owed solvency floor to an admin-named ATA.
+    pub fn sweep_treasury(ctx: Context<SweepTreasury>, amount: u64) -> Result<()> {
+        instructions::sweep::sweep_treasury_handler(ctx, amount)
+    }
+
+    pub fn sweep_beef_excess(ctx: Context<SweepBeefExcess>, amount: u64) -> Result<()> {
+        instructions::sweep::sweep_beef_excess_handler(ctx, amount)
+    }
 }

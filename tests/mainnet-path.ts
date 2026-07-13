@@ -474,4 +474,94 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     // solvency: never pay more than the frozen entitlement.
     assert.isAtMost(Number(r1.claimedProceeds), Number(r1.entitlementTotal));
   });
+
+  // ---- Task 4: sweep_treasury (admin-gated SOL exit, rent-floored) ----
+  // The real swap above moved the whole SOL pot pot_vault -> treasury. sweep_treasury
+  // lets config.admin move lamports OUT to ANY destination it names, but must always
+  // leave >= the rent-exemption minimum for a 0-data account, so the treasury PDA can
+  // never be closed out from under the program. Runs on the post-swap treasury.
+  const sweepTreasuryAccounts = (destPk: PublicKey, adminPk: PublicKey) => ({
+    admin: adminPk,
+    config: configPda,
+    treasury,
+    destination: destPk,
+  });
+
+  it("sweep_treasury rejects a non-admin signer (Unauthorized)", async () => {
+    const dest = Keypair.generate().publicKey;
+    const treasuryBefore = BigInt(await provider.connection.getBalance(treasury));
+    try {
+      await (program.methods as any)
+        .sweepTreasury(new anchor.BN(1))
+        .accounts(sweepTreasuryAccounts(dest, stranger.publicKey))
+        .signers([stranger])
+        .rpc();
+      assert.fail("a non-admin must not be able to sweep the treasury");
+    } catch (e: any) {
+      assert.include(e.toString(), "Unauthorized");
+    }
+    const treasuryAfter = BigInt(await provider.connection.getBalance(treasury));
+    assert.equal(
+      treasuryAfter.toString(),
+      treasuryBefore.toString(),
+      "treasury untouched by the rejected sweep"
+    );
+  });
+
+  it("sweep_treasury refuses to dip below the rent-exemption floor (InsufficientBalance)", async () => {
+    const dest = Keypair.generate().publicKey;
+    const rentMin = BigInt(await provider.connection.getMinimumBalanceForRentExemption(0));
+    const treasuryBal = BigInt(await provider.connection.getBalance(treasury));
+    // One lamport MORE than the sweepable surplus (balance - rent_min) must be refused.
+    const over = (treasuryBal - rentMin + 1n).toString();
+    try {
+      await (program.methods as any)
+        .sweepTreasury(new anchor.BN(over))
+        .accounts(sweepTreasuryAccounts(dest, keeperAdmin.publicKey))
+        .signers([keeperAdmin])
+        .rpc();
+      assert.fail("over-sweeping past the rent floor must be rejected");
+    } catch (e: any) {
+      assert.include(e.toString(), "InsufficientBalance");
+    }
+    const treasuryAfter = BigInt(await provider.connection.getBalance(treasury));
+    assert.isAtLeast(
+      Number(treasuryAfter),
+      Number(rentMin),
+      "treasury still holds at least the rent floor after the rejected over-sweep"
+    );
+  });
+
+  it("sweep_treasury moves the surplus to the named destination and leaves exactly the rent floor", async () => {
+    const dest = Keypair.generate().publicKey;
+    const rentMin = BigInt(await provider.connection.getMinimumBalanceForRentExemption(0));
+    const treasuryBefore = BigInt(await provider.connection.getBalance(treasury));
+    const amount = treasuryBefore - rentMin; // sweep the entire surplus down to the floor
+    assert.isAbove(Number(amount), 0, "the post-swap pot is a real surplus to sweep");
+    const destBefore = BigInt(await provider.connection.getBalance(dest)); // fresh account: 0
+
+    await (program.methods as any)
+      .sweepTreasury(new anchor.BN(amount.toString()))
+      .accounts(sweepTreasuryAccounts(dest, keeperAdmin.publicKey))
+      .signers([keeperAdmin])
+      .rpc();
+
+    const destAfter = BigInt(await provider.connection.getBalance(dest));
+    const treasuryAfter = BigInt(await provider.connection.getBalance(treasury));
+    assert.equal(
+      (destAfter - destBefore).toString(),
+      amount.toString(),
+      "destination received the full swept surplus"
+    );
+    assert.isAtLeast(
+      Number(treasuryAfter),
+      Number(rentMin),
+      "treasury kept at least the rent-exemption floor"
+    );
+    assert.equal(
+      treasuryAfter.toString(),
+      rentMin.toString(),
+      "treasury left at exactly the rent floor (boundary is inclusive)"
+    );
+  });
 });
