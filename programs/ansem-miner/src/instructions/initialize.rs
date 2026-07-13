@@ -67,6 +67,9 @@ pub fn initialize_handler(ctx: Context<Initialize>) -> Result<()> {
     c.mock_rate = DEFAULT_MOCK_RATE;
     c.total_escrow_balance = 0;
     c.rollover_jackpot = 0;
+    c.ansem_obligations = 0;
+    c.claim_window_secs = DEFAULT_CLAIM_WINDOW_SECS;
+    c.min_swap_rate = 0;
     // No round exists yet; treat as finalized so the first create_round passes.
     c.current_round_finalized = true;
     c.config_bump = ctx.bumps.config;

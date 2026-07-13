@@ -23,5 +23,10 @@ pub struct Round {
     pub jackpot_square: u8,
     pub jackpot_pool: u64,
     pub swap_proceeds: u64,
+    // Frozen at swap: nj_total + jackpot_pool — the most this round's claimants
+    // can ever draw. claimed_proceeds accumulates actual payouts; the difference
+    // is what close_round forfeits into the next jackpot.
+    pub entitlement_total: u64,
+    pub claimed_proceeds: u64,
     pub bump: u8,
 }

@@ -4,8 +4,27 @@ import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { assert } from "chai";
 import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { keccak256 } from "js-sha3";
 
 const enc = (s: string) => Buffer.from(s);
+
+// Mirror the on-chain payout math (programs/ansem-miner/src/math.rs) so the test
+// can independently recompute a round's frozen non-jackpot entitlement. js-sha3
+// keccak256 == Solana's hashv (keccak-256); byte packing matches multiplier_bps.
+const multiplierBps = (rnd: number[], square: number, minBps: number, maxBps: number): bigint => {
+  const h = keccak256.array([...rnd, square & 0xff]);
+  const x = h[0] | (h[1] << 8);
+  return BigInt(minBps + (x % ((maxBps - minBps) + 1)));
+};
+const returnWeight = (blockSol: bigint[], rnd: number[], jsq: number, minBps: number, maxBps: number): bigint => {
+  let w = 0n;
+  for (let s = 0; s < 25; s++) if (s !== jsq) w += blockSol[s] * multiplierBps(rnd, s, minBps, maxBps);
+  return w;
+};
+const nonjackpotPayout = (weight: bigint, pot: bigint, proceeds: bigint): bigint =>
+  pot === 0n ? 0n : (proceeds * weight) / (pot * 10_000n);
+const jackpotBlock = (rnd: number[], domain: string): number =>
+  keccak256.array([...rnd, ...Buffer.from(domain)])[0] % 25;
 
 // Direct-stake engine suite (ORE model): SOL moves wallet->pot INSIDE the stake
 // tx; no escrow/session/delegation. Pull-claims; idempotency via block_stake
@@ -165,6 +184,25 @@ describe("direct-stake engine", () => {
     assert.equal(r.swapProceeds.toNumber(), 396_000_000 * 2.8);
   });
 
+  it("swap tracks obligations + freezes entitlement_total (nj_total + jackpot_pool)", async () => {
+    const cfg: any = await program.account.config.fetch(configPda);
+    const r: any = await program.account.round.fetch(round.pda);
+    // First swap (rollover started at 0): every base unit just minted is now owed.
+    assert.equal(cfg.ansemObligations.toString(), r.swapProceeds.toString());
+    // Recompute nj_total exactly as the program does; the jackpot square derived
+    // from our keccak mirror must equal the on-chain one (guards the TS math).
+    const rnd = Array.from(r.randomness as number[]).map(Number);
+    const jsq = jackpotBlock(rnd, "jackpot");
+    assert.equal(jsq, r.jackpotSquare);
+    const blockSol = (r.blockSol as anchor.BN[]).map((b) => BigInt(b.toString()));
+    const w = returnWeight(blockSol, rnd, jsq, cfg.multMinBps, cfg.multMaxBps);
+    const expectedNjTotal = nonjackpotPayout(w, BigInt(r.pot.toString()), BigInt(r.swapProceeds.toString()));
+    assert.equal(
+      r.entitlementTotal.toString(),
+      (expectedNjTotal + BigInt(r.jackpotPool.toString())).toString()
+    );
+  });
+
   it("stake_direct on an ENDED round is rejected", async () => {
     try {
       await program.methods.stakeDirect(new anchor.BN(round.id), 0, new anchor.BN(P2_TOTAL))
@@ -177,14 +215,30 @@ describe("direct-stake engine", () => {
     p1Ata = getAssociatedTokenAddressSync(ansemMint, p1.publicKey);
     p2Ata = getAssociatedTokenAddressSync(ansemMint, p2.publicKey);
 
+    // Each claim must move exactly `paid` from the config obligations ledger into
+    // this round's claimed_proceeds (ATAs start empty, so paid == the new balance).
+    const cfg0: any = await program.account.config.fetch(configPda);
+    const r0: any = await program.account.round.fetch(round.pda);
+
     await program.methods.claimDirect(new anchor.BN(round.id))
       .accounts(claimDirectAccts(p1.publicKey, round.pda, p1Ata)).signers([p1]).rpc();
+    const paid1 = (await getAccount(provider.connection, p1Ata)).amount;
+    const cfg1: any = await program.account.config.fetch(configPda);
+    const r1: any = await program.account.round.fetch(round.pda);
+    assert.equal(r1.claimedProceeds.sub(r0.claimedProceeds).toString(), paid1.toString());
+    assert.equal(cfg0.ansemObligations.sub(cfg1.ansemObligations).toString(), paid1.toString());
+
     await program.methods.claimDirect(new anchor.BN(round.id))
       .accounts(claimDirectAccts(p2.publicKey, round.pda, p2Ata)).signers([p2]).rpc();
+    const paid2 = (await getAccount(provider.connection, p2Ata)).amount;
+    const cfg2: any = await program.account.config.fetch(configPda);
+    const r2c: any = await program.account.round.fetch(round.pda);
+    assert.equal(r2c.claimedProceeds.sub(r1.claimedProceeds).toString(), paid2.toString());
+    assert.equal(cfg1.ansemObligations.sub(cfg2.ansemObligations).toString(), paid2.toString());
 
-    const r = await program.account.round.fetch(round.pda);
-    const b1 = Number((await getAccount(provider.connection, p1Ata)).amount);
-    const b2 = Number((await getAccount(provider.connection, p2Ata)).amount);
+    const r = r2c;
+    const b1 = Number(paid1);
+    const b2 = Number(paid2);
     assert.isAbove(b1 + b2, 0);
     assert.isAtMost(b1 + b2, r.swapProceeds.toNumber()); // solvency: never over-pay
 

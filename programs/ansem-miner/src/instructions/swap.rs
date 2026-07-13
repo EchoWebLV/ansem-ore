@@ -149,12 +149,26 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
             .ok_or(AnsemError::Overflow)?
     };
 
+    // Freeze the ceiling this round's claimants can ever draw (nj returns + the
+    // jackpot pool). close_round later forfeits (entitlement - claimed) to rollover.
+    round.entitlement_total = nj_total
+        .checked_add(round.jackpot_pool)
+        .ok_or(AnsemError::Overflow)?;
+
     round.state = STATE_CLAIMABLE;
 
     // Persist the rollover accounting + re-arm the create_round gate. The round
     // is now finalized (Claimable); under the serialization gate the only
     // non-finalized round is always the current one.
     ctx.accounts.config.rollover_jackpot = new_rollover;
+    // Everything just minted is now owed to this round's claimants; add it to the
+    // solvency ledger (claims subtract it back down as players withdraw).
+    ctx.accounts.config.ansem_obligations = ctx
+        .accounts
+        .config
+        .ansem_obligations
+        .checked_add(ansem_out)
+        .ok_or(AnsemError::Overflow)?;
     ctx.accounts.config.current_round_finalized = true;
     Ok(())
 }

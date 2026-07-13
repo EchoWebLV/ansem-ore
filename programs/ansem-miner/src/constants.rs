@@ -30,6 +30,9 @@ pub const DEFAULT_MIN_STAKE: u64 = 10_000_000;              // 0.01 SOL
 pub const DEFAULT_MAX_STAKE_PER_ROUND: u64 = 100 * LAMPORTS_PER_SOL;
 // base units of ANSEM minted per 1 SOL: 2800 ANSEM * 10^6 decimals
 pub const DEFAULT_MOCK_RATE: u64 = 2_800 * 1_000_000;
+// Claims stay open this long after a round's deadline before close_round may
+// reap it and forfeit the unclaimed remainder (ORE ONE_DAY precedent).
+pub const DEFAULT_CLAIM_WINDOW_SECS: i64 = 86_400;
 
 // swap modes
 pub const SWAP_MODE_MOCK: u8 = 0;

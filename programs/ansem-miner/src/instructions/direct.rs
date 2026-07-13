@@ -101,10 +101,10 @@ pub struct ClaimDirect<'info> {
     pub authority: Signer<'info>,
 
     // Box'd: same 4KB BPF stack-frame reasoning as Claim.
-    #[account(seeds = [CONFIG_SEED], bump = config.config_bump)]
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.config_bump)]
     pub config: Box<Account<'info, Config>>,
 
-    #[account(seeds = [ROUND_SEED, round_id.to_le_bytes().as_ref()], bump = round.bump,
+    #[account(mut, seeds = [ROUND_SEED, round_id.to_le_bytes().as_ref()], bump = round.bump,
         constraint = round.round_id == round_id @ AnsemError::MinerRoundMismatch)]
     pub round: Box<Account<'info, Round>>,
 
@@ -169,6 +169,14 @@ pub fn claim_direct_handler(ctx: Context<ClaimDirect>, _round_id: u64) -> Result
             amount,
         )?;
     }
+
+    // Ledger: this round paid out `amount` of its entitlement — record it and
+    // draw down the config solvency total by the same.
+    let round = &mut ctx.accounts.round;
+    round.claimed_proceeds = round.claimed_proceeds.saturating_add(amount);
+    let cfg = &mut ctx.accounts.config;
+    // saturating: a ledger drift must never block a player's claim.
+    cfg.ansem_obligations = cfg.ansem_obligations.saturating_sub(amount);
 
     // Idempotency: zero the stakes — a re-claim computes weight 0 and pays 0.
     miner.block_stake = [0u64; GRID_SIZE];
