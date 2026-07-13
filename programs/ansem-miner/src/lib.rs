@@ -18,8 +18,19 @@ declare_id!("8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz");
 pub mod ansem_miner {
     use super::*;
 
+    // Devnet/test-only: mints a PDA ANSEM mint and self-assigns the signer as admin.
+    // Stripped from the mainnet binary (see Cargo.toml `devnet` feature); mainnet
+    // initializes via `initialize_real` (upgrade-authority-gated, external mint).
+    #[cfg(feature = "devnet")]
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         instructions::initialize::initialize_handler(ctx)
+    }
+
+    // Mainnet init: gated to the program's upgrade authority (kills init-squatting)
+    // and binds a pre-existing external ANSEM mint. The signer is only the upgrade
+    // authority; `keeper_admin` (the Railway hot key) becomes `config.admin`.
+    pub fn initialize_real(ctx: Context<InitializeReal>, keeper_admin: Pubkey) -> Result<()> {
+        instructions::initialize::initialize_real_handler(ctx, keeper_admin)
     }
 
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
@@ -66,15 +77,21 @@ pub mod ansem_miner {
     }
 
     // DEVNET/TEST-ONLY migration tool — see instructions/admin.rs::close_config.
+    #[cfg(feature = "devnet")]
     pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {
         instructions::admin::close_config(ctx)
     }
 
     // DEVNET/TEST-ONLY migration tool — see instructions/admin.rs::set_round_cursor.
+    #[cfg(feature = "devnet")]
     pub fn set_round_cursor(ctx: Context<SetParams>, new_id: u64) -> Result<()> {
         instructions::admin::set_round_cursor(ctx, new_id)
     }
 
+    // Devnet/test-only: mints proceeds from the PDA mint at a fixed mock rate. The
+    // mainnet payout path is `execute_swap_real` (Jupiter inventory). Gated out of
+    // the mainnet binary with the rest of the mock/migration surface.
+    #[cfg(feature = "devnet")]
     pub fn execute_swap_mock(ctx: Context<ExecuteSwapMock>) -> Result<()> {
         instructions::swap::execute_swap_mock_handler(ctx)
     }

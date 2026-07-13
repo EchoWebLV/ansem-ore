@@ -11,8 +11,19 @@ PROGRAM_KP="$REPO_ROOT/target/deploy/ansem_miner-keypair.json"
 BUFFER_KP="$REPO_ROOT/target/deploy/ansem_miner-buffer.json"   # persistent → resumable
 PROGRAM_ID="8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz"
 
+# Build the DEVNET binary: sBPF v3 (loader-v3) WITH the `devnet` feature, so the mock
+# `initialize`, `execute_swap_mock`, `close_config` and `set_round_cursor` migration
+# tools are present for the devnet reset/soak workflow. The MAINNET binary is built
+# WITHOUT this feature (its only init path is `initialize_real`) — see docs/mainnet-launch.md.
+# anchor build can't pass --tools-version, so build the .so directly (v3 needs v1.54).
+# Set SKIP_BUILD=1 to deploy a pre-built .so instead.
+if [ -z "${SKIP_BUILD:-}" ]; then
+  echo "Building sBPF-v3 devnet binary (--features devnet) ..."
+  cargo build-sbf --arch v3 --tools-version v1.54 --features devnet
+fi
+
 # Pre-flight guards.
-[ -f "$SO" ] || { echo "ERROR: $SO missing — build phase 0 first"; exit 1; }
+[ -f "$SO" ] || { echo "ERROR: $SO missing — run without SKIP_BUILD to build it first"; exit 1; }
 LLVM_READELF=$(ls ~/.cache/solana/*/platform-tools/llvm/bin/llvm-readelf | head -1)
 FLAGS=$("$LLVM_READELF" -h "$SO" | awk '/Flags/{print $2}')
 [ "$FLAGS" = "0x3" ] || { echo "ERROR: .so is not sBPF v3 (Flags=$FLAGS) — rebuild with ARCH=v3"; exit 1; }

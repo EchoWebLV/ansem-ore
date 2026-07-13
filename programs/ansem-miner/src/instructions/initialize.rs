@@ -3,6 +3,7 @@ use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{Mint, Token};
 
 use crate::constants::*;
+use crate::error::AnsemError;
 use crate::state::Config;
 
 #[derive(Accounts)]
@@ -65,6 +66,83 @@ pub fn initialize_handler(ctx: Context<Initialize>) -> Result<()> {
     c.min_stake = DEFAULT_MIN_STAKE;
     c.max_stake_per_round = DEFAULT_MAX_STAKE_PER_ROUND;
     c.mock_rate = DEFAULT_MOCK_RATE;
+    c.total_escrow_balance = 0;
+    c.rollover_jackpot = 0;
+    c.ansem_obligations = 0;
+    c.claim_window_secs = DEFAULT_CLAIM_WINDOW_SECS;
+    c.min_swap_rate = 0;
+    // No round exists yet; treat as finalized so the first create_round passes.
+    c.current_round_finalized = true;
+    c.config_bump = ctx.bumps.config;
+    c.pot_vault_bump = ctx.bumps.pot_vault;
+    c.treasury_bump = ctx.bumps.treasury;
+    c.vault_auth_bump = ctx.bumps.vault_authority;
+    c.mint_auth_bump = ctx.bumps.mint_authority;
+    Ok(())
+}
+
+// ---- Mainnet real init (plan 2026-07-14) ----
+// Like `Initialize`, but (1) gated to the program's UPGRADE AUTHORITY so an attacker
+// cannot front-run initialization, and (2) binds a pre-existing EXTERNAL ANSEM mint
+// (no PDA mint is created and the program holds no authority over it). The signer is
+// only the upgrade authority; the admin key is passed in (`keeper_admin`).
+#[derive(Accounts)]
+pub struct InitializeReal<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        init, payer = admin, space = 8 + Config::INIT_SPACE,
+        seeds = [CONFIG_SEED], bump
+    )]
+    pub config: Account<'info, Config>,
+
+    // The REAL ANSEM mint — pre-existing, we hold no authority over it.
+    pub ansem_mint: Account<'info, Mint>,
+
+    /// CHECK: mint authority PDA — bump recorded for layout parity; unused in real mode
+    #[account(seeds = [MINT_AUTH_SEED], bump)]
+    pub mint_authority: UncheckedAccount<'info>,
+
+    /// CHECK: vault authority PDA (owns the payout ATA, created lazily at swap)
+    #[account(seeds = [VAULT_AUTH_SEED], bump)]
+    pub vault_authority: UncheckedAccount<'info>,
+
+    /// CHECK: SOL pot vault PDA
+    #[account(seeds = [POT_VAULT_SEED], bump)]
+    pub pot_vault: UncheckedAccount<'info>,
+
+    /// CHECK: treasury PDA (SOL)
+    #[account(seeds = [TREASURY_SEED], bump)]
+    pub treasury: UncheckedAccount<'info>,
+
+    // Init-squat guard: only the program's upgrade authority may initialize.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ AnsemError::Unauthorized)]
+    pub program: Program<'info, crate::program::AnsemMiner>,
+    #[account(constraint = program_data.upgrade_authority_address == Some(admin.key()) @ AnsemError::Unauthorized)]
+    pub program_data: Account<'info, ProgramData>,
+
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_real_handler(ctx: Context<InitializeReal>, keeper_admin: Pubkey) -> Result<()> {
+    let c = &mut ctx.accounts.config;
+    // The signer is the UPGRADE AUTHORITY (the cold deploy wallet that stays in
+    // Phantom); the ADMIN is the passed keeper hot key (Railway) that cranks the
+    // admin-gated ixs. Deliberately no `set_admin`: if the hot key leaks, the
+    // upgrade authority ships a one-line upgrade to rotate `config.admin`.
+    c.admin = keeper_admin;
+    c.ansem_mint = ctx.accounts.ansem_mint.key();
+    c.swap_mode = SWAP_MODE_JUPITER;
+    c.current_round_id = 0;
+    c.round_duration_secs = DEFAULT_ROUND_DURATION_SECS;
+    c.fee_bps = DEFAULT_FEE_BPS;
+    c.mult_min_bps = DEFAULT_MULT_MIN_BPS;
+    c.mult_max_bps = DEFAULT_MULT_MAX_BPS;
+    c.min_stake = DEFAULT_MIN_STAKE;
+    c.max_stake_per_round = DEFAULT_MAX_STAKE_PER_ROUND;
+    // No PDA mint / no mock proceeds in real mode; proceeds come from Jupiter.
+    c.mock_rate = 0;
     c.total_escrow_balance = 0;
     c.rollover_jackpot = 0;
     c.ansem_obligations = 0;
