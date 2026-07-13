@@ -182,7 +182,7 @@ pub struct InitializeReal<'info> {
 }
 ```
 
-Handler = `initialize_handler` body with: `swap_mode = SWAP_MODE_JUPITER`, `mock_rate = 0`, same defaults otherwise, bumps from `ctx.bumps`. Entrypoint in `lib.rs` (ungated).
+Handler signature: `initialize_real_handler(ctx, keeper_admin: Pubkey)` — body = `initialize_handler` with: `c.admin = keeper_admin` (NOT the signer: the signer is the upgrade authority / deploy wallet, which stays cold in Phantom; `keeper_admin` is the Railway hot key that cranks admin-gated ixs), `swap_mode = SWAP_MODE_JUPITER`, `mock_rate = 0`, same defaults otherwise, bumps from `ctx.bumps`. Entrypoint in `lib.rs` (ungated). Key-separation escape hatch: there is deliberately no `set_admin` ix — if the hot key leaks, the upgrade authority ships a one-line upgrade to rotate `config.admin`. Test addition: `initializeReal(keeperAdmin)` with a fresh pubkey → `config.admin == keeperAdmin`, and admin-gated ixs signed by the deployer now FAIL `Unauthorized` while the keeper key succeeds.
 
 - [ ] **Step 5: Run** `anchor test -- --features devnet` — PASS (new suite + all legacy suites, which need the mock `initialize` and therefore the feature).
 - [ ] **Step 6: Update `scripts/deploy-devnet.sh`** to build with `--features devnet`. Verify `anchor build` (no features) compiles clean — that is the mainnet binary.
@@ -468,11 +468,11 @@ pub fn close_round_handler(ctx: Context<CloseRound>) -> Result<()> {
 - [ ] `solana-verify build --library-name ansem_miner` (Docker required — deploy THIS `.so`, never a local `anchor build`).
 - [ ] **GATE B** — fund deploy wallet (~20 SOL). `solana program deploy -u <HELIUS_RPC> target/deploy/ansem_miner.so --program-id 8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz` (upgrade authority = deploy wallet, per decision).
 - [ ] `solana-verify verify-from-repo -u <RPC> --program-id 8Q9En… https://github.com/EchoWebLV/ansem-ore --commit-hash <sha> --library-name ansem_miner --mount-path programs/ansem-miner` → `solana-verify remote submit-job …` → badge.
-- [ ] **GATE A** — user confirms real ANSEM CA; verify decimals + Jupiter route right then. `initialize_real` with it; then `set_return_band 0 0`, `set_round_duration 300`, `set_claim_window 86400`, `set_min_swap_rate <0.7 × live Jupiter quote>`, `min_stake` default 0.01 stays, `max_stake_per_round` → 1 SOL.
+- [ ] **GATE A** — user confirms real ANSEM CA (candidate verified 2026-07-14: `9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump`, 6 decimals, mint+freeze authority renounced, ~$2.3M Meteora liquidity). `solana-keygen new -o keeper-mainnet.json` (fresh hot key for Railway). `initialize_real(keeper_admin = <keeper pubkey>)` signed by the DEPLOY wallet (`lazer-probe.json` / FP39zt…, Phantom-imported); then, signed by the KEEPER key: `set_return_band 0 0`, `set_round_duration 300`, `set_claim_window 86400`, `set_min_swap_rate <0.7 × live Jupiter quote>`, `min_stake` default 0.01 stays, `max_stake_per_round` → 1 SOL.
 
 ### Task 11: Services
 
-- [ ] Helius mainnet key (user creates; free tier vs poll volume check). Keeper → Railway: `KEEPER_DIRECT_MODE=1 SWAP_MODE=real RPC=… VRF_BASE_QUEUE=Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh` + funded keeper wallet (~5 SOL) — same key as `config.admin`.
+- [ ] Helius mainnet key (user creates; free tier vs poll volume check). Keeper → Railway: `KEEPER_DIRECT_MODE=1 SWAP_MODE=real RPC=… VRF_BASE_QUEUE=Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh` + the FRESH `keeper-mainnet.json` (= `config.admin`, holds only ~5 SOL float + ANSEM inventory). The deploy wallet's key NEVER goes to Railway.
 - [ ] Buy initial ANSEM inventory (~1–2 SOL via Jupiter) into the keeper ATA.
 - [ ] App → Vercel prod with Task 8 env.
 
