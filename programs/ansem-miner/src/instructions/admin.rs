@@ -40,6 +40,16 @@ pub fn set_min_swap_rate(ctx: Context<SetParams>, rate: u64) -> Result<()> {
     Ok(())
 }
 
+// Set the claim window (seconds after a round's deadline during which claims stay
+// open; close_round refuses to reap a CLAIMABLE round any earlier). No floor: devnet
+// soak + these tests use tiny windows, while the mainnet launch script sets 86_400
+// (ORE's ONE_DAY forfeit precedent). Admin-gated via SetParams.
+pub fn set_claim_window(ctx: Context<SetParams>, secs: i64) -> Result<()> {
+    require!(secs >= 0, AnsemError::BadBeefParams);
+    ctx.accounts.config.claim_window_secs = secs;
+    Ok(())
+}
+
 // Admin-only migration/dev tool: close the Config PDA (rent -> admin) so a fresh
 // `initialize` can run after a state-layout change (e.g. the M4b lottery redesign
 // made the old on-chain Config binary-incompatible on devnet). `bump` is

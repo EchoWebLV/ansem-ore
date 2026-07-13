@@ -30,4 +30,6 @@ pub enum AnsemError {
     #[msg("Beef vault token account has wrong owner or mint")] BadBeefVault,
     #[msg("Invalid beef params (divisor and secs_per_tick must be > 0)")] BadBeefParams,
     #[msg("Swap proceeds below the configured min_swap_rate floor")] SwapRateTooLow,
+    #[msg("Claim window still open — round not yet closeable")] ClaimWindowOpen,
+    #[msg("Round is not in a closeable state")] RoundNotCloseable,
 }

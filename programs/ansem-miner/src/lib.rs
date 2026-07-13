@@ -82,6 +82,12 @@ pub mod ansem_miner {
         instructions::admin::set_min_swap_rate(ctx, rate)
     }
 
+    // Mainnet claim-window tuner (see instructions/admin.rs::set_claim_window).
+    // Ungated; admin-gated via SetParams. Launch script sets 86_400 (24h).
+    pub fn set_claim_window(ctx: Context<SetParams>, secs: i64) -> Result<()> {
+        instructions::admin::set_claim_window(ctx, secs)
+    }
+
     // DEVNET/TEST-ONLY migration tool — see instructions/admin.rs::close_config.
     #[cfg(feature = "devnet")]
     pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {
@@ -201,5 +207,14 @@ pub mod ansem_miner {
 
     pub fn sweep_beef_excess(ctx: Context<SweepBeefExcess>, amount: u64) -> Result<()> {
         instructions::sweep::sweep_beef_excess_handler(ctx, amount)
+    }
+
+    // ---- Task 5: permissionless round janitor (mainnet rent recycling) ----
+    // Ungated (a live mainnet path; present in the no-feature binary). Permissionless:
+    // gated only on time + state inside the accounts/handler. Reaps a window-expired
+    // CLAIMABLE round (forfeiting its unclaimed remainder into rollover_jackpot) or an
+    // empty cancelled round; rent always refunds to config.admin.
+    pub fn close_round(ctx: Context<CloseRound>) -> Result<()> {
+        instructions::janitor::close_round_handler(ctx)
     }
 }

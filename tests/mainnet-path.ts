@@ -564,4 +564,372 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
       "treasury left at exactly the rent floor (boundary is inclusive)"
     );
   });
+
+  // ---- Task 5: close_round janitor + set_claim_window ----
+  // Permissionless round reaper. A CLAIMABLE round closes only AFTER deadline +
+  // claim_window_secs (rent -> config.admin; the unclaimed remainder is forfeited
+  // into rollover_jackpot; obligations untouched — a pure earmark move). An EMPTY
+  // cancelled round (pot == 0) reaps instantly; a non-empty cancelled round refuses
+  // (refund_direct must stay alive). Any other state refuses. The claim window is
+  // read LIVE from config at close time, so these tests flex set_claim_window
+  // between a large value (gate blocks) and a small one (gate opens) to prove the
+  // window deterministically instead of racing the wall clock.
+  const closeRoundAccounts = (rPda: PublicKey, callerPk: PublicKey) => ({
+    caller: callerPk,
+    config: configPda,
+    round: rPda,
+    adminDest: keeperAdmin.publicKey,
+  });
+  const setClaimWindow = async (secs: number) =>
+    (program.methods as any)
+      .setClaimWindow(new anchor.BN(secs))
+      .accounts({ admin: keeperAdmin.publicKey })
+      .signers([keeperAdmin])
+      .rpc();
+  const createFreshRound = async (): Promise<{ id: number; pda: PublicKey }> => {
+    const cfg: any = await program.account.config.fetch(configPda);
+    const id = cfg.currentRoundId.toNumber() + 1;
+    const [pda] = PublicKey.findProgramAddressSync(
+      [enc("round"), new anchor.BN(id).toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+    await program.methods
+      .createRound()
+      .accounts({ payer: keeperAdmin.publicKey, round: pda })
+      .signers([keeperAdmin])
+      .rpc();
+    return { id, pda };
+  };
+  const settleWithRetry = async (pda: PublicKey) => {
+    for (let i = 0; i < 40; i++) {
+      try {
+        await program.methods
+          .settle([...RND])
+          .accounts(settleRealAccounts(pda))
+          .signers([keeperAdmin])
+          .rpc();
+        return;
+      } catch (e: any) {
+        if (!e.toString().includes("RoundNotEnded")) throw e;
+        await sleep(1000);
+      }
+    }
+    throw new Error("settle never succeeded (deadline never passed?)");
+  };
+  const cancelWithRetry = async (pda: PublicKey) => {
+    for (let i = 0; i < 40; i++) {
+      try {
+        await program.methods
+          .cancelRound()
+          .accountsPartial({ admin: keeperAdmin.publicKey, round: pda })
+          .signers([keeperAdmin])
+          .rpc();
+        return;
+      } catch (e: any) {
+        if (!e.toString().includes("RoundNotCancelable")) throw e;
+        await sleep(1000);
+      }
+    }
+    throw new Error("cancel never succeeded (deadline never passed?)");
+  };
+
+  // Fresh wallets per janitor round → isolated miner PDAs, no cross-test coupling.
+  const jWinner = Keypair.generate();
+  const jLoser = Keypair.generate();
+  const eWinner = Keypair.generate();
+  const eLoser = Keypair.generate();
+  const fStaker = Keypair.generate();
+  const randomCaller = Keypair.generate(); // permissionless closer: not admin, not fee payer
+  let jRoundId: number;
+  let jRoundPda: PublicKey;
+
+  it("set_claim_window rejects a negative window (BadBeefParams)", async () => {
+    try {
+      await (program.methods as any)
+        .setClaimWindow(new anchor.BN(-1))
+        .accounts({ admin: keeperAdmin.publicKey })
+        .signers([keeperAdmin])
+        .rpc();
+      assert.fail("a negative claim window must be rejected");
+    } catch (e: any) {
+      assert.include(e.toString(), "BadBeefParams");
+    }
+  });
+
+  it("close_round: an OPEN round is not closeable (RoundNotCloseable); then stake + settle", async () => {
+    // Short round + short window so the whole lifecycle runs with real (tiny) sleeps.
+    await program.methods
+      .setRoundDuration(new anchor.BN(3))
+      .accounts({ admin: keeperAdmin.publicKey })
+      .signers([keeperAdmin])
+      .rpc();
+    await setClaimWindow(3);
+    await airdrop(jWinner.publicKey, 3);
+    await airdrop(jLoser.publicKey, 3);
+
+    const created = await createFreshRound();
+    jRoundId = created.id;
+    jRoundPda = created.pda;
+
+    // (c) An OPEN round has neither a claim window nor a cancel behind it.
+    try {
+      await (program.methods as any)
+        .closeRound()
+        .accountsPartial(closeRoundAccounts(jRoundPda, stranger.publicKey))
+        .signers([stranger])
+        .rpc();
+      assert.fail("close_round must refuse an OPEN round");
+    } catch (e: any) {
+      assert.include(e.toString(), "RoundNotCloseable");
+    }
+    const rOpen: any = await program.account.round.fetch(jRoundPda);
+    assert.equal(rOpen.state, 0, "round survived the rejected close (still OPEN)");
+
+    await program.methods
+      .stakeDirect(new anchor.BN(jRoundId), jsq, new anchor.BN(WINNER_STAKE))
+      .accounts(stakeRealAccounts(jWinner.publicKey, jRoundPda))
+      .signers([jWinner])
+      .rpc();
+    await program.methods
+      .stakeDirect(new anchor.BN(jRoundId), loserSquare, new anchor.BN(LOSER_STAKE))
+      .accounts(stakeRealAccounts(jLoser.publicKey, jRoundPda))
+      .signers([jLoser])
+      .rpc();
+
+    await settleWithRetry(jRoundPda);
+    const rS: any = await program.account.round.fetch(jRoundPda);
+    assert.equal(rS.state, 2, "STATE_SETTLED");
+    assert.equal(rS.jackpotSquare, jsq, "forced jackpot square == our keccak draw");
+  });
+
+  it("close_round: swap the round to CLAIMABLE, winner claims PART (loser's share left unclaimed)", async () => {
+    await (program.methods as any)
+      .executeSwapReal(ANSEM_OUT)
+      .accounts(swapRealAccounts(jRoundPda, keeperAdmin.publicKey, keeperAta))
+      .signers([keeperAdmin])
+      .rpc();
+    const r1: any = await program.account.round.fetch(jRoundPda);
+    assert.equal(r1.state, 4, "STATE_CLAIMABLE");
+
+    // Winner (sole jackpot-square staker) claims their full jackpot share; the loser
+    // deliberately does NOT claim, so entitlement_total - claimed_proceeds > 0.
+    const jWinnerAta = getAssociatedTokenAddressSync(ansemMint!, jWinner.publicKey);
+    await program.methods
+      .claimDirect(new anchor.BN(jRoundId))
+      .accounts(claimRealAccounts(jWinner.publicKey, jRoundPda, jWinnerAta))
+      .signers([jWinner])
+      .rpc();
+    const paid = await balOf(jWinnerAta);
+    const r2: any = await program.account.round.fetch(jRoundPda);
+    assert.isAbove(Number(paid), 0, "winner received real ANSEM");
+    assert.equal(r2.claimedProceeds.toString(), paid.toString(), "claimed_proceeds == winner payout");
+    assert.isBelow(
+      Number(r2.claimedProceeds),
+      Number(r2.entitlementTotal),
+      "part-claim: some entitlement remains to be forfeited"
+    );
+  });
+
+  it("close_round: a CLAIMABLE round inside its claim window refuses (ClaimWindowOpen)", async () => {
+    // Widen the window far past wall-clock so the gate blocks deterministically.
+    await setClaimWindow(3600);
+    try {
+      await (program.methods as any)
+        .closeRound()
+        .accountsPartial(closeRoundAccounts(jRoundPda, randomCaller.publicKey))
+        .signers([randomCaller])
+        .rpc();
+      assert.fail("close_round must refuse while the claim window is open");
+    } catch (e: any) {
+      assert.include(e.toString(), "ClaimWindowOpen");
+    }
+    const r: any = await program.account.round.fetch(jRoundPda);
+    assert.equal(r.state, 4, "round still CLAIMABLE after the rejected close");
+  });
+
+  it("close_round: past the window, a RANDOM wallet reaps it — rent -> admin, forfeit -> rollover, obligations unchanged", async () => {
+    // Shrink the window back so it has genuinely elapsed (round settled >= deadline ago).
+    await setClaimWindow(3);
+
+    const rPre: any = await program.account.round.fetch(jRoundPda);
+    const entitlement = BigInt(rPre.entitlementTotal.toString());
+    const claimed = BigInt(rPre.claimedProceeds.toString());
+    const forfeited = entitlement - claimed;
+    const cfgPre: any = await program.account.config.fetch(configPda);
+    const rolloverBefore = BigInt(cfgPre.rolloverJackpot.toString());
+    const obligationsBefore = BigInt(cfgPre.ansemObligations.toString());
+    const keeperBefore = BigInt(await provider.connection.getBalance(keeperAdmin.publicKey));
+    const roundRent = BigInt(await provider.connection.getBalance(jRoundPda));
+
+    // Close as soon as the on-chain window truly elapses (robust to validator clock
+    // drift): retry only on ClaimWindowOpen, surface anything else.
+    let closed = false;
+    for (let i = 0; i < 30; i++) {
+      try {
+        await (program.methods as any)
+          .closeRound()
+          .accountsPartial(closeRoundAccounts(jRoundPda, randomCaller.publicKey))
+          .signers([randomCaller])
+          .rpc();
+        closed = true;
+        break;
+      } catch (e: any) {
+        if (!e.toString().includes("ClaimWindowOpen")) throw e;
+        await sleep(1000);
+      }
+    }
+    assert.isTrue(closed, "close_round eventually succeeded once the window elapsed");
+
+    // Round account reaped.
+    let gone = false;
+    try {
+      await program.account.round.fetch(jRoundPda);
+    } catch {
+      gone = true;
+    }
+    assert.isTrue(gone, "Round account is GONE (rent reclaimed)");
+
+    const cfgPost: any = await program.account.config.fetch(configPda);
+    const rolloverAfter = BigInt(cfgPost.rolloverJackpot.toString());
+    const obligationsAfter = BigInt(cfgPost.ansemObligations.toString());
+    const keeperAfter = BigInt(await provider.connection.getBalance(keeperAdmin.publicKey));
+
+    assert.isAbove(Number(forfeited), 0, "the loser's unclaimed share was really forfeited");
+    assert.equal(
+      (keeperAfter - keeperBefore).toString(),
+      roundRent.toString(),
+      "config.admin lamports grew by exactly the round's rent"
+    );
+    assert.equal(
+      (rolloverAfter - rolloverBefore).toString(),
+      forfeited.toString(),
+      "rollover_jackpot grew by exactly (entitlement_total - claimed_proceeds)"
+    );
+    assert.equal(
+      obligationsAfter.toString(),
+      obligationsBefore.toString(),
+      "ansem_obligations UNCHANGED by close_round"
+    );
+
+    // A claim against the reaped round now fails (account gone).
+    const jLoserAta = getAssociatedTokenAddressSync(ansemMint!, jLoser.publicKey);
+    let claimThrew = false;
+    try {
+      await program.methods
+        .claimDirect(new anchor.BN(jRoundId))
+        .accounts(claimRealAccounts(jLoser.publicKey, jRoundPda, jLoserAta))
+        .signers([jLoser])
+        .rpc();
+    } catch {
+      claimThrew = true;
+    }
+    assert.isTrue(claimThrew, "claim_direct against a reaped round fails (account gone)");
+  });
+
+  it("close_round: an EMPTY cancelled round (pot == 0) reaps instantly (no window wait)", async () => {
+    const { pda } = await createFreshRound();
+    // No stakes -> pot stays 0. Wait past the (3s) deadline so cancel is allowed.
+    await cancelWithRetry(pda);
+    const rC: any = await program.account.round.fetch(pda);
+    assert.equal(rC.state, 5, "STATE_CLOSED");
+    assert.equal(rC.pot.toString(), "0", "empty round");
+
+    const keeperBefore = BigInt(await provider.connection.getBalance(keeperAdmin.publicKey));
+    const rent = BigInt(await provider.connection.getBalance(pda));
+    // No claim-window wait: the CLOSED+empty branch has no time gate.
+    await (program.methods as any)
+      .closeRound()
+      .accountsPartial(closeRoundAccounts(pda, randomCaller.publicKey))
+      .signers([randomCaller])
+      .rpc();
+    let gone = false;
+    try {
+      await program.account.round.fetch(pda);
+    } catch {
+      gone = true;
+    }
+    assert.isTrue(gone, "empty cancelled round reaped");
+    const keeperAfter = BigInt(await provider.connection.getBalance(keeperAdmin.publicKey));
+    assert.equal((keeperAfter - keeperBefore).toString(), rent.toString(), "rent -> config.admin");
+  });
+
+  it("close_round: a NON-EMPTY cancelled round refuses (RoundNotCloseable) and refund_direct still works", async () => {
+    await airdrop(fStaker.publicKey, 3);
+    const { id, pda } = await createFreshRound();
+    await program.methods
+      .stakeDirect(new anchor.BN(id), jsq, new anchor.BN(WINNER_STAKE))
+      .accounts(stakeRealAccounts(fStaker.publicKey, pda))
+      .signers([fStaker])
+      .rpc();
+    await cancelWithRetry(pda);
+    const rC: any = await program.account.round.fetch(pda);
+    assert.equal(rC.state, 5, "STATE_CLOSED");
+    assert.isAbove(Number(rC.pot), 0, "non-empty cancelled round");
+
+    // close_round must refuse — the refund path must stay alive.
+    try {
+      await (program.methods as any)
+        .closeRound()
+        .accountsPartial(closeRoundAccounts(pda, randomCaller.publicKey))
+        .signers([randomCaller])
+        .rpc();
+      assert.fail("close_round must refuse a non-empty cancelled round");
+    } catch (e: any) {
+      assert.include(e.toString(), "RoundNotCloseable");
+    }
+
+    // The account survives AND refund_direct still returns the staker's SOL.
+    const staked = BigInt(WINNER_STAKE);
+    const balBefore = BigInt(await provider.connection.getBalance(fStaker.publicKey));
+    await program.methods
+      .refundDirect(new anchor.BN(id))
+      .accounts({
+        authority: fStaker.publicKey,
+        config: configPda,
+        round: pda,
+        miner: minerOf(fStaker.publicKey),
+        potVault,
+      })
+      .signers([fStaker])
+      .rpc();
+    const balAfter = BigInt(await provider.connection.getBalance(fStaker.publicKey));
+    assert.equal(
+      (balAfter - balBefore).toString(),
+      staked.toString(),
+      "refund_direct returned the full stake from the surviving round"
+    );
+  });
+
+  it("close_round: after reaping, the NEXT round is fully creatable and playable (lifecycle survives)", async () => {
+    await airdrop(eWinner.publicKey, 3);
+    await airdrop(eLoser.publicKey, 3);
+    const { id, pda } = await createFreshRound();
+    await program.methods
+      .stakeDirect(new anchor.BN(id), jsq, new anchor.BN(WINNER_STAKE))
+      .accounts(stakeRealAccounts(eWinner.publicKey, pda))
+      .signers([eWinner])
+      .rpc();
+    await program.methods
+      .stakeDirect(new anchor.BN(id), loserSquare, new anchor.BN(LOSER_STAKE))
+      .accounts(stakeRealAccounts(eLoser.publicKey, pda))
+      .signers([eLoser])
+      .rpc();
+    await settleWithRetry(pda);
+    await (program.methods as any)
+      .executeSwapReal(ANSEM_OUT)
+      .accounts(swapRealAccounts(pda, keeperAdmin.publicKey, keeperAta))
+      .signers([keeperAdmin])
+      .rpc();
+    const r: any = await program.account.round.fetch(pda);
+    assert.equal(r.state, 4, "STATE_CLAIMABLE — a full round played after prior closes");
+
+    // And a winner can still claim real ANSEM on this post-close round.
+    const eWinnerAta = getAssociatedTokenAddressSync(ansemMint!, eWinner.publicKey);
+    await program.methods
+      .claimDirect(new anchor.BN(id))
+      .accounts(claimRealAccounts(eWinner.publicKey, pda, eWinnerAta))
+      .signers([eWinner])
+      .rpc();
+    assert.isAbove(Number(await balOf(eWinnerAta)), 0, "winner claimed on the post-close round");
+  });
 });
