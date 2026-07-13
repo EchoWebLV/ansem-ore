@@ -29,4 +29,5 @@ pub enum AnsemError {
     #[msg("Invalid return band (require min <= max <= RETURN_MAX_BPS)")] BadReturnBand,
     #[msg("Beef vault token account has wrong owner or mint")] BadBeefVault,
     #[msg("Invalid beef params (divisor and secs_per_tick must be > 0)")] BadBeefParams,
+    #[msg("Swap proceeds below the configured min_swap_rate floor")] SwapRateTooLow,
 }

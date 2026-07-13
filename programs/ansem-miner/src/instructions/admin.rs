@@ -31,6 +31,15 @@ pub fn set_return_band(ctx: Context<SetParams>, min_bps: u16, max_bps: u16) -> R
     Ok(())
 }
 
+// Set the execute_swap_real payout floor. `ansem_out` must be >= net_lamports *
+// min_swap_rate / LAMPORTS_PER_SOL; 0 disables the check. The launch script derives
+// it from a live Jupiter quote (×0.7) so a compromised keeper can never settle a
+// round paying out far below market. Admin-gated via SetParams.
+pub fn set_min_swap_rate(ctx: Context<SetParams>, rate: u64) -> Result<()> {
+    ctx.accounts.config.min_swap_rate = rate;
+    Ok(())
+}
+
 // Admin-only migration/dev tool: close the Config PDA (rent -> admin) so a fresh
 // `initialize` can run after a state-layout change (e.g. the M4b lottery redesign
 // made the old on-chain Config binary-incompatible on devnet). `bump` is

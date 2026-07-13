@@ -76,6 +76,12 @@ pub mod ansem_miner {
         instructions::admin::set_return_band(ctx, min_bps, max_bps)
     }
 
+    // Mainnet real-swap payout floor (see instructions/admin.rs::set_min_swap_rate).
+    // Ungated; admin-gated via SetParams.
+    pub fn set_min_swap_rate(ctx: Context<SetParams>, rate: u64) -> Result<()> {
+        instructions::admin::set_min_swap_rate(ctx, rate)
+    }
+
     // DEVNET/TEST-ONLY migration tool — see instructions/admin.rs::close_config.
     #[cfg(feature = "devnet")]
     pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {
@@ -94,6 +100,13 @@ pub mod ansem_miner {
     #[cfg(feature = "devnet")]
     pub fn execute_swap_mock(ctx: Context<ExecuteSwapMock>) -> Result<()> {
         instructions::swap::execute_swap_mock_handler(ctx)
+    }
+
+    // Mainnet payout: pull the keeper-quoted `ansem_out` of REAL ANSEM out of the
+    // keeper's own ATA into payout_vault (no minting), pot -> treasury. Ungated (this
+    // is the live mainnet path); admin-gated on config.admin inside the accounts.
+    pub fn execute_swap_real(ctx: Context<ExecuteSwapReal>, ansem_out: u64) -> Result<()> {
+        instructions::swap::execute_swap_real_handler(ctx, ansem_out)
     }
 
     pub fn claim(ctx: Context<Claim>, round_id: u64) -> Result<()> {
