@@ -9,8 +9,6 @@ describe("StakeRail (direct-stake)", () => {
     expect(screen.getByRole("button", { name: /place bet · one approval/i })).toBeDisabled();
     rerender(<StakeRail selectedSquares={[4, 9]} enabled busy={false} onStake={onStake} />);
     fireEvent.change(screen.getByLabelText(/amount per tile/i), { target: { value: "0.02" } });
-    expect(screen.getByText("#05")).toBeInTheDocument();
-    expect(screen.getByText("#10")).toBeInTheDocument();
     expect(screen.getByText(/0.04 SOL total/i)).toBeInTheDocument();
     const btn = screen.getByRole("button", { name: /place bet · one approval/i });
     expect(btn).not.toBeDisabled();
@@ -32,14 +30,11 @@ describe("StakeRail (direct-stake)", () => {
     expect(screen.getByRole("button", { name: /place bet · one approval/i })).toBeDisabled();
   });
 
-  it("renders selected tiles as 44px removable chips and removes exactly the chosen square", () => {
-    const onRemoveSquare = vi.fn();
-    render(<StakeRail selectedSquares={[4, 9]} enabled busy={false} onStake={vi.fn()} onRemoveSquare={onRemoveSquare} />);
-    const removeFive = screen.getByRole("button", { name: /remove tile #05/i });
-    expect(removeFive).toHaveClass("min-h-11");
-    fireEvent.click(removeFive);
-    expect(onRemoveSquare).toHaveBeenCalledTimes(1);
-    expect(onRemoveSquare).toHaveBeenCalledWith(4);
+  it("shows the empty-state hint only when nothing is selected (the board itself shows the selection)", () => {
+    const { rerender } = render(<StakeRail selectedSquares={[]} enabled busy={false} onStake={vi.fn()} />);
+    expect(screen.getByText(/select tiles on the board/i)).toBeInTheDocument();
+    rerender(<StakeRail selectedSquares={[4, 9]} enabled busy={false} onStake={vi.fn()} />);
+    expect(screen.queryByText(/select tiles on the board/i)).not.toBeInTheDocument();
   });
 
   it("sets the existing amount input from 44px quick amount actions", () => {

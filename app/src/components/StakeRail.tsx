@@ -11,6 +11,7 @@ export interface StakeRailProps {
   enabled: boolean;
   busy: boolean;
   onStake: (squares: number[], amountPerSquare: BN) => void;
+  /** Retained for prop-compat with PlayControls; the slip no longer lists removable tiles (board tap toggles selection). */
   onRemoveSquare?: (square: number) => void;
   /** Display-only reserve from PlayControls' existing affordability gate. */
   feeReserveSol?: string;
@@ -19,7 +20,7 @@ export interface StakeRailProps {
 const QUICK_AMOUNTS = ["0.01", "0.05", "0.1"] as const;
 
 // Direct-stake rail: ONE wallet approval moves the SOL into the pot.
-export function StakeRail({ selectedSquares, enabled, busy, onStake, onRemoveSquare, feeReserveSol }: StakeRailProps) {
+export function StakeRail({ selectedSquares, enabled, busy, onStake, feeReserveSol }: StakeRailProps) {
   const [amount, setAmount] = useState("");
   const parsed = solToLamports(amount);
   const n = selectedSquares.length;
@@ -30,26 +31,7 @@ export function StakeRail({ selectedSquares, enabled, busy, onStake, onRemoveSqu
         <h2 className="text-[14px] font-semibold text-bull-ink">Bet slip</h2>
         <span className="terminal-label">{n} {n === 1 ? "tile" : "tiles"}</span>
       </div>
-      <div className="flex min-h-8 flex-wrap gap-1.5">
-        {selectedSquares.length === 0
-          ? <span className="text-[11px] text-bull-muted">Select tiles on the board</span>
-          : selectedSquares.map((square) => {
-            const label = `#${String(square + 1).padStart(2, "0")}`;
-            return onRemoveSquare ? (
-              <button
-                key={square}
-                type="button"
-                aria-label={`Remove tile ${label}`}
-                onClick={() => onRemoveSquare(square)}
-                className="min-h-11 rounded-[7px] border border-bull-dim bg-bull-raised px-3 font-mono text-[11px] text-bull-green"
-              >
-                {label} <span aria-hidden>×</span>
-              </button>
-            ) : (
-              <span key={square} className="inline-flex min-h-11 items-center rounded-[7px] border border-bull-dim bg-bull-raised px-3 font-mono text-[11px] text-bull-green">{label}</span>
-            );
-          })}
-      </div>
+      {n === 0 && <p className="min-h-8 text-[11px] text-bull-muted">Select tiles on the board</p>}
       <label htmlFor="stake-amount" className="mb-2 mt-4 block text-[11px] text-bull-muted">Amount per tile</label>
       <div className="flex items-center rounded-[10px] border border-bull-edge bg-bull-bg px-3 focus-within:border-bull-green">
         <input id="stake-amount" inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} className="min-w-0 flex-1 bg-transparent py-3 font-mono text-[18px] text-bull-ink outline-none" />
