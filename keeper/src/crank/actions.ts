@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import {
   AnsemMiner, BN, roundPda, minerPda, escrowPda, ataForMint,
   createRoundIx, delegateRoundIx, requestSettleIx, commitRoundIx, commitMinerIx,
-  reconcileMinerIx, executeSwapMockIx, executeSwapRealIx, cancelRoundIx, setRoundDurationIx, stampBeefIx,
+  reconcileMinerIx, executeSwapMockIx, executeSwapRealIx, cancelRoundIx, setRoundDurationIx,
   erRpcTolerant, retryPastDeadline, l1Send, awaitOwnerIs, flushCommit, fetchMiner,
   DLP_PROGRAM_ID, PROGRAM_ID, TOKEN_PROGRAM_ID,
   type ConfigState, type RoundStateData,
@@ -238,19 +238,14 @@ export function liveFinalizeDeps(
       l1Send(() => reconcileMinerIx(ctx.program, roundId, escrowPda(w), minerPda(w)).rpc()),
     executeSwap,
     // ---- BEEF stamp crank seam (plan Task 6 Step 2 — DEFERRED) ----
-    // This is the mount point for the per-round BEEF emission stamp. It stays wired to the
-    // OLD dormant vault-drip `stampBeefIx` (roundId + beefVault) and is inert on mainnet:
-    // `beefEnabled` is only true once a BeefConfig exists on-chain, which it does NOT today.
-    // TODO(beef-stamp-crank): when the mint-on-emission program upgrade + the Task 5 SDK land,
-    //   (1) switch to the minted-model builder — stampBeefIx gains beefMint/vaultAuthority/
-    //       beefTreasury/tokenProgram accounts (spec D4, plan Task 2/5);
-    //   (2) capture the stamped players' emission and push it to service.ts `lastBeefEmission`
-    //       so snapshot.beefPerRound reads a live value for the app BEEF drip counter.
+    // Left unwired: Task 5 landed the minted-model `stampBeefIx`, which now needs
+    // beefMint/vaultAuthority/beefTreasury/tokenProgram sourced from BeefConfig (not the old
+    // roundId+beefVault). Wiring the real per-round stamp — reading those accounts and pushing
+    // the stamped players' emission to service.ts `lastBeefEmission` for snapshot.beefPerRound —
+    // is Task 6 (keeper). Inert on mainnet regardless: `beefEnabled` is only true once a
+    // BeefConfig exists on-chain, which it does NOT today.
     // INVARIANT (unchanged): a throw here must never block finalize — finalizeSettled swallows it.
-    stampBeef: ctx.beefEnabled && ctx.beefVault ? async () => {
-      await l1Send(() => stampBeefIx(ctx.program, ctx.keeper, roundId, ctx.beefVault!).rpc());
-      ctx.log.info("beef emission stamped", { roundId });
-    } : undefined,
+    stampBeef: undefined,
   };
 }
 

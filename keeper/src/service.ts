@@ -121,8 +121,9 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
       try {
         const bc = await fetchBeefConfig(ctx.program, beefConfigPda());
         ctx.beefEnabled = true;
-        ctx.beefVault = bc.beefVault;
-        ctx.log.info("BEEF emission enabled", { vault: bc.beefVault.toBase58() });
+        // fetchBeefConfig is now typed (base58 strings); ctx.beefVault stays a PublicKey.
+        ctx.beefVault = new PublicKey(bc.beefVault);
+        ctx.log.info("BEEF emission enabled", { vault: bc.beefVault });
       } catch {
         ctx.log.info("BEEF not initialized — emission stamping disabled");
       }

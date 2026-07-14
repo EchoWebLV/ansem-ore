@@ -3,7 +3,7 @@ import { BN } from "../bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { AnsemMiner } from "../idl/ansem_miner.js";
 import { configPda, roundPda, payoutVault, vaultAuthPda, mintAuthPda, potVaultPda, treasuryPda, ansemMintPda,
-  beefConfigPda, beefRoundPda, payoutVaultForMint, ataForMint, programDataPda } from "../pdas.js";
+  beefConfigPda, beefRoundPda, jackpotConfigPda, payoutVaultForMint, ataForMint, programDataPda } from "../pdas.js";
 import { VRF_BASE_QUEUE, PROGRAM_ID, TOKEN_PROGRAM_ID } from "../constants.js";
 
 const validatorMeta = (v: PublicKey) => [{ pubkey: v, isSigner: false, isWritable: false }];
@@ -49,24 +49,45 @@ export const setRoundDurationIx = (p: Program<AnsemMiner>, admin: PublicKey, sec
 export const setReturnBandIx = (p: Program<AnsemMiner>, admin: PublicKey, minBps: number, maxBps: number) =>
   p.methods.setReturnBand(minBps, maxBps).accountsPartial({ admin });
 
-// ---- BEEF vault emission layer (admin/keeper) ----
+// ---- BEEF mint-on-emission layer (admin/keeper) ----
+// BEEF is now the program's OWN classic-SPL mint (6 decimals, spec 2026-07-14 D1/D4):
+// mint authority = vault_authority PDA, so stamp_beef MINTS each round's emission
+// (players' share into the vault buffer, treasury's cut straight to the treasury ATA).
+// `beefMint`/`beefVault`/`beefTreasury` are ops-created accounts pinned into BeefConfig
+// at init; `tokenProgram` is passed explicitly (the token layer is an Interface — not
+// auto-resolvable). A classic SPL mint satisfies the interface (defaults classic).
 
+// init_beef args mirror the program handler order: max_round_mint, sat_lamports, hard_cap,
+// treasury_bps, tick_bps, bonus_cap_bps, activity_window_secs, secs_per_tick. hard_cap +
+// treasury_bps are init-PINNED (never re-settable). config/beefConfig auto-resolve (const PDAs).
 export const initBeefIx = (
-  p: Program<AnsemMiner>, admin: PublicKey, beefMint: PublicKey, beefVault: PublicKey,
-  divisor: BN, tickBps: number, bonusCapBps: number, activityWindowSecs: BN, secsPerTick: BN,
-) => p.methods.initBeef(divisor, tickBps, bonusCapBps, activityWindowSecs, secsPerTick)
-  .accountsPartial({ admin, beefMint, vaultAuthority: vaultAuthPda(), beefVault });
+  p: Program<AnsemMiner>, admin: PublicKey,
+  beefMint: PublicKey, beefVault: PublicKey, beefTreasury: PublicKey,
+  maxRoundMint: BN, satLamports: BN, hardCap: BN, treasuryBps: number,
+  tickBps: number, bonusCapBps: number, activityWindowSecs: BN, secsPerTick: BN,
+) => p.methods.initBeef(maxRoundMint, satLamports, hardCap, treasuryBps, tickBps, bonusCapBps, activityWindowSecs, secsPerTick)
+  .accountsPartial({ admin, vaultAuthority: vaultAuthPda(), beefMint, beefVault, beefTreasury });
 
+// set_beef_params tunes the emission CURVE (max_round_mint / sat_lamports) + bonus knobs.
+// CANNOT touch mint / vault / treasury / hard_cap / treasury_bps (init-pinned trust commitments).
 export const setBeefParamsIx = (
   p: Program<AnsemMiner>, admin: PublicKey,
-  divisor: BN, tickBps: number, bonusCapBps: number, activityWindowSecs: BN, secsPerTick: BN,
-) => p.methods.setBeefParams(divisor, tickBps, bonusCapBps, activityWindowSecs, secsPerTick)
+  maxRoundMint: BN, satLamports: BN, tickBps: number, bonusCapBps: number,
+  activityWindowSecs: BN, secsPerTick: BN,
+) => p.methods.setBeefParams(maxRoundMint, satLamports, tickBps, bonusCapBps, activityWindowSecs, secsPerTick)
   .accountsPartial({ admin, config: configPda(), beefConfig: beefConfigPda() });
 
-export const stampBeefIx = (p: Program<AnsemMiner>, payer: PublicKey, roundId: number, beefVault: PublicKey) =>
-  p.methods.stampBeef(new BN(roundId)).accountsPartial({
-    payer, config: configPda(), round: roundPda(roundId),
-    beefConfig: beefConfigPda(), beefVault, beefRound: beefRoundPda(roundId),
+// stamp_beef MINTS the just-settled (CLAIMABLE, current) round's emission: `beefMint` mut
+// (minted from), `beefVault`/`beefTreasury` = the pinned BeefConfig fields, `vaultAuthority`
+// = mint authority signing the CPI. Pass beefMint/beefVault/beefTreasury from BeefConfig.
+export const stampBeefIx = (
+  p: Program<AnsemMiner>, payer: PublicKey, roundId: number,
+  beefMint: PublicKey, beefVault: PublicKey, beefTreasury: PublicKey,
+  tokenProgramId: PublicKey = TOKEN_PROGRAM_ID,
+) => p.methods.stampBeef(new BN(roundId)).accountsPartial({
+    payer, config: configPda(), round: roundPda(roundId), beefConfig: beefConfigPda(),
+    beefMint, vaultAuthority: vaultAuthPda(), beefVault, beefTreasury,
+    beefRound: beefRoundPda(roundId), tokenProgram: tokenProgramId,
   });
 
 // ---- Mainnet real-payout layer (plan 2026-07-14, Task 6) ----
@@ -143,3 +164,19 @@ export const setMinSwapRateIx = (p: Program<AnsemMiner>, admin: PublicKey, rate:
 // Launch stake-cap tuner: cap max_stake at 1 SOL (and retune min) without a program upgrade.
 export const setStakeLimitsIx = (p: Program<AnsemMiner>, admin: PublicKey, minStake: BN, maxStakePerRound: BN) =>
   p.methods.setStakeLimits(minStake, maxStakePerRound).accountsPartial({ admin });
+
+// Fee dial (spec D5): pot fee in bps. Launch sets 500 (5%); the program hard-caps at
+// 2000 (20%). Admin-gated via SetParams (config auto-resolves).
+export const setFeeBpsIx = (p: Program<AnsemMiner>, admin: PublicKey, feeBps: number) =>
+  p.methods.setFeeBps(feeBps).accountsPartial({ admin });
+
+// ---- Jackpot params PDA (spec D6): random-trigger + bet-scaled cap ----
+// init_jackpot_config seeds the PDA (must run in the SAME sitting as the program upgrade —
+// swaps FAIL until it exists) with the 1-in-25 / 100x defaults; set_jackpot_params tunes
+// trigger_odds (0|1 = legacy full-drain) + cap_mult (0 = uncapped bite). Both admin-gated.
+export const initJackpotConfigIx = (p: Program<AnsemMiner>, admin: PublicKey) =>
+  p.methods.initJackpotConfig().accountsPartial({ admin, jackpotConfig: jackpotConfigPda() });
+
+export const setJackpotParamsIx = (p: Program<AnsemMiner>, admin: PublicKey, triggerOdds: number, capMult: number) =>
+  p.methods.setJackpotParams(triggerOdds, capMult)
+    .accountsPartial({ admin, config: configPda(), jackpotConfig: jackpotConfigPda() });

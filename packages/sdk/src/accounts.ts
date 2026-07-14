@@ -80,6 +80,44 @@ export function toBoardSnapshot(round: RoundStateData, config: ConfigState, upda
 /** Grid width guard for consumers; blockSol/blockStake are fixed-length GRID_SIZE arrays. */
 export const isFullGrid = (arr: unknown[]): boolean => arr.length === GRID_SIZE;
 
-/** BEEF config (raw anchor-decoded: beefMint/beefVault are PublicKey, numeric fields BN). */
-export const fetchBeefConfig = (p: Program<AnsemMiner>, pda: PublicKey) =>
-  p.account.beefConfig.fetch(pda);
+// ---- BEEF mint-on-emission layer (spec 2026-07-14 D1/D4) ----
+export interface BeefConfigState {
+  beefMint: string; beefVault: string; beefTreasury: string;
+  maxRoundMint: bigint; satLamports: bigint; hardCap: bigint;
+  /** Supply meter (BOTH shares); emission stops forever at hardCap. */
+  mintedTotal: bigint;
+  treasuryBps: number; tickBps: number; bonusCapBps: number;
+  activityWindowSecs: number; secsPerTick: number;
+  /** Solvency ledger for the players' buffered share (drawn down by claim_beef). */
+  totalOwed: bigint; bump: number;
+}
+/** Decode a raw anchor-fetched BeefConfig into plain string/bigint/number fields. */
+export function decodeBeefConfig(c: any): BeefConfigState {
+  return {
+    beefMint: c.beefMint.toBase58(), beefVault: c.beefVault.toBase58(), beefTreasury: c.beefTreasury.toBase58(),
+    maxRoundMint: big(c.maxRoundMint), satLamports: big(c.satLamports), hardCap: big(c.hardCap),
+    mintedTotal: big(c.mintedTotal), treasuryBps: c.treasuryBps, tickBps: c.tickBps, bonusCapBps: c.bonusCapBps,
+    activityWindowSecs: n(c.activityWindowSecs), secsPerTick: n(c.secsPerTick), totalOwed: big(c.totalOwed),
+    bump: c.bump,
+  };
+}
+/** Typed BeefConfig fetch. Rejects (account not found) while BEEF is uninitialized — callers guard. */
+export async function fetchBeefConfig(program: Program<AnsemMiner>, pda: PublicKey): Promise<BeefConfigState> {
+  return decodeBeefConfig(await program.account.beefConfig.fetch(pda));
+}
+
+// ---- Jackpot params PDA (spec D6): random-trigger + bet-scaled cap ----
+export interface JackpotConfigState {
+  /** 0|1 = every winner round pays the rollover (legacy). N>1 = 1-in-N random trigger. */
+  triggerOdds: number;
+  /** Bite ceiling = capMult x the winning-square stake's ANSEM value. 0 = uncapped (legacy). */
+  capMult: number;
+  bump: number;
+}
+export function decodeJackpotConfig(c: any): JackpotConfigState {
+  return { triggerOdds: c.triggerOdds, capMult: c.capMult, bump: c.bump };
+}
+/** Typed JackpotConfig fetch. Rejects (account not found) until init_jackpot_config lands. */
+export async function fetchJackpotConfig(program: Program<AnsemMiner>, pda: PublicKey): Promise<JackpotConfigState> {
+  return decodeJackpotConfig(await program.account.jackpotConfig.fetch(pda));
+}

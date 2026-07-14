@@ -16,6 +16,7 @@ export const SEED = {
   beefConfig: "beef_config",
   beefMiner: "beef_miner",
   beefRound: "beef_round",
+  jackpotConfig: "jackpot_config",
   sessionTokenV2: "session_token_v2", // gum
 } as const;
 
@@ -27,12 +28,24 @@ export const DEFAULT_ROUND_DURATION_SECS = 60;
 export const SWAP_MODE_MOCK = 0;
 export const SWAP_MODE_JUPITER = 1;
 
-// BEEF vault emission layer defaults (mirror programs/ansem-miner/src/constants.rs)
+// BEEF emission-layer defaults (mirror programs/ansem-miner/src/constants.rs).
+// Mint-on-emission model (spec 2026-07-14 D1/D4): per-round mint =
+// max_round_mint * pot/(pot + sat_lamports), decayed by remaining cap headroom.
+export const BEEF_MAX_ROUND_MINT = 210_000_000;          // 210 BEEF/round nominal
+export const BEEF_SAT_LAMPORTS = 1_000_000_000;          // half-max at a 1 SOL pot
+export const BEEF_HARD_CAP = 21_000_000_000_000;         // 21,000,000 BEEF supply cap
+export const BEEF_TREASURY_BPS = 2_000;                  // 20% continuous treasury cut
+export const DEFAULT_BEEF_TICK_BPS = 3;                  // +0.03% hold-to-grow per tick
+export const DEFAULT_BEEF_BONUS_CAP_BPS = 30_000;        // +300% -> 4x payout cap (~7 days)
+export const DEFAULT_BEEF_ACTIVITY_WINDOW_SECS = 86_400; // daily-streak activity gate
+export const DEFAULT_BEEF_SECS_PER_TICK = 60;            // one tick per round-length
+/** @deprecated dormant vault-drip divisor (pre-2026-07-14); superseded by the
+ *  mint-on-emission BEEF_* constants above. Kept only for the legacy beef-init script. */
 export const DEFAULT_BEEF_DIVISOR = 1_800_000;
-export const DEFAULT_BEEF_TICK_BPS = 3;
-export const DEFAULT_BEEF_BONUS_CAP_BPS = 30_000;
-export const DEFAULT_BEEF_ACTIVITY_WINDOW_SECS = 86_400;
-export const DEFAULT_BEEF_SECS_PER_TICK = 60;
+
+// Jackpot: random-trigger + bet-scaled cap (spec D6; mirror constants.rs).
+export const DEFAULT_JACKPOT_TRIGGER_ODDS = 25;          // 1-in-25 winner rounds
+export const DEFAULT_JACKPOT_CAP_MULT = 100;             // bite <= 100x winning-square value
 
 // Round.state values
 export enum RoundState {
