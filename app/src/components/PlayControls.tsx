@@ -4,11 +4,12 @@ import type { Program } from "@coral-xyz/anchor";
 import { useConnection } from "@solana/wallet-adapter-react";
 import {
   claimDirectIx, refundDirectIx, roundPda, fetchRound,
-  RoundState, type AnsemMiner, type WireSnapshot, type BN,
+  RoundState, type AnsemMiner, type BN,
 } from "@ansem/sdk";
 import { usePlayerState } from "../hooks/use-player-state.js";
 import { directStake, type WalletAdapter } from "../lib/writes.js";
 import { lamportsToSolStr } from "../lib/amount.js";
+import type { AppSnapshot } from "../lib/keeper-client.js";
 import { StakeRail } from "./StakeRail.js";
 import { ClaimPanel } from "./ClaimPanel.js";
 import type { ReceiptInput } from "./VerifyPanel.js";
@@ -16,7 +17,7 @@ import type { ReceiptInput } from "./VerifyPanel.js";
 export interface PlayControlsProps {
   l1: Program<AnsemMiner>;
   wallet: WalletAdapter;
-  snapshot: WireSnapshot;
+  snapshot: AppSnapshot;
   selectedSquares: number[];
   onStaked?: () => void;
   /** Fired with an explorer-linkable artifact after every landed action. */
@@ -85,19 +86,30 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
   });
 
   // Poll the staked round's state whenever unclaimed stakes exist, so the
-  // Claim/Refund panel appears the instant the keeper advances it.
+  // Claim/Refund panel appears the instant the keeper advances it. Also capture
+  // the round's deadline — the claim window is measured from it.
   const offerable = stakedRound > 0 && unresolvedLamports > 0n;
   const [stakedRoundState, setStakedRoundState] = useState<RoundState | null>(null);
+  const [stakedRoundDeadline, setStakedRoundDeadline] = useState<number | null>(null);
   useEffect(() => {
-    if (!offerable) { setStakedRoundState(null); return; }
+    if (!offerable) { setStakedRoundState(null); setStakedRoundDeadline(null); return; }
     let live = true;
     const poll = () => fetchRound(l1, roundPda(stakedRound))
-      .then((r) => { if (live) setStakedRoundState(r.state); })
-      .catch(() => { if (live) setStakedRoundState(null); });
+      .then((r) => { if (live) { setStakedRoundState(r.state); setStakedRoundDeadline(r.deadlineTs); } })
+      .catch(() => { if (live) { setStakedRoundState(null); setStakedRoundDeadline(null); } });
     poll();
     const id = setInterval(poll, 5000);
     return () => { live = false; clearInterval(id); };
   }, [l1, stakedRound, offerable]);
+
+  // Claim-by deadline (unix secs) = staked round's deadline + the config claim
+  // window carried on the snapshot. Undefined until both are known (or if the
+  // keeper serves no window) — ClaimPanel then simply shows no countdown.
+  const claimWindowSecs = snapshot.claimWindowSecs;
+  const claimByTs =
+    stakedRoundDeadline !== null && claimWindowSecs !== undefined && claimWindowSecs > 0
+      ? stakedRoundDeadline + claimWindowSecs
+      : undefined;
 
   return (
     <div className="flex flex-col gap-3">
@@ -125,6 +137,7 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
         <ClaimPanel
           roundId={stakedRound} roundState={stakedRoundState}
           lastClaimedRound={0}
+          claimByTs={claimByTs}
           busy={busy} onClaim={doClaim} onRefund={doRefund}
         />
       )}

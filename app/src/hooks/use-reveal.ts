@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { RoundState, type WireSnapshot } from "@ansem/sdk";
+import { RoundState, ANSEM_DECIMALS, type WireSnapshot } from "@ansem/sdk";
 
 /**
  * The design prototype's settle-reveal (docs/design/bull-board.html playReveal),
@@ -66,7 +66,8 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
       if (gen.current !== g) return;
       setJackpotShown(true);
       if (snap.jackpotSquare !== null) {
-        setCounter((Number(BigInt(snap.jackpotPool || "0")) / 1e6).toFixed(2));
+        // jackpotPool is ANSEM base units (never lamports) — divide by the SDK's ANSEM_DECIMALS.
+        setCounter((Number(BigInt(snap.jackpotPool || "0")) / 10 ** ANSEM_DECIMALS).toFixed(2));
         setSub({ text: `★ JACKPOT — bull #${snap.jackpotSquare + 1} struck the big pot`, gold: true });
       }
     }, STEP_BASE + n * STEP_MS + FINALE_MS));

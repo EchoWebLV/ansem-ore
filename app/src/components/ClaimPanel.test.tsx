@@ -24,4 +24,25 @@ describe("ClaimPanel", () => {
     render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={7} busy={false} onClaim={vi.fn()} onRefund={vi.fn()} />);
     expect(screen.queryByRole("button")).toBeNull();
   });
+
+  it("shows the CLAIM BY countdown alongside the Claim button when a deadline is set", () => {
+    // claimByTs 90_000s, now 86_400s -> 3_600s left = 01:00:00.
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      onClaim={vi.fn()} onRefund={vi.fn()} claimByTs={90_000} nowMs={86_400_000} />);
+    expect(screen.getByText("CLAIM BY 01:00:00")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /claim/i })).toBeInTheDocument();
+  });
+
+  it("hides the countdown once the claim window has expired (button remains until the round is reaped)", () => {
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      onClaim={vi.fn()} onRefund={vi.fn()} claimByTs={1_000} nowMs={2_000_000} />);
+    expect(screen.queryByText(/CLAIM BY/)).toBeNull();
+    expect(screen.getByRole("button", { name: /claim/i })).toBeInTheDocument();
+  });
+
+  it("omits the countdown when no claim-by deadline is provided", () => {
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      onClaim={vi.fn()} onRefund={vi.fn()} />);
+    expect(screen.queryByText(/CLAIM BY/)).toBeNull();
+  });
 });

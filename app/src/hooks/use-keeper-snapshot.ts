@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { WireSnapshot, KeeperEvent } from "@ansem/sdk";
-import { createKeeperClient, type KeeperClient, type KeeperClientOpts, type KeeperStatus } from "../lib/keeper-client.js";
+import type { KeeperEvent } from "@ansem/sdk";
+import { createKeeperClient, type AppSnapshot, type KeeperClient, type KeeperClientOpts, type KeeperStatus } from "../lib/keeper-client.js";
 
 export interface UseKeeperOpts {
   wsUrl: string;
@@ -12,14 +12,14 @@ export interface UseKeeperOpts {
 }
 
 export interface KeeperView {
-  snapshot: WireSnapshot | null;
+  snapshot: AppSnapshot | null;
   events: KeeperEvent[];
   status: KeeperStatus;
 }
 
 export function useKeeperSnapshot(opts: UseKeeperOpts): KeeperView {
   const { wsUrl, httpUrl, maxEvents = 30, clientFactory = createKeeperClient } = opts;
-  const [snapshot, setSnapshot] = useState<WireSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [events, setEvents] = useState<KeeperEvent[]>([]);
   const [status, setStatus] = useState<KeeperStatus>("connecting");
   const factoryRef = useRef(clientFactory);

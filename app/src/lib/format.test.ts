@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { RoundState } from "@ansem/sdk";
-import { lamportsToSol, formatSol, formatAnsem, stateLabel, secondsLeft, formatCountdown, shortAddr, eventToText } from "./format.js";
+import { lamportsToSol, formatSol, formatAnsem, stateLabel, secondsLeft, formatCountdown, formatHms, shortAddr, eventToText } from "./format.js";
 
 describe("format helpers", () => {
   it("lamportsToSol parses stringified lamports without precision loss", () => {
@@ -33,6 +33,14 @@ describe("format helpers", () => {
     expect(secondsLeft(1_000, 2_000_000)).toBe(0); // past deadline -> clamped
     expect(formatCountdown(65)).toBe("01:05");
     expect(formatCountdown(0)).toBe("00:00");
+  });
+
+  it("formatHms renders hh:mm:ss for claim-window-scale durations", () => {
+    expect(formatHms(86_400)).toBe("24:00:00"); // full 24h claim window
+    expect(formatHms(3_661)).toBe("01:01:01");
+    expect(formatHms(59)).toBe("00:00:59");
+    expect(formatHms(0)).toBe("00:00:00");
+    expect(formatHms(-5)).toBe("00:00:00"); // clamped
   });
 
   it("shortAddr abbreviates a base58 pubkey", () => {

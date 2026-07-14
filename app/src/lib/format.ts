@@ -1,6 +1,10 @@
-import { RoundState, type KeeperEvent } from "@ansem/sdk";
+import { RoundState, ANSEM_DECIMALS, type KeeperEvent } from "@ansem/sdk";
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
+// Base-unit divisor for ANSEM display, derived from the single on-chain source of
+// truth (`@ansem/sdk` ANSEM_DECIMALS = 6, verified against the mint). Never hardcode
+// 1e6 — decimals live in one place so a re-mint is a one-line change.
+const ANSEM_UNIT = 10 ** ANSEM_DECIMALS;
 
 /** Parse stringified lamports (wire form) into a SOL number. */
 export function lamportsToSol(lamports: string): number {
@@ -14,9 +18,9 @@ export function formatSol(lamports: string): string {
   return `${s} SOL`;
 }
 
-/** ANSEM base units (1e6) -> "N ANSEM", trimmed to <=2 decimals. */
+/** ANSEM base units -> "N ANSEM", trimmed to <=2 decimals (decimals from the SDK). */
 export function formatAnsem(baseUnits: string): string {
-  const n = Number(BigInt(baseUnits)) / 1_000_000;
+  const n = Number(BigInt(baseUnits)) / ANSEM_UNIT;
   const s = n.toFixed(2).replace(/\.?0+$/, "");
   return `${s} ANSEM`;
 }
@@ -43,6 +47,15 @@ export function formatCountdown(totalSecs: number): string {
   const mm = String(Math.floor(s / 60)).padStart(2, "0");
   const ss = String(s % 60).padStart(2, "0");
   return `${mm}:${ss}`;
+}
+
+/** hh:mm:ss for a duration in seconds. Used for the claim window (up to 24h — mm:ss would overflow). */
+export function formatHms(totalSecs: number): string {
+  const s = Math.max(0, Math.floor(totalSecs));
+  const hh = String(Math.floor(s / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
 }
 
 export function shortAddr(addr: string, head = 4, tail = 4): string {

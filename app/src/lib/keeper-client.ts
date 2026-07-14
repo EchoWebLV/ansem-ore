@@ -2,10 +2,21 @@ import type { WireSnapshot, KeeperEvent, WireMessage } from "@ansem/sdk";
 
 export type KeeperStatus = "connecting" | "connected" | "disconnected";
 
+/**
+ * The wire snapshot as the keeper actually serves it: the SDK's `WireSnapshot`
+ * plus `claimWindowSecs` (seconds a win stays claimable past a round's deadline).
+ * The keeper appends it in `keeper/src/read/snapshot.ts`; it is additive and
+ * optional so a snapshot from an older keeper (or a cold-load race) simply yields
+ * no claim countdown rather than a crash.
+ */
+export interface AppSnapshot extends WireSnapshot {
+  claimWindowSecs?: number;
+}
+
 export interface KeeperClientOpts {
   wsUrl: string;
   httpUrl: string;
-  onSnapshot: (snap: WireSnapshot) => void;
+  onSnapshot: (snap: AppSnapshot) => void;
   onEvents?: (events: KeeperEvent[]) => void;
   onStatus?: (status: KeeperStatus) => void;
   reconnectMs?: number;
@@ -36,7 +47,7 @@ export function createKeeperClient(opts: KeeperClientOpts): KeeperClient {
       const res = await doFetch(`${opts.httpUrl}/snapshot`);
       // Guard: a fetch that resolves after stop() must not push a stale snapshot
       // (symmetry with connect()'s `stopped` check).
-      if (res.ok && !stopped) opts.onSnapshot((await res.json()) as WireSnapshot);
+      if (res.ok && !stopped) opts.onSnapshot((await res.json()) as AppSnapshot);
     } catch { /* WS will deliver the next frame; ignore cold-load miss */ }
   }
 
