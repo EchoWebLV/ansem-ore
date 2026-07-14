@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import { PublicKey } from "@solana/web3.js";
 import { RoundState } from "@ansem/sdk";
 import { CrankAction } from "../src/crank/decide.js";
 import { runTick, TickDeps } from "../src/crank/loop.js";
 import type { ActionCtx } from "../src/crank/actions.js";
+import type { BeefStampDeps } from "../src/beef.js";
 import { dispatchCrankAction } from "../src/service.js";
 
 const grid = () => Array.from({ length: 25 }, () => 0n);
@@ -98,6 +100,19 @@ describe("CreateRound service dispatch", () => {
     expect(createAndDelegate).not.toHaveBeenCalled();
   });
 
+  it("blocks creation on a failed Claimable stamp even when the stamper cache is disabled", async () => {
+    const stamp = vi.fn(async () => { throw new Error("probe failed"); });
+    const { dispatch, createAndDelegate } = makeDispatchHarness(stamp, false);
+
+    await expect(dispatch(CrankAction.CreateRound, {
+      config,
+      round: { ...openRound, state: RoundState.Claimable },
+    })).rejects.toThrow(/probe failed/);
+
+    expect(stamp).toHaveBeenCalledWith(100);
+    expect(createAndDelegate).not.toHaveBeenCalled();
+  });
+
   it("creates exactly once after stamping the current Claimable round", async () => {
     const stamp = vi.fn(async () => undefined);
     const { dispatch, createAndDelegate } = makeDispatchHarness(stamp);
@@ -122,5 +137,71 @@ describe("CreateRound service dispatch", () => {
 
     expect(stamp).not.toHaveBeenCalled();
     expect(createAndDelegate).toHaveBeenCalledTimes(1);
+  });
+});
+
+const liveServiceConfig: any = {
+  adminKeypair: { publicKey: {} }, validator: {}, vrfQueue: {}, roundDurationSecs: 60,
+  directMode: false, swapMode: "mock", jupBaseUrl: "https://example.invalid", slippageBps: 100,
+  inventoryMinAnsem: 0, listingTs: null,
+};
+
+async function captureLiveBeefProbe(
+  getAccountInfo: ReturnType<typeof vi.fn>,
+  fetchBeefConfig: ReturnType<typeof vi.fn>,
+) {
+  vi.resetModules();
+  let stampDeps: BeefStampDeps | undefined;
+
+  vi.doMock("@ansem/sdk", async () => {
+    const actual = await vi.importActual<typeof import("@ansem/sdk")>("@ansem/sdk");
+    return { ...actual, fetchBeefConfig };
+  });
+  vi.doMock("../src/chain.js", () => ({
+    buildChain: () => ({
+      conn: { getAccountInfo }, erConn: {}, program: {}, erProgram: {},
+    }),
+  }));
+  vi.doMock("../src/beef.js", () => ({
+    makeBeefStamper: (deps: BeefStampDeps) => {
+      stampDeps = deps;
+      return {
+        init: vi.fn(async () => undefined),
+        stamp: vi.fn(async () => undefined),
+        enabled: () => false,
+      };
+    },
+  }));
+
+  const { createService } = await import("../src/service.js");
+  createService(liveServiceConfig, { info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+  if (!stampDeps) throw new Error("service did not construct its BEEF stamper");
+  return stampDeps.probeConfig;
+}
+
+describe("live BeefConfig probe", () => {
+  it("propagates transient fetch failures for an existing BeefConfig account", async () => {
+    const getAccountInfo = vi.fn(async () => ({
+      data: Buffer.alloc(0), executable: false, lamports: 1,
+      owner: PublicKey.unique(), rentEpoch: 0,
+    }));
+    const fetchBeefConfig = vi.fn(async () => { throw new Error("BEEF config RPC failed"); });
+    const probeConfig = await captureLiveBeefProbe(getAccountInfo, fetchBeefConfig);
+
+    await expect(probeConfig()).rejects.toThrow(/BEEF config RPC failed/);
+
+    expect(getAccountInfo).toHaveBeenCalledTimes(1);
+    expect(fetchBeefConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null without decoding when the BeefConfig account is genuinely absent", async () => {
+    const getAccountInfo = vi.fn(async () => null);
+    const fetchBeefConfig = vi.fn(async () => { throw new Error("must not decode an absent account"); });
+    const probeConfig = await captureLiveBeefProbe(getAccountInfo, fetchBeefConfig);
+
+    await expect(probeConfig()).resolves.toBeNull();
+
+    expect(getAccountInfo).toHaveBeenCalledTimes(1);
+    expect(fetchBeefConfig).not.toHaveBeenCalled();
   });
 });

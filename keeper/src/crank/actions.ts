@@ -150,7 +150,7 @@ export async function finalizeSettled(_roundId: number, deps: FinalizeDeps): Pro
   await deps.executeSwap();
   if (deps.stampBeef) {
     try { await deps.stampBeef(); }
-    catch { /* best-effort: BEEF never blocks the game (invariant) */ }
+    catch { /* best-effort here; Claimable CreateRound retries and blocks advancement */ }
   }
 }
 
@@ -245,7 +245,7 @@ export function liveFinalizeDeps(
     // from the on-chain BeefConfig (never env), skips silently while BEEF is uninitialized
     // (mainnet today), and pushes each stamp's players' emission to service.ts lastBeefEmission
     // for snapshot.beefPerRound. INVARIANT: a throw here never blocks finalize — finalizeSettled
-    // swallows it (BEEF never blocks the game). Absent stamper (tests / no ctx) -> unwired.
+    // swallows it. Claimable CreateRound retries and gates advancement. Absent stamper -> unwired.
     stampBeef: ctx.beefStamper ? () => ctx.beefStamper!.stamp(roundId) : undefined,
   };
 }

@@ -71,6 +71,18 @@ describe("makeBeefStamper", () => {
     expect(stamper.enabled()).toBe(false);
   });
 
+  it("propagates transient BeefConfig probe failures without sending", async () => {
+    const { calls, stamper } = harness({
+      probeConfig: async () => { throw new Error("BEEF config RPC failed"); },
+    });
+
+    await expect(stamper.stamp(6)).rejects.toThrow(/BEEF config RPC failed/);
+
+    expect(calls.send).toEqual([]);
+    expect(calls.pushed).toEqual([]);
+    expect(stamper.enabled()).toBe(false);
+  });
+
   // ---- REQUIRED: emission-pushed-to-holder ----
   it("stamps then captures the frozen players' emission into the holder", async () => {
     const { calls, stamper } = harness();

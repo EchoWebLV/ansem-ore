@@ -45,7 +45,7 @@ export async function dispatchCrankAction(
 ): Promise<void> {
   switch (action) {
     case CrankAction.CreateRound: {
-      if (s.round?.state === RoundState.Claimable && ctx.beefStamper?.enabled()) {
+      if (s.round?.state === RoundState.Claimable && ctx.beefStamper) {
         await ctx.beefStamper.stamp(s.config.currentRoundId);
       }
       return deps.createAndDelegate(ctx, s.config.currentRoundId + 1);
@@ -95,10 +95,15 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
   let lastBeefEmission: bigint | null = null;
   // Minted-BEEF stamp crank (plan Task 6 Step 2). Sources mint/vault/treasury from the on-chain
   // BeefConfig (never env) + the mint's owning token program; skips silently while BEEF is
-  // uninitialized (mainnet today) and re-probes each finalize so a mid-flight init_beef is
-  // picked up without a keeper restart. finalizeSettled swallows any stamp throw.
+  // uninitialized (mainnet today) and re-probes on each stamp attempt so a mid-flight init_beef
+  // is picked up without a keeper restart. finalizeSettled swallows its initial stamp throw;
+  // the Claimable CreateRound gate retries and propagates failure before advancing.
   const beefStamper = makeBeefStamper({
-    probeConfig: () => fetchBeefConfig(chain.program, beefConfigPda()).catch(() => null),
+    probeConfig: async () => {
+      const pda = beefConfigPda();
+      const info = await chain.conn.getAccountInfo(pda, "confirmed");
+      return info ? fetchBeefConfig(chain.program, pda) : null;
+    },
     detectTokenProgram: async (mint) => {
       const info = await chain.conn.getAccountInfo(mint, "confirmed").catch(() => null);
       return info && info.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
@@ -166,7 +171,7 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
       }
 
       // BEEF stamp crank: boot-probe BeefConfig once (warms the cache + logs enabled/dormant).
-      // Dormant on mainnet today; the crank lazily re-probes each finalize so a later init_beef
+      // Dormant on mainnet today; the crank lazily re-probes each stamp attempt so a later init_beef
       // is picked up with no restart.
       await beefStamper.init();
 

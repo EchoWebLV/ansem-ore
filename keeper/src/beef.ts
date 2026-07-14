@@ -8,8 +8,8 @@ import type { Logger } from "./logger.js";
  * in service.ts; every primitive here is chain I/O the tests stub.
  */
 export interface BeefStampDeps {
-  /** Null-safe BeefConfig read: the pinned mint/vault/treasury, or null when BeefConfig is
-   *  uninitialized (mainnet today) OR the read fails. MUST NOT throw. */
+  /** BeefConfig read: the pinned mint/vault/treasury, or null only when BeefConfig is
+   *  uninitialized. RPC and decode failures must throw so funded-round advancement blocks. */
   probeConfig: () => Promise<BeefConfigState | null>;
   /** The BEEF mint's OWNING token program (classic SPL vs Token-2022) — read from the mint
    *  account on-chain, never env. Called once per (re)probe against the resolved mint. */
@@ -45,8 +45,8 @@ export interface BeefStamper {
   /** Boot-time probe: warms the cache + logs enabled/dormant. Optional — stamp() lazily
    *  probes too, so a keeper that boots BEFORE BEEF launches still picks it up later. */
   init: () => Promise<void>;
-  /** Best-effort per-round stamp. Resolves (no-op) when BEEF is uninitialized; THROWS on a
-   *  send failure or exhausted account reads so finalizeSettled can swallow and log it. */
+  /** Per-round stamp. Resolves (no-op) when BEEF is uninitialized; throws on probe, token
+   *  detection, send, or exhausted account-read failures so callers can enforce their policy. */
   stamp: (roundId: number) => Promise<void>;
   /** Observability/tests: true once a BeefConfig has been cached. */
   enabled: () => boolean;
@@ -62,11 +62,12 @@ export interface BeefStamper {
  *  - stamp() re-probes whenever the cache is empty, so an init_beef that lands MID-FLIGHT is
  *    picked up on the next finalize with NO keeper restart (this is why the disabled path
  *    still costs one cheap read per finalize — a required trade for hot BEEF enablement).
- *  - a stamp SEND-failure invalidates the cache (re-probe next finalize) — recovers from a
- *    transient RPC error and picks up a post-init config/address change without a restart.
+ *  - a stamp SEND-failure invalidates the cache and re-probes on the next stamp attempt. This
+ *    recovers from a transient RPC error and picks up config changes without a restart.
  *
- * INVARIANT: BEEF never blocks the game. finalizeSettled swallows send failures and exhausted
- * account reads. The snapshot holder is updated only from an observed BeefRound account.
+ * finalizeSettled treats its first stamp attempt as best-effort. The Claimable CreateRound gate
+ * retries and propagates failures so a funded round cannot advance unstamped. The snapshot holder
+ * is updated only from an observed BeefRound account.
  */
 export function makeBeefStamper(deps: BeefStampDeps): BeefStamper {
   let cache: BeefCache | null = null;
@@ -76,8 +77,8 @@ export function makeBeefStamper(deps: BeefStampDeps): BeefStamper {
     sleep: deps.sleep ?? DEFAULT_STAMP_RETRY_OPTIONS.sleep,
   };
 
-  // Resolve the pinned accounts + owning token program and cache them. Returns false
-  // (dormant) when BeefConfig is absent. Never throws — probeConfig is null-safe.
+  // Resolve the pinned accounts + owning token program and cache them. Returns false only when
+  // BeefConfig is absent. RPC, decode, and token-program detection failures propagate.
   const probe = async (): Promise<boolean> => {
     const cfg = await deps.probeConfig();
     if (!cfg) { cache = null; return false; }
@@ -112,7 +113,7 @@ export function makeBeefStamper(deps: BeefStampDeps): BeefStamper {
           treasury: cache!.cfg.beefTreasury, tokenProgram: cache!.tokenProgram.toBase58(),
         });
       } else {
-        deps.log.info("BEEF not initialized — stamp crank dormant (re-probes each finalize)");
+        deps.log.info("BEEF not initialized: stamp crank dormant (re-probes on each attempt)");
       }
     },
 
@@ -135,8 +136,8 @@ export function makeBeefStamper(deps: BeefStampDeps): BeefStamper {
       try {
         await deps.sendStamp(roundId, cfg, tokenProgram);
       } catch (e) {
-        cache = null; // invalidate -> re-probe next finalize (transient recovery / config change)
-        throw e;      // finalizeSettled swallows+logs — BEEF never blocks the game (invariant)
+        cache = null; // invalidate -> re-probe on next attempt (transient recovery / config change)
+        throw e;      // finalize swallows; Claimable CreateRound retries and blocks advancement
       }
 
       // The transaction can confirm before the account is visible through the configured RPC.
