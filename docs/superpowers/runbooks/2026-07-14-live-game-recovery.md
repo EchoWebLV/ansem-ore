@@ -659,9 +659,17 @@ else if (mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) tokenProgram = TOKEN_2022
 else throw new Error(`BEEF mint has unsupported owner ${mintInfo.owner.toBase58()}`);
 const ata = getAssociatedTokenAddressSync(mint, player.publicKey, false, tokenProgram);
 const minerPda = beefMinerPda(player.publicKey);
-const minerBefore = await program.account.beefMiner.fetchNullable(minerPda);
+let minerBefore = null;
+for (let attempt = 1; attempt <= 45; attempt += 1) {
+  minerBefore = await program.account.beefMiner.fetchNullable(minerPda);
+  if (minerBefore && BigInt(minerBefore.unclaimed.toString()) > 0n) break;
+  if (attempt === 45) break;
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
+}
 const expectedUnclaimed = minerBefore ? BigInt(minerBefore.unclaimed.toString()) : 0n;
-if (expectedUnclaimed <= 0n) throw new Error("fresh proof roll created no claimable BEEF");
+if (expectedUnclaimed <= 0n) {
+  throw new Error("fresh proof roll did not become visible at finalized commitment within 90s");
+}
 const balance = async () => BigInt(
   (await conn.getTokenAccountBalance(ata, "finalized").catch(() => ({ value: { amount: "0" } })))
     .value.amount,
