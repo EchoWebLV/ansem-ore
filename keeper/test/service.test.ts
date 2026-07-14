@@ -237,4 +237,14 @@ describe("live BEEF mint token-program detection", () => {
 
     await expect(detectTokenProgram(mint)).resolves.toEqual(TOKEN_2022_PROGRAM_ID);
   });
+
+  it("rejects a mint account owned by an unsupported program", async () => {
+    const unsupportedOwner = PublicKey.unique();
+    const getAccountInfo = vi.fn(async () => ({ owner: unsupportedOwner }));
+    const { detectTokenProgram } = await captureLiveBeefDeps(getAccountInfo, unusedConfigFetch);
+
+    await expect(detectTokenProgram(mint)).rejects.toThrow(
+      new RegExp(`unsupported.*${unsupportedOwner.toBase58()}`, "i"),
+    );
+  });
 });
