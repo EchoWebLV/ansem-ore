@@ -97,6 +97,32 @@ pub(crate) fn finalize_swap_accounting(
     Ok(())
 }
 
+fn ensure_post_swap_rent_reserve<'info>(
+    payer: &Signer<'info>,
+    pot_vault: &UncheckedAccount<'info>,
+    system_program: &Program<'info, System>,
+    pot: u64,
+) -> Result<()> {
+    let post_swap = pot_vault
+        .lamports()
+        .checked_sub(pot)
+        .ok_or(AnsemError::Insolvent)?;
+    let shortfall = Rent::get()?.minimum_balance(0).saturating_sub(post_swap);
+    if shortfall > 0 {
+        system_program::transfer(
+            CpiContext::new(
+                system_program.key(),
+                SolTransfer {
+                    from: payer.to_account_info(),
+                    to: pot_vault.to_account_info(),
+                },
+            ),
+            shortfall,
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Accounts)]
 pub struct ExecuteSwapMock<'info> {
     #[account(mut)]
@@ -183,6 +209,12 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     require!(pot_vault_lamports >= total_escrow_balance, AnsemError::Insolvent);
     let available_for_pots = pot_vault_lamports - total_escrow_balance;
     require!(available_for_pots >= pot, AnsemError::Insolvent);
+    ensure_post_swap_rent_reserve(
+        &ctx.accounts.payer,
+        &ctx.accounts.pot_vault,
+        &ctx.accounts.system_program,
+        pot,
+    )?;
 
     // Simulate the sale: move the entire pot lamports out of pot_vault into treasury.
     let pv_seeds: &[&[u8]] = &[POT_VAULT_SEED, &[pot_vault_bump]];
@@ -313,6 +345,12 @@ pub fn execute_swap_real_handler(ctx: Context<ExecuteSwapReal>, ansem_out: u64) 
     require!(pot_vault_lamports >= total_escrow_balance, AnsemError::Insolvent);
     let available_for_pots = pot_vault_lamports - total_escrow_balance;
     require!(available_for_pots >= pot, AnsemError::Insolvent);
+    ensure_post_swap_rent_reserve(
+        &ctx.accounts.payer,
+        &ctx.accounts.pot_vault,
+        &ctx.accounts.system_program,
+        pot,
+    )?;
 
     // Move the entire pot lamports out of pot_vault into treasury (identical CPI to mock).
     let pv_seeds: &[&[u8]] = &[POT_VAULT_SEED, &[pot_vault_bump]];
