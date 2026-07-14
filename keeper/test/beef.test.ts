@@ -220,9 +220,15 @@ describe("makeBeefStamper", () => {
       });
 
       await expect(stamper.stamp(43)).rejects.toThrow(/confirmation lost/);
+
+      expect(calls.send).toEqual([43]);
+      expect(calls.read).toEqual([43]);
+      expect(calls.published).toEqual([]);
+
       await stamper.stamp(43);
 
       expect(calls.send).toEqual([43]);
+      expect(calls.read).toEqual([43, 43]);
       expect(calls.published).toEqual([emission]);
     });
 
