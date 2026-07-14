@@ -12,8 +12,9 @@ IDs, slots, balances, and transaction signatures.
 
 - `tick_bps` and `bonus_cap_bps` stay zero during deployment and rollback.
 - Base BEEF stays enabled.
-- The existing 47.481502 BEEF reserve, 47,481,502 base units, is never swept, burned,
-  transferred, reassigned, or counted down as an operational recovery fund.
+- The existing 47.481502 BEEF historical vault balance, 47,481,502 base units, is the
+  protected vault floor. It is never swept, burned, transferred, reassigned, or counted down
+  as an operational recovery fund.
 - Never run a BEEF vault or treasury sweep command during this procedure.
 - Do not upgrade unless the release worktree is clean, all local verification has passed, and
   the available signer is the recorded mainnet upgrade authority.
@@ -31,7 +32,7 @@ IDs, slots, balances, and transaction signatures.
 | Bonus-zero transaction | `4Y3oRsyFT8LKDnkvU5KXiw49WPPfXBuZi2Ti2CE5VJfh5KgmqagDxhbsrcGctrip1usnxJ65Ht7Cr75MtCna9ppM` |
 | Railway target | `ansem-keeper / production / keeper` |
 | Required keeper duration | `KEEPER_ROUND_SECS=60` |
-| Protected BEEF reserve | `47.481502 BEEF` (`47481502` base units) |
+| Protected BEEF vault floor | `47.481502 BEEF` (`47481502` base units) |
 
 ## 1. Session bootstrap
 
@@ -48,7 +49,7 @@ export PROGRAMDATA_ID=2K1sLP43GKajCgrGTgkAfvc23GVLgqY1YQwwkCGBaFvM
 export EXPECTED_UPGRADE_AUTHORITY=FP39ztVCx7FDPpou4mfPV6HyXoNVDRLEqZyvKkFgpCCM
 export BEEF_MINT=4dk28PNZpaViXXk3U1wHjwE1bpksH45gZiSh9CPz4jQN
 export BONUS_ZERO_SIGNATURE=4Y3oRsyFT8LKDnkvU5KXiw49WPPfXBuZi2Ti2CE5VJfh5KgmqagDxhbsrcGctrip1usnxJ65Ht7Cr75MtCna9ppM
-export BEEF_RESERVE_BASE_UNITS=47481502
+export BEEF_PROTECTED_VAULT_FLOOR_BASE_UNITS=47481502
 export RAILWAY_PROJECT=ansem-keeper
 export RAILWAY_ENVIRONMENT=production
 export RAILWAY_SERVICE=keeper
@@ -136,7 +137,7 @@ Record:
 - Upgrade signer balance before recovery, lamports:
 - Authority match confirmed at UTC:
 
-## 4. Live BEEF readback and reserve gate
+## 4. Live BEEF readback and protected-vault gate
 
 Define a read-only accounting command. It uses a throwaway in-memory wallet only to construct an
 Anchor provider. It does not sign or send a transaction.
@@ -145,7 +146,7 @@ Anchor provider. It does not sign or send a transaction.
 read_beef_state() {
   local output="$1"
   RPC="$MAINNET_RPC" BEEF_MINT="$BEEF_MINT" \
-  BEEF_RESERVE_BASE_UNITS="$BEEF_RESERVE_BASE_UNITS" \
+  BEEF_PROTECTED_VAULT_FLOOR_BASE_UNITS="$BEEF_PROTECTED_VAULT_FLOOR_BASE_UNITS" \
   PROOF_WALLET_PUBKEY="${PROOF_WALLET_PUBKEY:-}" \
   node --input-type=module <<'NODE' | tee "$output"
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -168,20 +169,20 @@ if (beef.tickBps !== 0 || beef.bonusCapBps !== 0) {
 const mint = new PublicKey(beef.beefMint);
 const mintInfo = await conn.getAccountInfo(mint, "finalized");
 if (!mintInfo) throw new Error("BEEF mint account is absent");
-const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-  ? TOKEN_2022_PROGRAM_ID
-  : TOKEN_PROGRAM_ID;
+let tokenProgram;
+if (mintInfo.owner.equals(TOKEN_PROGRAM_ID)) tokenProgram = TOKEN_PROGRAM_ID;
+else if (mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) tokenProgram = TOKEN_2022_PROGRAM_ID;
+else throw new Error(`BEEF mint has unsupported owner ${mintInfo.owner.toBase58()}`);
 const tokenAmount = async (address) =>
   BigInt((await conn.getTokenAccountBalance(new PublicKey(address), "finalized")).value.amount);
 const supply = BigInt((await conn.getTokenSupply(mint, "finalized")).value.amount);
 const vault = await tokenAmount(beef.beefVault);
 const treasury = await tokenAmount(beef.beefTreasury);
 const totalOwed = BigInt(beef.totalOwed);
-const reserve = vault - totalOwed;
-const protectedReserve = BigInt(process.env.BEEF_RESERVE_BASE_UNITS);
+const protectedVaultFloor = BigInt(process.env.BEEF_PROTECTED_VAULT_FLOOR_BASE_UNITS);
 if (vault < totalOwed) throw new Error(`BEEF undercollateralized: ${vault} < ${totalOwed}`);
-if (reserve < protectedReserve) {
-  throw new Error(`protected reserve breached: ${reserve} < ${protectedReserve}`);
+if (vault < protectedVaultFloor) {
+  throw new Error(`protected vault floor breached: ${vault} < ${protectedVaultFloor}`);
 }
 let playerBalance = null;
 let playerAta = null;
@@ -201,7 +202,7 @@ console.log(JSON.stringify({
   bonusCapBps: beef.bonusCapBps, mintedTotal: beef.mintedTotal.toString(),
   totalOwed: totalOwed.toString(), supply: supply.toString(),
   vault: vault.toString(), treasury: treasury.toString(),
-  excessReserve: reserve.toString(), protectedReserve: protectedReserve.toString(),
+  protectedVaultFloor: protectedVaultFloor.toString(),
   playerAta: playerAta?.toBase58() ?? null,
   playerBalance: playerBalance?.toString() ?? null,
 }, null, 2));
@@ -227,13 +228,16 @@ Record:
 - Mint supply before deployment:
 - Vault balance before deployment:
 - Treasury balance before deployment:
-- Excess reserve before deployment:
-- Protected 47.481502 BEEF reserve confirmed at UTC:
+- Protected vault floor, base units: `47481502`
+- Vault balance at or above protected floor confirmed at UTC:
 
 ## 5. Build, hash, and retain the rollback binary
 
 Run the full Task 11 verification before this section. Build with the reviewed pinned toolchain,
 hash the exact file that will be deployed, and dump the current deployed bytes before any write.
+The upgradeable loader's ProgramData account adds a 45-byte metadata header. The balance gate
+therefore funds one temporary program buffer plus only the positive ProgramData rent-extension
+shortfall, the maximum swap rent top-up, and a 0.05 SOL deployment fee margin.
 
 ```bash
 anchor build
@@ -246,16 +250,57 @@ export NEW_PROGRAM_HASH="$(shasum -a 256 "$NEW_PROGRAM_SO" | awk '{print $1}')"
 test "$PREVIOUS_PROGRAM_HASH" != "$NEW_PROGRAM_HASH"
 
 export PROGRAM_BYTES="$(wc -c < "$NEW_PROGRAM_SO" | tr -d ' ')"
-export BUFFER_RENT_LAMPORTS="$(
-  solana rent "$PROGRAM_BYTES" --lamports --url "$MAINNET_RPC" | awk '{print $(NF-1)}'
-)"
-export SIGNER_BALANCE_LAMPORTS="$(solana balance "$EXPECTED_UPGRADE_AUTHORITY" \
-  --lamports --url "$MAINNET_RPC" --commitment finalized | awk '{print $1}')"
-case "$BUFFER_RENT_LAMPORTS:$SIGNER_BALANCE_LAMPORTS" in
-  (*[!0-9:]*|:*|*:) echo "Could not parse lamport amounts" >&2; exit 1 ;;
+case "$PROGRAM_BYTES" in
+  (*[!0-9]*|'') echo "Could not parse program byte length" >&2; exit 1 ;;
 esac
-export MINIMUM_OPERATOR_BALANCE_LAMPORTS="$((2 * BUFFER_RENT_LAMPORTS + 890880 + 50000000))"
+export PROGRAMDATA_METADATA_BYTES=45
+export BUFFER_RENT_LAMPORTS="$(
+  solana rent "$PROGRAM_BYTES" --lamports --url "$MAINNET_RPC" \
+    | awk 'NF >= 2 { value=$(NF-1) } END { if (value == "") exit 1; print value }'
+)"
+export PROGRAMDATA_REQUIRED_RENT_LAMPORTS="$(
+  solana rent "$((PROGRAM_BYTES + PROGRAMDATA_METADATA_BYTES))" \
+    --lamports --url "$MAINNET_RPC" \
+    | awk 'NF >= 2 { value=$(NF-1) } END { if (value == "") exit 1; print value }'
+)"
+export CURRENT_PROGRAMDATA_LAMPORTS="$(node -e '
+const { readFileSync } = require("node:fs");
+const p = JSON.parse(readFileSync(`${process.env.EVIDENCE_DIR}/program-before.json`, "utf8"));
+if (!Number.isSafeInteger(p.lamports) || p.lamports < 0) process.exit(1);
+process.stdout.write(String(p.lamports));
+')"
+export SIGNER_BALANCE_LAMPORTS="$(solana balance "$EXPECTED_UPGRADE_AUTHORITY" \
+  --lamports --url "$MAINNET_RPC" --commitment finalized \
+  | awk 'NF >= 1 { value=$1 } END { if (value == "") exit 1; print value }')"
+case "$BUFFER_RENT_LAMPORTS:$PROGRAMDATA_REQUIRED_RENT_LAMPORTS:$CURRENT_PROGRAMDATA_LAMPORTS:$SIGNER_BALANCE_LAMPORTS" in
+  (*[!0-9:]*|:*|*:|*::*) echo "Could not parse lamport amounts" >&2; exit 1 ;;
+esac
+if test "$PROGRAMDATA_REQUIRED_RENT_LAMPORTS" -gt "$CURRENT_PROGRAMDATA_LAMPORTS"; then
+  export PROGRAMDATA_EXTENSION_SHORTFALL_LAMPORTS="$((
+    PROGRAMDATA_REQUIRED_RENT_LAMPORTS - CURRENT_PROGRAMDATA_LAMPORTS
+  ))"
+else
+  export PROGRAMDATA_EXTENSION_SHORTFALL_LAMPORTS=0
+fi
+export SWAP_RENT_RESERVE_LAMPORTS=890880
+export DEPLOY_FEE_MARGIN_LAMPORTS=50000000
+export MINIMUM_OPERATOR_BALANCE_LAMPORTS="$((
+  BUFFER_RENT_LAMPORTS + PROGRAMDATA_EXTENSION_SHORTFALL_LAMPORTS +
+  SWAP_RENT_RESERVE_LAMPORTS + DEPLOY_FEE_MARGIN_LAMPORTS
+))"
 test "$SIGNER_BALANCE_LAMPORTS" -ge "$MINIMUM_OPERATOR_BALANCE_LAMPORTS"
+
+{
+  printf 'program_bytes=%s\n' "$PROGRAM_BYTES"
+  printf 'buffer_rent_lamports=%s\n' "$BUFFER_RENT_LAMPORTS"
+  printf 'programdata_required_rent_lamports=%s\n' "$PROGRAMDATA_REQUIRED_RENT_LAMPORTS"
+  printf 'current_programdata_lamports=%s\n' "$CURRENT_PROGRAMDATA_LAMPORTS"
+  printf 'programdata_extension_shortfall_lamports=%s\n' "$PROGRAMDATA_EXTENSION_SHORTFALL_LAMPORTS"
+  printf 'swap_rent_reserve_lamports=%s\n' "$SWAP_RENT_RESERVE_LAMPORTS"
+  printf 'deploy_fee_margin_lamports=%s\n' "$DEPLOY_FEE_MARGIN_LAMPORTS"
+  printf 'minimum_operator_balance_lamports=%s\n' "$MINIMUM_OPERATOR_BALANCE_LAMPORTS"
+  printf 'signer_balance_lamports=%s\n' "$SIGNER_BALANCE_LAMPORTS"
+} | tee "$EVIDENCE_DIR/funding-gate.txt"
 
 printf '%s  %s\n' "$PREVIOUS_PROGRAM_HASH" "$PREVIOUS_PROGRAM_SO" \
   | tee "$EVIDENCE_DIR/program-before.sha256"
@@ -268,10 +313,16 @@ Record:
 - Build command: `anchor build`
 - Release artifact path: `target/deploy/ansem_miner.so`
 - Release artifact byte length:
+- ProgramData metadata overhead, bytes: `45`
 - Deterministic release SHA-256:
 - Current deployed SHA-256 before upgrade:
 - Previous binary retained at:
 - Buffer rent estimate, lamports:
+- Required ProgramData rent for release bytes, lamports:
+- Current ProgramData balance, lamports:
+- ProgramData rent-extension shortfall, lamports:
+- Swap rent-reserve allowance, lamports: `890880`
+- Deployment fee margin, lamports: `50000000`
 - Minimum operator balance gate, lamports:
 - Observed signer balance, lamports:
 - Local verification summary:
@@ -330,7 +381,7 @@ Record:
 - Hash equality confirmed:
 - Upgrade authority after deployment:
 - Bonus-zero readback after deployment:
-- Protected reserve readback after deployment:
+- Protected vault floor and balance readback after deployment:
 
 ## 7. Railway keeper deployment
 
@@ -473,9 +524,10 @@ const beef = await fetchBeefConfig(program, beefConfigPda());
 const mint = new PublicKey(beef.beefMint);
 const mintInfo = await conn.getAccountInfo(mint, "finalized");
 if (!mintInfo) throw new Error("BEEF mint account is absent");
-const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-  ? TOKEN_2022_PROGRAM_ID
-  : TOKEN_PROGRAM_ID;
+let tokenProgram;
+if (mintInfo.owner.equals(TOKEN_PROGRAM_ID)) tokenProgram = TOKEN_PROGRAM_ID;
+else if (mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) tokenProgram = TOKEN_2022_PROGRAM_ID;
+else throw new Error(`BEEF mint has unsupported owner ${mintInfo.owner.toBase58()}`);
 const ata = getAssociatedTokenAddressSync(mint, player.publicKey, false, tokenProgram);
 const balance = async () => BigInt(
   (await conn.getTokenAccountBalance(ata, "finalized").catch(() => ({ value: { amount: "0" } })))
@@ -571,7 +623,9 @@ Record:
 ## 9. Post-proof accounting reconciliation
 
 Compare `beef-before-proof.json` with `beef-after-proof.json`. The final read already enforces
-bonus zero, `vault >= total_owed`, and an excess reserve of at least 47,481,502 base units.
+bonus zero, `vault >= total_owed`, and an absolute vault balance of at least 47,481,502 base
+units. The controlled wallet has no unrelated pending entitlement, so its legitimate claim must
+leave the post-proof vault balance at or above the pre-proof balance.
 
 ```bash
 node --input-type=module <<'NODE'
@@ -581,9 +635,9 @@ const after = JSON.parse(readFileSync(`${process.env.EVIDENCE_DIR}/beef-after-pr
 const b = (x) => BigInt(x);
 if (after.tickBps !== 0 || after.bonusCapBps !== 0) throw new Error("BEEF bonus is not zero");
 if (b(after.vault) < b(after.totalOwed)) throw new Error("BEEF vault is undercollateralized");
-if (b(after.excessReserve) < 47481502n) throw new Error("protected reserve was reduced");
-if (b(after.excessReserve) < b(before.excessReserve)) {
-  throw new Error("protected reserve decreased during the controlled proof");
+if (b(after.vault) < 47481502n) throw new Error("protected vault floor was breached");
+if (b(after.vault) < b(before.vault)) {
+  throw new Error("vault balance decreased during the controlled one-wallet proof");
 }
 if (b(after.supply) - b(before.supply) !==
     (b(after.vault) - b(before.vault)) +
@@ -596,7 +650,7 @@ console.log(JSON.stringify({
   vaultBefore: before.vault, vaultAfter: after.vault,
   treasuryBefore: before.treasury, treasuryAfter: after.treasury,
   totalOwedBefore: before.totalOwed, totalOwedAfter: after.totalOwed,
-  excessReserveBefore: before.excessReserve, excessReserveAfter: after.excessReserve,
+  protectedVaultFloor: "47481502",
   playerBefore: before.playerBalance, playerAfter: after.playerBalance,
 }, null, 2));
 NODE
@@ -613,9 +667,9 @@ Record:
 - `minted_total` after proof:
 - `total_owed` after proof:
 - Proof wallet BEEF balance delta:
-- Excess reserve after proof:
 - `beef_vault.amount >= total_owed` confirmed:
-- 47.481502 BEEF protected reserve unchanged or increased:
+- Post-proof vault balance at or above 47.481502 BEEF protected floor:
+- Post-proof vault balance at or above pre-proof vault balance:
 - Supply reconciliation confirmed:
 
 ## 10. Rollback
@@ -672,7 +726,7 @@ Record:
 - Health after keeper rollback:
 - Snapshot after keeper rollback:
 - Bonus-zero readback after keeper rollback:
-- Protected reserve readback after keeper rollback:
+- Protected vault floor and balance readback after keeper rollback:
 
 ### Program binary rollback
 
@@ -711,7 +765,7 @@ Record:
 - Program rollback UTC:
 - Upgrade authority after rollback:
 - Bonus-zero readback after program rollback:
-- Protected reserve readback after program rollback:
+- Protected vault floor and balance readback after program rollback:
 
 ## 11. Final evidence summary
 
@@ -742,6 +796,6 @@ operator evidence directory; commit only this public summary.
 - Post-proof BEEF vault balance:
 - Post-proof BEEF treasury balance:
 - Post-proof `total_owed`:
-- Post-proof excess reserve:
-- 47.481502 BEEF reserve untouched:
+- 47.481502 BEEF protected vault floor maintained:
+- Post-proof vault balance at or above pre-proof vault balance:
 - Final audit UTC:
