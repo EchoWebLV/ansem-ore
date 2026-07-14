@@ -3,6 +3,7 @@ import { BN } from "../bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { AnsemMiner } from "../idl/ansem_miner.js";
 import { configPda, roundPda, minerPda, escrowPda, playerAta, payoutVault, vaultAuthPda, ansemMintPda,
+  payoutVaultForMint, ataForMint,
   beefConfigPda, beefMinerPda, beefRoundPda, playerBeefAta } from "../pdas.js";
 import { TOKEN_PROGRAM_ID } from "../constants.js";
 
@@ -39,12 +40,15 @@ export const stakeIx = (
 // tokenProgram is no longer auto-resolvable (the program's token layer is an Interface);
 // pass it explicitly. Defaults classic (the devnet PDA mint); a real Token-2022 mint threads
 // its program into the ATA seeds + the tokenProgram account together.
+// ansemMint defaults to the devnet mock PDA mint; on mainnet pass config.ansem_mint
+// (the real external mint) so payout_vault/player ATAs derive from it, not the PDA.
 export const claimIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number,
+  ansemMint: PublicKey = ansemMintPda(),
   tokenProgramId: PublicKey = TOKEN_PROGRAM_ID) =>
   p.methods.claim(new BN(roundId)).accountsPartial({
-    authority: wallet, round: roundPda(roundId), ansemMint: ansemMintPda(),
-    vaultAuthority: vaultAuthPda(), payoutVault: payoutVault(tokenProgramId),
-    playerAta: playerAta(wallet, tokenProgramId), tokenProgram: tokenProgramId,
+    authority: wallet, round: roundPda(roundId), ansemMint,
+    vaultAuthority: vaultAuthPda(), payoutVault: payoutVaultForMint(ansemMint, tokenProgramId),
+    playerAta: ataForMint(ansemMint, wallet, tokenProgramId), tokenProgram: tokenProgramId,
   });
 
 export const refundIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>
@@ -63,11 +67,12 @@ export const stakeDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId
   });
 
 export const claimDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number,
+  ansemMint: PublicKey = ansemMintPda(),
   tokenProgramId: PublicKey = TOKEN_PROGRAM_ID) =>
   p.methods.claimDirect(new BN(roundId)).accountsPartial({
     authority: wallet, config: configPda(), round: roundPda(roundId), miner: minerPda(wallet),
-    ansemMint: ansemMintPda(), vaultAuthority: vaultAuthPda(), payoutVault: payoutVault(tokenProgramId),
-    playerAta: playerAta(wallet, tokenProgramId), tokenProgram: tokenProgramId,
+    ansemMint, vaultAuthority: vaultAuthPda(), payoutVault: payoutVaultForMint(ansemMint, tokenProgramId),
+    playerAta: ataForMint(ansemMint, wallet, tokenProgramId), tokenProgram: tokenProgramId,
   });
 
 export const refundDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>

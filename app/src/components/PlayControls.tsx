@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 import type { Program } from "@coral-xyz/anchor";
 import { useConnection } from "@solana/wallet-adapter-react";
 import {
-  claimDirectIx, refundDirectIx, roundPda, fetchRound,
+  claimDirectIx, refundDirectIx, roundPda, fetchRound, fetchConfig, configPda,
   RoundState, type AnsemMiner, type BN,
 } from "@ansem/sdk";
+import { PublicKey } from "@solana/web3.js";
 import { usePlayerState } from "../hooks/use-player-state.js";
 import { directStake, type WalletAdapter } from "../lib/writes.js";
 import { lamportsToSolStr } from "../lib/amount.js";
@@ -77,7 +78,15 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
   });
 
   const doClaim = (rid: number) => run(async () => {
-    const sig = await claimDirectIx(l1, owner, rid).rpc();
+    // Resolve the payout mint + its token program from chain: on mainnet this is
+    // the real external ANSEM (Token-2022), on devnet the mock PDA mint (classic).
+    // The claim builder derives payout_vault/player ATA from these, so the mock
+    // PDA default must NOT be used against the real mint.
+    const cfg = await fetchConfig(l1, configPda());
+    const ansemMint = new PublicKey(cfg.ansemMint);
+    const mintInfo = await connection.getAccountInfo(ansemMint);
+    if (!mintInfo) throw new Error("could not resolve the ANSEM mint on-chain");
+    const sig = await claimDirectIx(l1, owner, rid, ansemMint, mintInfo.owner).rpc();
     onReceipt?.({ label: `claim round ${rid}`, sig });
   });
   const doRefund = (rid: number) => run(async () => {
