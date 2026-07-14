@@ -47,6 +47,7 @@ set -euo pipefail
 export PROGRAM_ID=8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz
 export PROGRAMDATA_ID=2K1sLP43GKajCgrGTgkAfvc23GVLgqY1YQwwkCGBaFvM
 export EXPECTED_UPGRADE_AUTHORITY=FP39ztVCx7FDPpou4mfPV6HyXoNVDRLEqZyvKkFgpCCM
+export EXPECTED_KEEPER_ADMIN=5grN1um11z51nvrkkbwo8vLW7K9HiSssLVsPdup4yu1o
 export BEEF_MINT=4dk28PNZpaViXXk3U1wHjwE1bpksH45gZiSh9CPz4jQN
 export BONUS_ZERO_SIGNATURE=4Y3oRsyFT8LKDnkvU5KXiw49WPPfXBuZi2Ti2CE5VJfh5KgmqagDxhbsrcGctrip1usnxJ65Ht7Cr75MtCna9ppM
 export BEEF_PROTECTED_VAULT_FLOOR_BASE_UNITS=47481502
@@ -74,6 +75,15 @@ railway --version
 
 ## 2. Release source and clean-worktree gate
 
+Task 11 produces and verifies the program binary and prebuilt SDK before this gate. Its required
+order is `anchor build -- --features devnet`, `pnpm run sdk:sync-idl`, then the applicable SDK
+compile, tests, and build. After those pass, run the final default-mainnet `anchor build` last and
+do not sync or build the SDK again. The committed SDK IDL remains the verified devnet IDL while
+`target/deploy/ansem_miner.so` is the final mainnet binary. Known pre-existing `cargo fmt` or
+app-test exceptions must be named in the Task 11 report with their exact failing commands and
+scope. They do not authorize a new source-formatting or app-test regression. Do not run an Anchor
+build or IDL-syncing SDK build after entering the clean release procedure below.
+
 ```bash
 export RELEASE_COMMIT="$(git rev-parse HEAD)"
 export RELEASE_BRANCH="$(git branch --show-current)"
@@ -95,7 +105,7 @@ Record:
 - Node version:
 - pnpm version:
 
-## 3. Program identity, authority, and balance gate
+## 3. Program identity, authority, and signer gate
 
 Read the live loader state and assert every fixed identity before using a signer.
 
@@ -123,7 +133,44 @@ console.log(JSON.stringify(p, null, 2));
 NODE
 
 test "$(solana address --keypair "$UPGRADE_KEYPAIR")" = "$EXPECTED_UPGRADE_AUTHORITY"
-solana balance "$EXPECTED_UPGRADE_AUTHORITY" --url "$MAINNET_RPC" --commitment finalized
+solana balance "$EXPECTED_UPGRADE_AUTHORITY" --lamports \
+  --url "$MAINNET_RPC" --commitment finalized
+
+test -s packages/sdk/dist/index.js
+node --input-type=module -e 'await import("@ansem/sdk")'
+RPC="$MAINNET_RPC" EXPECTED_KEEPER_ADMIN="$EXPECTED_KEEPER_ADMIN" \
+node --input-type=module <<'NODE' | tee "$EVIDENCE_DIR/config-admin-preflight.json"
+import { Connection, Keypair } from "@solana/web3.js";
+import { Wallet } from "@coral-xyz/anchor";
+import { createProgram, configPda, fetchConfig } from "@ansem/sdk";
+const conn = new Connection(process.env.RPC, "finalized");
+const program = createProgram(conn, new Wallet(Keypair.generate()));
+const config = await fetchConfig(program, configPda());
+if (config.admin !== process.env.EXPECTED_KEEPER_ADMIN) {
+  throw new Error(`Config admin mismatch: ${config.admin}`);
+}
+console.log(JSON.stringify({ config: configPda().toBase58(), admin: config.admin }, null, 2));
+NODE
+
+export SWAP_RENT_RESERVE_LAMPORTS=890880
+export KEEPER_FEE_MARGIN_LAMPORTS=50000000
+export MINIMUM_KEEPER_BALANCE_LAMPORTS="$((
+  SWAP_RENT_RESERVE_LAMPORTS + KEEPER_FEE_MARGIN_LAMPORTS
+))"
+export KEEPER_BALANCE_LAMPORTS="$(solana balance "$EXPECTED_KEEPER_ADMIN" \
+  --lamports --url "$MAINNET_RPC" --commitment finalized \
+  | awk 'NF >= 1 { value=$1 } END { if (value == "") exit 1; print value }')"
+case "$KEEPER_BALANCE_LAMPORTS:$MINIMUM_KEEPER_BALANCE_LAMPORTS" in
+  (*[!0-9:]*|:*|*:|*::*) echo "Could not parse keeper lamport amounts" >&2; exit 1 ;;
+esac
+test "$KEEPER_BALANCE_LAMPORTS" -ge "$MINIMUM_KEEPER_BALANCE_LAMPORTS"
+{
+  printf 'keeper_admin=%s\n' "$EXPECTED_KEEPER_ADMIN"
+  printf 'swap_rent_reserve_lamports=%s\n' "$SWAP_RENT_RESERVE_LAMPORTS"
+  printf 'keeper_fee_margin_lamports=%s\n' "$KEEPER_FEE_MARGIN_LAMPORTS"
+  printf 'minimum_keeper_balance_lamports=%s\n' "$MINIMUM_KEEPER_BALANCE_LAMPORTS"
+  printf 'keeper_balance_lamports=%s\n' "$KEEPER_BALANCE_LAMPORTS"
+} | tee "$EVIDENCE_DIR/keeper-funding-gate.txt"
 ```
 
 Record:
@@ -135,6 +182,12 @@ Record:
 - Available signer public key:
 - Program last deploy slot before recovery:
 - Upgrade signer balance before recovery, lamports:
+- Live Config admin: `5grN1um11z51nvrkkbwo8vLW7K9HiSssLVsPdup4yu1o`
+- Config admin equality confirmed:
+- Swap rent reserve charged to keeper admin, lamports: `890880`
+- Keeper transaction-fee margin, lamports: `50000000`
+- Minimum keeper-admin balance, lamports: `50890880`
+- Observed keeper-admin balance, lamports:
 - Authority match confirmed at UTC:
 
 ## 4. Live BEEF readback and protected-vault gate
@@ -153,7 +206,7 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { Wallet } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
-  createProgram, beefConfigPda, fetchBeefConfig,
+  createProgram, beefConfigPda, beefMinerPda, fetchBeefConfig,
   TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
 } from "@ansem/sdk";
 
@@ -186,14 +239,21 @@ if (vault < protectedVaultFloor) {
 }
 let playerBalance = null;
 let playerAta = null;
+let beefMiner = null;
+let minerUnclaimed = null;
 if (process.env.PROOF_WALLET_PUBKEY) {
+  const wallet = new PublicKey(process.env.PROOF_WALLET_PUBKEY);
   playerAta = getAssociatedTokenAddressSync(
-    mint, new PublicKey(process.env.PROOF_WALLET_PUBKEY), false, tokenProgram,
+    mint, wallet, false, tokenProgram,
   );
   playerBalance = BigInt(
     (await conn.getTokenAccountBalance(playerAta, "finalized").catch(() => ({ value: { amount: "0" } })))
       .value.amount,
   );
+  const minerPda = beefMinerPda(wallet);
+  const miner = await program.account.beefMiner.fetchNullable(minerPda);
+  beefMiner = minerPda.toBase58();
+  minerUnclaimed = miner ? BigInt(miner.unclaimed.toString()) : 0n;
 }
 console.log(JSON.stringify({
   beefConfig: beefConfigPda().toBase58(), beefMint: beef.beefMint,
@@ -205,11 +265,14 @@ console.log(JSON.stringify({
   protectedVaultFloor: protectedVaultFloor.toString(),
   playerAta: playerAta?.toBase58() ?? null,
   playerBalance: playerBalance?.toString() ?? null,
+  beefMiner,
+  minerUnclaimed: minerUnclaimed?.toString() ?? null,
 }, null, 2));
 NODE
 }
 
-pnpm --filter @ansem/sdk build
+test -s packages/sdk/dist/index.js
+node --input-type=module -e 'await import("@ansem/sdk")'
 solana confirm "$BONUS_ZERO_SIGNATURE" --url "$MAINNET_RPC" --commitment finalized --verbose \
   | tee "$EVIDENCE_DIR/bonus-zero-confirmation.txt"
 read_beef_state "$EVIDENCE_DIR/beef-preflight.json"
@@ -231,16 +294,17 @@ Record:
 - Protected vault floor, base units: `47481502`
 - Vault balance at or above protected floor confirmed at UTC:
 
-## 5. Build, hash, and retain the rollback binary
+## 5. Hash the verified build and retain the rollback binary
 
-Run the full Task 11 verification before this section. Build with the reviewed pinned toolchain,
-hash the exact file that will be deployed, and dump the current deployed bytes before any write.
+Run the full Task 11 verification before the clean gate in Section 2. Use its final default-mainnet
+binary and prebuilt SDK without rebuilding or syncing generated files here. Hash the exact file
+that will be deployed, and dump the current deployed bytes before any write.
 The upgradeable loader's ProgramData account adds a 45-byte metadata header. The balance gate
 therefore funds one temporary program buffer plus only the positive ProgramData rent-extension
-shortfall, the maximum swap rent top-up, and a 0.05 SOL deployment fee margin.
+shortfall and a 0.05 SOL deployment fee margin. The keeper admin, not the upgrade authority,
+carries the separate swap rent reserve checked in Section 3.
 
 ```bash
-anchor build
 test -s "$NEW_PROGRAM_SO"
 
 solana program dump "$PROGRAM_ID" "$PREVIOUS_PROGRAM_SO" \
@@ -282,11 +346,10 @@ if test "$PROGRAMDATA_REQUIRED_RENT_LAMPORTS" -gt "$CURRENT_PROGRAMDATA_LAMPORTS
 else
   export PROGRAMDATA_EXTENSION_SHORTFALL_LAMPORTS=0
 fi
-export SWAP_RENT_RESERVE_LAMPORTS=890880
 export DEPLOY_FEE_MARGIN_LAMPORTS=50000000
 export MINIMUM_OPERATOR_BALANCE_LAMPORTS="$((
   BUFFER_RENT_LAMPORTS + PROGRAMDATA_EXTENSION_SHORTFALL_LAMPORTS +
-  SWAP_RENT_RESERVE_LAMPORTS + DEPLOY_FEE_MARGIN_LAMPORTS
+  DEPLOY_FEE_MARGIN_LAMPORTS
 ))"
 test "$SIGNER_BALANCE_LAMPORTS" -ge "$MINIMUM_OPERATOR_BALANCE_LAMPORTS"
 
@@ -296,7 +359,6 @@ test "$SIGNER_BALANCE_LAMPORTS" -ge "$MINIMUM_OPERATOR_BALANCE_LAMPORTS"
   printf 'programdata_required_rent_lamports=%s\n' "$PROGRAMDATA_REQUIRED_RENT_LAMPORTS"
   printf 'current_programdata_lamports=%s\n' "$CURRENT_PROGRAMDATA_LAMPORTS"
   printf 'programdata_extension_shortfall_lamports=%s\n' "$PROGRAMDATA_EXTENSION_SHORTFALL_LAMPORTS"
-  printf 'swap_rent_reserve_lamports=%s\n' "$SWAP_RENT_RESERVE_LAMPORTS"
   printf 'deploy_fee_margin_lamports=%s\n' "$DEPLOY_FEE_MARGIN_LAMPORTS"
   printf 'minimum_operator_balance_lamports=%s\n' "$MINIMUM_OPERATOR_BALANCE_LAMPORTS"
   printf 'signer_balance_lamports=%s\n' "$SIGNER_BALANCE_LAMPORTS"
@@ -310,7 +372,7 @@ printf '%s  %s\n' "$NEW_PROGRAM_HASH" "$NEW_PROGRAM_SO" \
 
 Record:
 
-- Build command: `anchor build`
+- Task 11 final build command: default-mainnet `anchor build`
 - Release artifact path: `target/deploy/ansem_miner.so`
 - Release artifact byte length:
 - ProgramData metadata overhead, bytes: `45`
@@ -321,19 +383,68 @@ Record:
 - Required ProgramData rent for release bytes, lamports:
 - Current ProgramData balance, lamports:
 - ProgramData rent-extension shortfall, lamports:
-- Swap rent-reserve allowance, lamports: `890880`
 - Deployment fee margin, lamports: `50000000`
 - Minimum operator balance gate, lamports:
 - Observed signer balance, lamports:
 - Local verification summary:
 - Independent review result:
 
-## 6. Program upgrade and byte-for-byte verification
+## 6. Stop the old keeper, then upgrade and verify the program
 
-This section mutates mainnet. Re-run Sections 2 through 5 in the same session immediately before
-the deploy command.
+This section mutates production. Link to the exact Railway target, capture the old deployment ID
+for evidence only, stop it, and prove it is stopped before any program write. The old image must
+remain down throughout the upgrade. Its recorded deployment ID is never an approved rollback
+target.
 
 ```bash
+: "${KEEPER_BASE_URL:?KEEPER_BASE_URL must be the public HTTPS keeper origin}"
+railway whoami
+railway link --project "$RAILWAY_PROJECT" \
+  --environment "$RAILWAY_ENVIRONMENT" \
+  --service "$RAILWAY_SERVICE"
+railway status --json | tee "$EVIDENCE_DIR/railway-before.json"
+
+railway_active_deployment_id() {
+  railway status --json | node -e '
+let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
+  const j = JSON.parse(s);
+  const environment = j.environments.edges.map(e => e.node)
+    .find(n => n.name === process.env.RAILWAY_ENVIRONMENT);
+  const service = j.services.edges.map(e => e.node)
+    .find(n => n.name === process.env.RAILWAY_SERVICE);
+  const deployment = service?.serviceInstances.edges.map(e => e.node)
+    .find(n => n.environmentId === environment?.id)?.latestDeployment;
+  if (!deployment?.id || deployment.status === "REMOVED") process.exit(1);
+  process.stdout.write(deployment.id);
+});'
+}
+
+export PREVIOUS_KEEPER_DEPLOYMENT_ID="$(railway_active_deployment_id)"
+test -n "$PREVIOUS_KEEPER_DEPLOYMENT_ID"
+
+# Immediate clean gate before stopping production.
+test -z "$(git status --porcelain)"
+railway down --yes --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
+export KEEPER_STOP_CONFIRMED=0
+for attempt in $(seq 1 30); do
+  if ! railway_active_deployment_id >/dev/null 2>&1; then
+    export KEEPER_STOP_CONFIRMED=1
+    break
+  fi
+  sleep 2
+done
+test "$KEEPER_STOP_CONFIRMED" = 1
+if curl --fail --silent --show-error "$KEEPER_BASE_URL/health" >/dev/null 2>&1; then
+  echo "Keeper health endpoint still responds after railway down" >&2
+  exit 1
+fi
+
+# Immediate clean and stopped gates before the program write.
+test -z "$(git status --porcelain)"
+if railway_active_deployment_id >/dev/null 2>&1; then
+  echo "Keeper restarted before program deploy" >&2
+  exit 1
+fi
 solana program deploy "$NEW_PROGRAM_SO" \
   --program-id "$PROGRAM_ID" \
   --upgrade-authority "$UPGRADE_KEYPAIR" \
@@ -369,10 +480,16 @@ solana program dump "$PROGRAM_ID" "$EVIDENCE_DIR/ansem-miner-after.so" \
 export DEPLOYED_PROGRAM_HASH="$(shasum -a 256 "$EVIDENCE_DIR/ansem-miner-after.so" | awk '{print $1}')"
 test "$DEPLOYED_PROGRAM_HASH" = "$NEW_PROGRAM_HASH"
 read_beef_state "$EVIDENCE_DIR/beef-after-program-upgrade.json"
+if railway_active_deployment_id >/dev/null 2>&1; then
+  echo "Old keeper restarted during program verification" >&2
+  exit 1
+fi
 ```
 
 Record:
 
+- Previous keeper deployment ID, forensic reference only:
+- Old keeper stopped and health endpoint unavailable at UTC:
 - Program upgrade UTC:
 - Program upgrade signature:
 - Program last deploy slot after recovery:
@@ -382,41 +499,51 @@ Record:
 - Upgrade authority after deployment:
 - Bonus-zero readback after deployment:
 - Protected vault floor and balance readback after deployment:
+- Old keeper remained stopped through program verification:
 
-## 7. Railway keeper deployment
+## 7. Deploy the reviewed recovery keeper at 300 seconds, then 60 seconds
 
-Link explicitly to `ansem-keeper / production / keeper`. Capture the active deployment ID before
-the write because that exact ID is the image rollback target.
+The linked production service must still hold its existing `KEEPER_ROUND_SECS=300` value. Upload
+the reviewed recovery source with that value first. Only after the new deployment is distinct,
+healthy, and serving a valid snapshot may the operator set 60 seconds and upload the same clean
+reviewed source again. Never start the recorded old image.
 
 ```bash
-railway whoami
-railway link --project "$RAILWAY_PROJECT" \
-  --environment "$RAILWAY_ENVIRONMENT" \
-  --service "$RAILWAY_SERVICE"
-railway status --json | tee "$EVIDENCE_DIR/railway-before.json"
-
-railway_deployment_id() {
-  railway status --json | node -e '
+railway variables --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" \
+  | node -e '
 let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
-  const j = JSON.parse(s);
-  const environment = j.environments.edges.map(e => e.node)
-    .find(n => n.name === process.env.RAILWAY_ENVIRONMENT);
-  const service = j.services.edges.map(e => e.node)
-    .find(n => n.name === process.env.RAILWAY_SERVICE);
-  const deployment = service?.serviceInstances.edges.map(e => e.node)
-    .find(n => n.environmentId === environment?.id)?.latestDeployment;
-  if (!deployment?.id) process.exit(1);
-  process.stdout.write(deployment.id);
+  const v = JSON.parse(s);
+  if (v.KEEPER_ROUND_SECS !== "300") throw new Error("existing KEEPER_ROUND_SECS is not 300");
+  console.log("KEEPER_ROUND_SECS=300");
 });'
-}
+if railway_active_deployment_id >/dev/null 2>&1; then
+  echo "A keeper is active before the reviewed recovery upload" >&2
+  exit 1
+fi
+test -z "$(git status --porcelain)"
+railway up --ci --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
 
-export PREVIOUS_KEEPER_DEPLOYMENT_ID="$(railway_deployment_id)"
-test -n "$PREVIOUS_KEEPER_DEPLOYMENT_ID"
+export RECOVERY_300_DEPLOYMENT_ID="$(railway_active_deployment_id)"
+test -n "$RECOVERY_300_DEPLOYMENT_ID"
+test "$RECOVERY_300_DEPLOYMENT_ID" != "$PREVIOUS_KEEPER_DEPLOYMENT_ID"
+railway logs "$RECOVERY_300_DEPLOYMENT_ID" --deployment \
+  --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" \
+  | tee "$EVIDENCE_DIR/keeper-recovery-300.log"
+curl --fail --silent --show-error "$KEEPER_BASE_URL/health" \
+  | tee "$EVIDENCE_DIR/keeper-health-300.txt" | grep -Fx ok
+curl --fail --silent --show-error "$KEEPER_BASE_URL/snapshot" \
+  | tee "$EVIDENCE_DIR/keeper-snapshot-300.json" \
+  | node -e '
+let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
+  const x = JSON.parse(s);
+  for (const k of ["roundId", "state", "deadlineTs", "updatedAt"]) {
+    if (!(k in x)) throw new Error(`snapshot missing ${k}`);
+  }
+  console.log(JSON.stringify(x));
+});'
 
 railway variables --set "KEEPER_ROUND_SECS=60" \
   --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
-railway up --ci --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
-
 railway variables --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" \
   | node -e '
 let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
@@ -424,23 +551,21 @@ let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
   if (v.KEEPER_ROUND_SECS !== "60") throw new Error("KEEPER_ROUND_SECS is not 60");
   console.log("KEEPER_ROUND_SECS=60");
 });'
+test -z "$(git status --porcelain)"
+railway up --ci --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
 
 railway status --json | tee "$EVIDENCE_DIR/railway-after.json"
-export KEEPER_DEPLOYMENT_ID="$(railway_deployment_id)"
+export KEEPER_DEPLOYMENT_ID="$(railway_active_deployment_id)"
+test -n "$KEEPER_DEPLOYMENT_ID"
 test "$KEEPER_DEPLOYMENT_ID" != "$PREVIOUS_KEEPER_DEPLOYMENT_ID"
+test "$KEEPER_DEPLOYMENT_ID" != "$RECOVERY_300_DEPLOYMENT_ID"
 railway logs "$KEEPER_DEPLOYMENT_ID" --deployment \
   --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" \
-  | tee "$EVIDENCE_DIR/keeper-deployment.log"
-```
-
-Set the public Railway service origin, without a trailing slash, then verify both read endpoints.
-
-```bash
-: "${KEEPER_BASE_URL:?KEEPER_BASE_URL must be the public HTTPS keeper origin}"
+  | tee "$EVIDENCE_DIR/keeper-deployment-60.log"
 curl --fail --silent --show-error "$KEEPER_BASE_URL/health" \
-  | tee "$EVIDENCE_DIR/keeper-health.txt" | grep -Fx ok
+  | tee "$EVIDENCE_DIR/keeper-health-60.txt" | grep -Fx ok
 curl --fail --silent --show-error "$KEEPER_BASE_URL/snapshot" \
-  | tee "$EVIDENCE_DIR/keeper-snapshot.json" \
+  | tee "$EVIDENCE_DIR/keeper-snapshot-60.json" \
   | node -e '
 let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
   const x = JSON.parse(s);
@@ -456,18 +581,16 @@ Record:
 - Railway project: `ansem-keeper`
 - Railway environment: `production`
 - Railway service: `keeper`
-- Previous keeper deployment ID:
-- Recovery keeper deployment ID:
+- Previous keeper deployment ID, never restarted:
+- Recovery keeper 300-second deployment ID:
+- Recovery keeper 300-second health and snapshot verified at UTC:
+- Final recovery keeper 60-second deployment ID:
 - Keeper release commit:
-- `KEEPER_ROUND_SECS` readback: `60`
-- Keeper deployment UTC:
-- Keeper health URL:
-- Keeper health response:
+- `KEEPER_ROUND_SECS` final readback: `60`
+- Final keeper deployment UTC:
+- Keeper health URL and response:
 - Keeper snapshot URL:
-- Snapshot round ID:
-- Snapshot state:
-- Snapshot deadline:
-- Snapshot updated timestamp:
+- Snapshot round ID, state, deadline, and updated timestamp:
 
 ## 8. Controlled funded-round proof
 
@@ -480,6 +603,12 @@ keeper swap and stamp, and rolls the stamped BEEF before it exits.
 export PROOF_WALLET_PUBKEY="$(solana address --keypair "$CONTROLLED_WALLET")"
 export PROOF_START_SLOT="$(solana slot --url "$MAINNET_RPC" --commitment finalized)"
 read_beef_state "$EVIDENCE_DIR/beef-before-proof.json"
+node -e '
+const { readFileSync } = require("node:fs");
+const x = JSON.parse(readFileSync(`${process.env.EVIDENCE_DIR}/beef-before-proof.json`, "utf8"));
+if (x.minerUnclaimed !== "0") throw new Error(`proof wallet has prior unclaimed BEEF: ${x.minerUnclaimed}`);
+console.log(`proof wallet starts with zero unclaimed BEEF at ${x.beefMiner}`);
+'
 
 read -r SEED_LAMPORTS_PER_ROUND CURRENT_ROLLOVER < <(
   RPC="$MAINNET_RPC" node --input-type=module <<'NODE'
@@ -513,7 +642,7 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { Wallet } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
-  createProgram, beefConfigPda, fetchBeefConfig, claimBeefIx,
+  createProgram, beefConfigPda, beefMinerPda, fetchBeefConfig, claimBeefIx,
   TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
 } from "@ansem/sdk";
 const raw = JSON.parse(readFileSync(process.env.PLAYER_WALLET, "utf8"));
@@ -529,6 +658,10 @@ if (mintInfo.owner.equals(TOKEN_PROGRAM_ID)) tokenProgram = TOKEN_PROGRAM_ID;
 else if (mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) tokenProgram = TOKEN_2022_PROGRAM_ID;
 else throw new Error(`BEEF mint has unsupported owner ${mintInfo.owner.toBase58()}`);
 const ata = getAssociatedTokenAddressSync(mint, player.publicKey, false, tokenProgram);
+const minerPda = beefMinerPda(player.publicKey);
+const minerBefore = await program.account.beefMiner.fetchNullable(minerPda);
+const expectedUnclaimed = minerBefore ? BigInt(minerBefore.unclaimed.toString()) : 0n;
+if (expectedUnclaimed <= 0n) throw new Error("fresh proof roll created no claimable BEEF");
 const balance = async () => BigInt(
   (await conn.getTokenAccountBalance(ata, "finalized").catch(() => ({ value: { amount: "0" } })))
     .value.amount,
@@ -539,9 +672,19 @@ const signature = await claimBeefIx(
 ).signers([player]).rpc({ commitment: "finalized" });
 const after = await balance();
 if (after <= before) throw new Error(`BEEF claim did not increase balance: ${before} -> ${after}`);
+const received = after - before;
+if (received !== expectedUnclaimed) {
+  throw new Error(`claim received ${received}, fresh rolled entitlement was ${expectedUnclaimed}`);
+}
+const minerAfter = await program.account.beefMiner.fetch(minerPda);
+if (BigInt(minerAfter.unclaimed.toString()) !== 0n) {
+  throw new Error(`claim left unclaimed BEEF: ${minerAfter.unclaimed}`);
+}
 console.log(JSON.stringify({
   signature, player: player.publicKey.toBase58(), playerAta: ata.toBase58(),
-  before: before.toString(), after: after.toString(), received: (after - before).toString(),
+  beefMiner: minerPda.toBase58(), expectedUnclaimed: expectedUnclaimed.toString(),
+  before: before.toString(), after: after.toString(), received: received.toString(),
+  unclaimedAfter: "0",
 }, null, 2));
 NODE
 
@@ -607,7 +750,11 @@ for (const row of rows
     const accounts = Object.fromEntries(
       spec.accounts.map((account, index) => [account.name, ix.accounts[index].toBase58()]),
     );
-    const item = { instruction: spec.name, signature: row.signature, slot: row.slot, accounts };
+    if (tx.blockTime === null) throw new Error(`blockTime unavailable: ${row.signature}`);
+    const item = {
+      instruction: spec.name, signature: row.signature, slot: row.slot,
+      blockTime: tx.blockTime, accounts,
+    };
     if (["stake_direct", "stamp_beef", "roll_beef"].includes(spec.name)) {
       if (data.length < 16) throw new Error(`${spec.name} arguments are truncated`);
       item.roundId = Number(data.readBigUInt64LE(8));
@@ -653,6 +800,9 @@ const claimOutput = JSON.parse(
   readFileSync(`${process.env.EVIDENCE_DIR}/proof-claim.json`, "utf8"),
 );
 if (claimOutput.player !== proofWallet) throw new Error("claim output wallet mismatch");
+if (claimOutput.received !== claimOutput.expectedUnclaimed) {
+  throw new Error("claim did not equal the freshly rolled entitlement");
+}
 const claim = exactlyOne("controlled claim_beef", evidence.filter(
   (x) => x.instruction === "claim_beef" && x.accounts.authority === proofWallet &&
     x.signature === claimOutput.signature,
@@ -695,6 +845,7 @@ curl --fail --silent --show-error "$KEEPER_BASE_URL/snapshot" \
 RPC="$MAINNET_RPC" PROGRAM_ID="$PROGRAM_ID" PROOF_ROUND_ID="$PROOF_ROUND_ID" \
 node --input-type=module <<'NODE' | tee "$EVIDENCE_DIR/round-duration-proof.json"
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { readFileSync } from "node:fs";
 import { Wallet } from "@coral-xyz/anchor";
 import bs58 from "bs58";
 import {
@@ -704,15 +855,20 @@ import idl from "./packages/sdk/src/idl/ansem_miner.json" with { type: "json" };
 const conn = new Connection(process.env.RPC, "finalized");
 const programId = new PublicKey(process.env.PROGRAM_ID);
 const program = createProgram(conn, new Wallet(Keypair.generate()));
+const proof = JSON.parse(
+  readFileSync(`${process.env.EVIDENCE_DIR}/proof-program-signatures.json`, "utf8"),
+);
 const config = await fetchConfig(program, configPda());
 if (config.roundDurationSecs !== 60) {
   throw new Error(`on-chain roundDurationSecs is ${config.roundDurationSecs}, expected 60`);
 }
-if (config.currentRoundId <= Number(process.env.PROOF_ROUND_ID)) {
-  throw new Error("keeper has not created the next proof round");
+const expectedNextRoundId = Number(process.env.PROOF_ROUND_ID) + 1;
+if (config.currentRoundId !== expectedNextRoundId) {
+  throw new Error(`expected current round ${expectedNextRoundId}, observed ${config.currentRoundId}`);
 }
-const nextRoundPda = roundPda(config.currentRoundId);
+const nextRoundPda = roundPda(expectedNextRoundId);
 const round = await fetchRound(program, nextRoundPda);
+if (round.roundId !== expectedNextRoundId) throw new Error("next round ID mismatch");
 if (round.state !== RoundState.Open) throw new Error(`next round is not Open: ${round.state}`);
 const createSpec = idl.instructions.find((ix) => ix.name === "create_round");
 if (!createSpec) throw new Error("create_round is absent from the IDL");
@@ -736,6 +892,12 @@ for (const row of rows.filter((x) => x.err === null)) {
   }
 }
 if (creates.length !== 1) throw new Error(`expected one create_round, observed ${creates.length}`);
+if (creates[0].slot <= proof.stamp.slot || creates[0].blockTime < proof.stamp.blockTime) {
+  throw new Error(
+    `round ${expectedNextRoundId} was not created after proof stamp ` +
+    `${proof.stamp.signature}`,
+  );
+}
 const deltaSeconds = round.deadlineTs - creates[0].blockTime;
 if (deltaSeconds < 58 || deltaSeconds > 62) {
   throw new Error(`round duration from chain evidence is ${deltaSeconds}s, expected 60s +/- 2s`);
@@ -845,137 +1007,44 @@ Rollback is a fault-containment action, not a return to unsafe economics. Keep
 
 ### Keeper image rollback
 
-Use the recorded previous successful deployment ID. Railway rollback restores that deployment's
-image and variables as a new deployment, so immediately reassert `KEEPER_ROUND_SECS=60` and verify
-the read endpoints. `RAILWAY_API_TOKEN` is supplied only through the shell.
-
-The previous image is best-effort and does not contain the funded-round stamp gate. An unattended
-rollback is unsafe. The old image has no external approval hook that can guarantee a check before
-each `CreateRound`. The strict safe choice is to keep the keeper stopped. Run the old image only as
-a time-limited emergency measure with a human continuously supervising. Before it may advance a
-funded Claimable round, the current round's `BeefRound` must already be visible. If the supervisor
-cannot remain active or any check fails, stop the keeper immediately and leave it stopped.
-
-Start this read-only supervisor in a dedicated terminal before submitting the rollback mutation.
-It fails closed and removes the active deployment if a funded Claimable round lacks its stamp.
-This reduces response time but does not turn the old image into an atomic gate.
-
-```bash
-verify_funded_claimable_stamp() {
-  RPC="$MAINNET_RPC" node --input-type=module <<'NODE'
-import { Connection, Keypair } from "@solana/web3.js";
-import { Wallet } from "@coral-xyz/anchor";
-import {
-  createProgram, configPda, fetchConfig, fetchRound, roundPda,
-  beefRoundPda, RoundState,
-} from "@ansem/sdk";
-const conn = new Connection(process.env.RPC, "finalized");
-const program = createProgram(conn, new Wallet(Keypair.generate()));
-const config = await fetchConfig(program, configPda());
-if (config.currentRoundId === 0) {
-  console.log(JSON.stringify({ currentRoundId: 0, safeToObserve: true }));
-  process.exit(0);
-}
-const round = await fetchRound(program, roundPda(config.currentRoundId));
-let beefRound = null;
-if (round.state === RoundState.Claimable && round.pot > 0n) {
-  const pda = beefRoundPda(round.roundId);
-  const info = await conn.getAccountInfo(pda, "finalized");
-  if (!info) throw new Error(`STOP: funded Claimable round ${round.roundId} has no BeefRound`);
-  const account = await program.account.beefRound.fetch(pda);
-  beefRound = { address: pda.toBase58(), emission: account.emission.toString() };
-}
-console.log(JSON.stringify({
-  currentRoundId: round.roundId, state: round.state, pot: round.pot.toString(),
-  beefRound, safeToObserve: true,
-}));
-NODE
-}
-
-while true; do
-  if ! verify_funded_claimable_stamp \
-    | tee -a "$EVIDENCE_DIR/keeper-rollback-supervision.jsonl"
-  then
-    railway down --yes --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
-    exit 1
-  fi
-  sleep 2
-done
-```
-
-If the dedicated supervisor cannot be maintained, execute this instead and do not run the old
-image:
+The recorded previous keeper image has no atomic funded-round stamp gate. A polling supervisor
+cannot close the race between observing a missing `BeefRound` and that image submitting
+`CreateRound`. Therefore the previous image is not an approved running rollback target. The only
+safe keeper rollback state is stopped. Leave the program and BEEF accounting readable, preserve
+the evidence, and prepare a new reviewed recovery deployment before resuming automation.
 
 ```bash
 railway down --yes --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
-exit 1
-```
-
-With the supervisor already active in the other terminal, perform the rollback:
-
-```bash
-: "${RAILWAY_API_TOKEN:?RAILWAY_API_TOKEN must be an account or workspace token}"
-: "${PREVIOUS_KEEPER_DEPLOYMENT_ID:?previous keeper deployment ID was not recorded}"
-export ROLLBACK_DEPLOYMENT_ID="$PREVIOUS_KEEPER_DEPLOYMENT_ID"
-
-curl --fail-with-body --silent --show-error \
-  --request POST \
-  --url https://backboard.railway.com/graphql/v2 \
-  --header "Authorization: Bearer $RAILWAY_API_TOKEN" \
-  --header 'Content-Type: application/json' \
-  --data "$(node -e '
-const id = process.argv[1];
-process.stdout.write(JSON.stringify({
-  query: "mutation deploymentRollback($id: String!) { deploymentRollback(id: $id) { id } }",
-  variables: { id },
-}));' "$ROLLBACK_DEPLOYMENT_ID")" \
-  | tee "$EVIDENCE_DIR/railway-rollback.json"
-
-node -e '
-const { readFileSync } = require("node:fs");
-const x = JSON.parse(readFileSync(`${process.env.EVIDENCE_DIR}/railway-rollback.json`, "utf8"));
-if (x.errors?.length || !x.data?.deploymentRollback?.id) throw new Error(JSON.stringify(x));
-console.log(`rollback deployment ${x.data.deploymentRollback.id}`);
-'
-
-railway variables --set "KEEPER_ROUND_SECS=60" \
-  --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
-railway variables --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" \
-  | node -e '
-let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
-  const v = JSON.parse(s);
-  if (v.KEEPER_ROUND_SECS !== "60") throw new Error("KEEPER_ROUND_SECS is not 60");
-  console.log("KEEPER_ROUND_SECS=60");
-});'
-curl --fail --silent --show-error "$KEEPER_BASE_URL/health" | grep -Fx ok
-curl --fail --silent --show-error "$KEEPER_BASE_URL/snapshot" \
-  | tee "$EVIDENCE_DIR/keeper-snapshot-after-rollback.json"
-read_beef_state "$EVIDENCE_DIR/beef-after-keeper-rollback.json"
+if railway_active_deployment_id >/dev/null 2>&1; then
+  echo "Keeper is still active after stop request" >&2
+  exit 1
+fi
+if curl --fail --silent --show-error "$KEEPER_BASE_URL/health" >/dev/null 2>&1; then
+  echo "Keeper health endpoint still responds after stop request" >&2
+  exit 1
+fi
+read_beef_state "$EVIDENCE_DIR/beef-after-keeper-stop.json"
 ```
 
 Record:
 
 - Keeper rollback reason:
-- Keeper rollback target deployment ID:
-- Keeper rollback deployment ID:
-- Keeper rollback UTC:
-- `KEEPER_ROUND_SECS=60` reasserted:
-- Health after keeper rollback:
-- Snapshot after keeper rollback:
-- Bonus-zero readback after keeper rollback:
-- Protected vault floor and balance readback after keeper rollback:
-- Continuous stamp supervisor start and stop UTC:
-- Each funded Claimable round and observed `BeefRound`:
-- Keeper stop event, if any:
+- Keeper stop UTC:
+- No active deployment confirmed:
+- Health endpoint unavailable confirmed:
+- Previous keeper deployment remained stopped and was not rolled back:
+- Bonus-zero readback after keeper stop:
+- Protected vault floor and balance readback after keeper stop:
 
 ### Program binary rollback
 
 Redeploy only the exact binary dumped and hashed before the upgrade. This rollback does not alter
 BEEF configuration or token accounts. The previous binary restores the pot-vault rent wedge, so
 stop the keeper before deployment. Before the old binary may process a swap, the pot vault must
-hold at least the zero-data rent minimum. Top up exactly the positive shortfall and keep a
-continuous post-swap floor monitor active. If monitoring cannot be maintained, keep the keeper
-stopped.
+retain at least the zero-data rent minimum after the current unswapped pot is removed. In other
+words, `potVaultLamports - currentRound.pot >= rentMinimum` for an Open, VrfPending, Settled, or
+Swapping round. Top up exactly the positive residual shortfall and keep a continuous residual
+floor monitor active. If monitoring cannot be maintained, keep the keeper stopped.
 
 ```bash
 railway down --yes --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
@@ -990,30 +1059,48 @@ import { readFileSync } from "node:fs";
 import {
   Connection, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { potVaultPda } from "@ansem/sdk";
+import { Wallet } from "@coral-xyz/anchor";
+import {
+  createProgram, configPda, fetchConfig, fetchRound, potVaultPda, roundPda, RoundState,
+} from "@ansem/sdk";
 const conn = new Connection(process.env.RPC, "finalized");
 const raw = JSON.parse(readFileSync(process.env.POT_TOPUP_KEYPAIR, "utf8"));
 const payer = Keypair.fromSecretKey(Uint8Array.from(raw));
+const program = createProgram(conn, new Wallet(payer));
 const potVault = potVaultPda();
-const rentMinimum = await conn.getMinimumBalanceForRentExemption(0, "finalized");
-const before = await conn.getBalance(potVault, "finalized");
-const shortfall = Math.max(0, rentMinimum - before);
+const rentMinimum = BigInt(await conn.getMinimumBalanceForRentExemption(0, "finalized"));
+const config = await fetchConfig(program, configPda());
+const round = config.currentRoundId === 0
+  ? null
+  : await fetchRound(program, roundPda(config.currentRoundId));
+const imminentPot = round && round.state < RoundState.Claimable ? round.pot : 0n;
+const before = BigInt(await conn.getBalance(potVault, "finalized"));
+const requiredBefore = rentMinimum + imminentPot;
+const shortfall = requiredBefore > before ? requiredBefore - before : 0n;
 let signature = null;
-if (shortfall > 0) {
+if (shortfall > 0n) {
+  if (shortfall > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("top-up exceeds safe integer");
   signature = await sendAndConfirmTransaction(
     conn,
     new Transaction().add(SystemProgram.transfer({
-      fromPubkey: payer.publicKey, toPubkey: potVault, lamports: shortfall,
+      fromPubkey: payer.publicKey, toPubkey: potVault, lamports: Number(shortfall),
     })),
     [payer],
     { commitment: "finalized", preflightCommitment: "finalized" },
   );
 }
-const after = await conn.getBalance(potVault, "finalized");
-if (after < rentMinimum) throw new Error(`pot vault remains below rent: ${after} < ${rentMinimum}`);
+const after = BigInt(await conn.getBalance(potVault, "finalized"));
+const residualAfterSwap = after - imminentPot;
+if (residualAfterSwap < rentMinimum) {
+  throw new Error(`post-swap residual remains below rent: ${residualAfterSwap} < ${rentMinimum}`);
+}
 console.log(JSON.stringify({
   potVault: potVault.toBase58(), payer: payer.publicKey.toBase58(),
-  rentMinimum, before, shortfall, topupSignature: signature, after,
+  currentRoundId: round?.roundId ?? 0, currentRoundState: round?.state ?? null,
+  currentRoundPot: imminentPot.toString(), rentMinimum: rentMinimum.toString(),
+  requiredBefore: requiredBefore.toString(), before: before.toString(),
+  shortfall: shortfall.toString(), topupSignature: signature, after: after.toString(),
+  residualAfterSwap: residualAfterSwap.toString(),
 }, null, 2));
 NODE
 
@@ -1042,15 +1129,30 @@ parallel. Either monitor failure stops the keeper.
 ```bash
 verify_pot_vault_rent_floor() {
   RPC="$MAINNET_RPC" node --input-type=module <<'NODE'
-import { Connection } from "@solana/web3.js";
-import { potVaultPda } from "@ansem/sdk";
+import { Connection, Keypair } from "@solana/web3.js";
+import { Wallet } from "@coral-xyz/anchor";
+import {
+  createProgram, configPda, fetchConfig, fetchRound, potVaultPda, roundPda, RoundState,
+} from "@ansem/sdk";
 const conn = new Connection(process.env.RPC, "finalized");
+const program = createProgram(conn, new Wallet(Keypair.generate()));
 const potVault = potVaultPda();
-const rentMinimum = await conn.getMinimumBalanceForRentExemption(0, "finalized");
-const balance = await conn.getBalance(potVault, "finalized");
-if (balance < rentMinimum) throw new Error(`STOP: pot vault below rent ${balance} < ${rentMinimum}`);
+const rentMinimum = BigInt(await conn.getMinimumBalanceForRentExemption(0, "finalized"));
+const config = await fetchConfig(program, configPda());
+const round = config.currentRoundId === 0
+  ? null
+  : await fetchRound(program, roundPda(config.currentRoundId));
+const imminentPot = round && round.state < RoundState.Claimable ? round.pot : 0n;
+const balance = BigInt(await conn.getBalance(potVault, "finalized"));
+const residualAfterSwap = balance - imminentPot;
+if (residualAfterSwap < rentMinimum) {
+  throw new Error(`STOP: post-swap residual below rent ${residualAfterSwap} < ${rentMinimum}`);
+}
 console.log(JSON.stringify({
-  checkedAt: new Date().toISOString(), potVault: potVault.toBase58(), rentMinimum, balance,
+  checkedAt: new Date().toISOString(), potVault: potVault.toBase58(),
+  currentRoundId: round?.roundId ?? 0, currentRoundState: round?.state ?? null,
+  currentRoundPot: imminentPot.toString(), rentMinimum: rentMinimum.toString(),
+  balance: balance.toString(), residualAfterSwap: residualAfterSwap.toString(),
 }));
 NODE
 }
@@ -1097,11 +1199,14 @@ Record:
 - Protected vault floor and balance readback after program rollback:
 - Pot vault address:
 - Zero-data rent minimum, lamports:
+- Current unswapped round pot, lamports:
+- Required pre-swap vault balance, lamports:
 - Pot vault balance before top-up, lamports:
 - Exact top-up shortfall, lamports:
 - Top-up signature, or `none` when the shortfall was zero:
 - Pot vault balance after top-up, lamports:
-- Post-swap rent-floor monitor start and stop UTC:
+- Residual after imminent pot removal, lamports:
+- Residual rent-floor monitor start and stop UTC:
 - Keeper stop event, if any:
 
 ## 11. Final evidence summary
