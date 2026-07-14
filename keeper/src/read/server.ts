@@ -45,9 +45,12 @@ export function startReadServer(
     if (snap) safeSend(ws, encode({ snapshot: snap, events: [] }));
   });
 
+  // Bind all interfaces in a container (Railway/Docker) so the edge can route to
+  // the read layer; default to loopback locally. Read-only public snapshot, no secrets.
+  const host = process.env.KEEPER_HTTP_HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
   return new Promise((resolve, reject) => {
     http.once("error", reject); // bind failure (e.g. port in use) -> reject instead of hanging
-    http.listen(port, "127.0.0.1", () => {
+    http.listen(port, host, () => {
       http.removeListener("error", reject);
       const actualPort = (http.address() as AddressInfo).port;
       resolve({
