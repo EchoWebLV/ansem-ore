@@ -40,6 +40,13 @@ describe("Board", () => {
     expect(screen.getByTestId("tile-0")).toHaveAttribute("data-lit", "false");
   });
 
+  it("uses the terminal board surface without continuous live breathing", () => {
+    const blockSol = Array(25).fill("0"); blockSol[3] = "60";
+    render(<Board snapshot={snap({ blockSol })} />);
+    expect(screen.getByTestId("bull-board")).toBeInTheDocument();
+    expect(screen.getByTestId("tile-3").querySelector(".glow-live")).toBeNull();
+  });
+
   it("flags the jackpot square gold only once settled", () => {
     const settled = snap({ state: RoundState.Settled, jackpotSquare: 7 });
     render(<Board snapshot={settled} />);
