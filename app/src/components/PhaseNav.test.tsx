@@ -9,6 +9,11 @@ describe("PhaseNav", () => {
     expect(t).toMatch(/bull\s*stake/i);
   });
 
+  it("preserves the phase navigation accessible name", () => {
+    render(<PhaseNav />);
+    expect(screen.getByRole("navigation", { name: "BullStake phases" })).toBeInTheDocument();
+  });
+
   it("marks Play as the current product location without advertising unshipped phases", () => {
     render(<PhaseNav />);
     expect(screen.getByText("Play")).toHaveAttribute("aria-current", "page");
