@@ -107,15 +107,36 @@ pub fn beef_payout(unclaimed: u64, bonus_bps: u16) -> u64 {
 
 // ---- Mint-on-emission curve + jackpot trigger (spec 2026-07-14-beef-on-ansem) ----
 
-/// Pot-scaled saturating emission: MAX * pot / (pot + S). Floors. 0 at pot 0.
-/// u128 intermediates so `max * pot` never overflows (proven no-panic even at
-/// u64::MAX inputs — see the emission_no_overflow_at_extremes test).
-pub fn beef_emission(pot_lamports: u64, max_round_mint: u64, sat_lamports: u64) -> u64 {
-    if pot_lamports == 0 || max_round_mint == 0 {
+/// Pot-scaled saturating emission with ZINC-style continuous difficulty decay
+/// (spec D2, updated d458f72):
+///
+///   emission = (max_round_mint * pot / (pot + sat)) * (hard_cap - minted_total) / hard_cap
+///
+/// The first factor is the pot-scaled saturating curve; the second is the decay
+/// — every BEEF mined makes the next round leaner, asymptotically toward the cap
+/// (no halving cliff; launch week is provably the richest window). At
+/// minted_total == 0 the decay factor is exactly 1 (remaining == hard_cap), so
+/// genesis emission equals the bare curve. Floors. Returns 0 at pot 0, cap 0, or
+/// minted_total >= hard_cap.
+///
+/// BOTH multiplications use u128 intermediates: `max * pot` AND
+/// `curve * (hard_cap - minted_total)` each overflow u64 at realistic values
+/// (curve up to ~210e6, remaining up to ~21e12 -> product ~4.4e21 >> u64::MAX).
+/// Proven no-panic even at u64::MAX inputs — see emission_no_overflow_at_extremes.
+pub fn beef_emission(
+    pot_lamports: u64,
+    max_round_mint: u64,
+    sat_lamports: u64,
+    minted_total: u64,
+    hard_cap: u64,
+) -> u64 {
+    if pot_lamports == 0 || max_round_mint == 0 || hard_cap == 0 || minted_total >= hard_cap {
         return 0;
     }
-    ((max_round_mint as u128 * pot_lamports as u128)
-        / (pot_lamports as u128 + sat_lamports as u128)) as u64
+    let curve = (max_round_mint as u128 * pot_lamports as u128)
+        / (pot_lamports as u128 + sat_lamports as u128);
+    let remaining = (hard_cap - minted_total) as u128;
+    ((curve * remaining) / hard_cap as u128) as u64
 }
 
 /// Jackpot-round draw from the round's frozen randomness. Reads bytes 16..24 LE
@@ -271,28 +292,49 @@ mod tests {
 
     // ---- Mint-on-emission curve + jackpot trigger (spec 2026-07-14-beef-on-ansem) ----
 
+    // Genesis fixtures: minted_total == 0 -> decay factor is exactly 1, so these
+    // (from the base plan) hold unchanged against the decayed formula.
+    const HC: u64 = 21_000_000_000_000; // 21,000,000 BEEF @6dp
+
     #[test]
     fn emission_zero_pot_is_zero() {
-        assert_eq!(beef_emission(0, 210_000_000, 1_000_000_000), 0);
+        assert_eq!(beef_emission(0, 210_000_000, 1_000_000_000, 0, HC), 0);
     }
     #[test]
     fn emission_half_max_at_saturation_pot() {
         // pot == S -> MAX/2
-        assert_eq!(beef_emission(1_000_000_000, 210_000_000, 1_000_000_000), 105_000_000);
+        assert_eq!(beef_emission(1_000_000_000, 210_000_000, 1_000_000_000, 0, HC), 105_000_000);
     }
     #[test]
     fn emission_approaches_max() {
-        let e = beef_emission(100_000_000_000, 210_000_000, 1_000_000_000);
+        let e = beef_emission(100_000_000_000, 210_000_000, 1_000_000_000, 0, HC);
         assert!(e > 207_000_000 && e < 210_000_000);
     }
     #[test]
     fn emission_dust_pot_mints_dust() {
         // 0.01 SOL pot -> ~1% of half... exact: 210e6 * 1e7 / (1e7 + 1e9) = 2_079_207
-        assert_eq!(beef_emission(10_000_000, 210_000_000, 1_000_000_000), 2_079_207);
+        assert_eq!(beef_emission(10_000_000, 210_000_000, 1_000_000_000, 0, HC), 2_079_207);
     }
     #[test]
     fn emission_no_overflow_at_extremes() {
-        assert!(beef_emission(u64::MAX, u64::MAX, 1) <= u64::MAX);
+        // first multiply (max * pot) at u64::MAX
+        assert!(beef_emission(u64::MAX, u64::MAX, 1, 0, HC) <= u64::MAX);
+        // second multiply (curve * (hard_cap - minted)) at u64::MAX hard_cap
+        assert!(beef_emission(u64::MAX, u64::MAX, 1, 0, u64::MAX) <= u64::MAX);
+    }
+    #[test]
+    fn emission_decay_halves_at_half_cap() {
+        // minted_total == hard_cap/2 -> 1-SOL-pot emission is exactly half genesis.
+        assert_eq!(beef_emission(1_000_000_000, 210_000_000, 1_000_000_000, HC / 2, HC), 52_500_000);
+    }
+    #[test]
+    fn emission_zero_at_or_past_cap() {
+        assert_eq!(beef_emission(1_000_000_000, 210_000_000, 1_000_000_000, HC, HC), 0);
+        assert_eq!(beef_emission(100_000_000_000, 210_000_000, 1_000_000_000, HC + 1, HC), 0);
+    }
+    #[test]
+    fn emission_zero_cap_no_divide_by_zero() {
+        assert_eq!(beef_emission(1_000_000_000, 210_000_000, 1_000_000_000, 0, 0), 0);
     }
     #[test]
     fn trigger_odds_one_always_fires() {
