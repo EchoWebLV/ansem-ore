@@ -11,13 +11,15 @@ describe("WinTicker", () => {
       { type: "stake", roundId: 8, square: 0, totalStake: "20000000" }, // filtered out
       { type: "round.open", roundId: 8, deadlineTs: 0 }, // filtered out
     ];
-    render(<WinTicker events={events} />);
+    const { container } = render(<WinTicker events={events} />);
     // duplicated for the seamless loop -> at least one copy of each highlight
     expect(screen.getAllByText(/Bull #7 struck the big pot/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Round 8 claimable/).length).toBeGreaterThan(0);
     // non-payoff lines never enter the wins ticker
     expect(screen.queryByText(/staked/)).toBeNull();
     expect(screen.queryByText(/Round 8 opened/)).toBeNull();
+    expect(container.querySelector(".ticker-marquee")).toBeInTheDocument();
+    expect(container.querySelector(".text-bull-gold")).toBeNull();
   });
 
   it("shows a quiet idle line when there are no settle/claim events", () => {

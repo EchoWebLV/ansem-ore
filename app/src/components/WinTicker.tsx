@@ -31,7 +31,7 @@ export function WinTicker({ events }: { events: KeeperEvent[] }) {
 
   const items = wins.map((e, i) => (
     <span key={i} className="text-[11px] text-bull-muted whitespace-nowrap">
-      <span className="text-bull-gold">◆</span> {eventToText(e)}
+      <span className="text-bull-dim" aria-hidden>◆</span> {eventToText(e)}
     </span>
   ));
 

@@ -21,19 +21,16 @@ export function JackpotMeter({
   const [amount, unit] = formatAnsem(rolloverJackpot || "0").split(" ");
   const showOdds = typeof triggerOdds === "number" && triggerOdds > 1;
   return (
-    <div className="rounded-xl border border-bull-edge bg-bull-bg p-3 text-center">
-      <h2 className="text-[10px] tracking-widest text-bull-muted mb-2">JACKPOT</h2>
-      <div
-        className="font-mono tabular-nums text-[30px] lg:text-[36px] font-medium leading-none text-bull-gold"
-        style={{ textShadow: "0 0 20px rgba(232, 196, 82, 0.4)" }}
-      >
+    <div className="terminal-panel p-4 text-center">
+      <h2 className="text-[12px] font-semibold text-bull-ink">Jackpot</h2>
+      <div className="mt-3 font-mono tabular-nums text-[30px] font-medium leading-none text-bull-gold lg:text-[36px]">
         {/* keyed on the value so a change replays the odometer pop */}
         <span key={amount} className="odometer-pop inline-block">{amount}</span>
-        <span className="text-[12px] text-bull-muted ml-1 align-middle">{unit}</span>
+        <span className="ml-1 align-middle text-[12px] text-bull-muted">{unit}</span>
       </div>
-      <p className="text-[10px] text-bull-muted mt-2">grows every miss</p>
+      <p className="terminal-label mt-3">grows every miss</p>
       {showOdds && (
-        <p className="text-[10px] text-bull-gold/70 mt-1">{`jackpot round odds 1-in-${triggerOdds}`}</p>
+        <p className="terminal-label mt-1">{`jackpot round odds 1-in-${triggerOdds}`}</p>
       )}
     </div>
   );

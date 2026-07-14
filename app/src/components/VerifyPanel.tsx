@@ -15,7 +15,7 @@ export type ReceiptInput = Omit<Receipt, "at">;
 
 function Row({ href, left, right }: { href: string; left: string; right: string }) {
   return (
-    <li className="flex items-center justify-between gap-3 text-sm font-mono">
+    <li className="flex items-center justify-between gap-3 border-b border-bull-edge/70 py-2 font-mono text-sm last:border-0">
       <span className="text-bull-muted truncate">{left}</span>
       <a
         href={href}
@@ -46,9 +46,9 @@ export function VerifyPanel({ roundId, receipts }: { roundId: number; receipts: 
     }
   }, [roundId]);
   return (
-    <div className="rounded-xl border border-bull-edge bg-bull-bg p-3">
-      <h2 className="text-[10px] tracking-widest text-bull-muted mb-2">VERIFY ON-CHAIN</h2>
-      <ul className="space-y-1">
+    <div className="terminal-panel p-4">
+      <h2 className="text-[12px] font-semibold text-bull-ink">Verify on-chain</h2>
+      <ul className="mt-2">
         <Row href={explorerAddress(program)} left="program" right={shortAddr(program)} />
         {roundAddr && (
           <Row href={explorerAddress(roundAddr)} left={`round ${roundId}`} right={shortAddr(roundAddr)} />
@@ -61,7 +61,7 @@ export function VerifyPanel({ roundId, receipts }: { roundId: number; receipts: 
           ) : null,
         )}
       </ul>
-      <p className="text-[10px] text-bull-muted mt-2">
+      <p className="terminal-label mt-3 leading-relaxed">
         every round, stake and payout is a public on-chain transaction — click through and check the math.
       </p>
     </div>

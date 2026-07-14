@@ -5,8 +5,9 @@ import { VerifyPanel, type Receipt } from "./VerifyPanel.js";
 
 describe("VerifyPanel", () => {
   it("always links the program on the explorer (devnet cluster)", () => {
-    render(<VerifyPanel roundId={7} receipts={[]} />);
-    expect(screen.getByText("VERIFY ON-CHAIN")).toBeInTheDocument();
+    const { container } = render(<VerifyPanel roundId={7} receipts={[]} />);
+    expect(screen.getByRole("heading", { name: "Verify on-chain" })).toBeInTheDocument();
+    expect(container.firstChild).toHaveClass("terminal-panel", "p-4");
     const link = screen.getByRole("link", { name: /8Q9E…XZjz/ });
     expect(link).toHaveAttribute(
       "href",

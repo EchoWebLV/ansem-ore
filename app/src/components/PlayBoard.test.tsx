@@ -74,7 +74,7 @@ describe("PlayBoard", () => {
     expect(screen.getByTestId("tile-5")).toBeInTheDocument();
     expect(screen.getByText("ZZZZ…ZZZZ")).toBeInTheDocument();
     // The verify panel ships with the read-only board too — program link always present.
-    expect(screen.getByText("VERIFY ON-CHAIN")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Verify on-chain" })).toBeInTheDocument();
   });
 
   it("hides the write column until a wallet + L1 program are present", () => {

@@ -11,7 +11,9 @@ const leaderboard: WireSnapshot["leaderboard"] = [
 
 describe("Leaderboard", () => {
   it("renders each staker with short address, SOL and square count", () => {
-    render(<Leaderboard leaderboard={leaderboard} />);
+    const { container } = render(<Leaderboard leaderboard={leaderboard} />);
+    expect(screen.getByRole("heading", { name: "Leaderboard" })).toBeInTheDocument();
+    expect(container.firstChild).toHaveClass("terminal-panel", "p-4");
     expect(screen.getByText("AAAA…AAAA")).toBeInTheDocument();
     expect(screen.getByText(/0.05 SOL/)).toBeInTheDocument();
     expect(screen.getByText(/2 bulls/)).toBeInTheDocument();
@@ -29,7 +31,9 @@ describe("ActivityFeed", () => {
       { type: "round.claimable", roundId: 5 },
       { type: "round.open", roundId: 5, deadlineTs: 0 },
     ];
-    render(<ActivityFeed events={events} />);
+    const { container } = render(<ActivityFeed events={events} />);
+    expect(screen.getByRole("heading", { name: "Recent activity" })).toBeInTheDocument();
+    expect(container.firstChild).toHaveClass("terminal-panel", "p-4");
     const items = screen.getAllByRole("listitem");
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Round 5 claimable");
