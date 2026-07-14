@@ -123,4 +123,40 @@ describe("ClaimPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /refund/i }));
     expect(onRefund).toHaveBeenCalledWith(7);
   });
+
+  it("gateNote: renders the folded-in gate message under the label (panel took the bet-slip slot)", () => {
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      won={false} gateNote="clear to bet the next round" onClaim={vi.fn()} onRefund={vi.fn()} />);
+    expect(screen.getByText("clear to bet the next round")).toBeInTheDocument();
+    // still the honest no-win labeling — the note never fabricates a win
+    expect(screen.getByText(/NO WIN/)).toBeInTheDocument();
+  });
+
+  it("omits the gate note when none is provided (default) — a bare panel stays bare", () => {
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      won={false} onClaim={vi.fn()} onRefund={vi.fn()} />);
+    expect(screen.queryByText(/to bet the next round/i)).toBeNull();
+  });
+
+  it("beefBanked: shows the terse BEEF-bank sub-line under the claim action, muted (never gold)", () => {
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      won={true} beefBanked onClaim={vi.fn()} onRefund={vi.fn()} />);
+    const line = screen.getByText("beef share banked · bonus keeps growing");
+    expect(line).toBeInTheDocument();
+    expect(line).toHaveClass("text-bull-muted"); // D12: muted, not gold
+    expect(line.className).not.toMatch(/bull-gold/);
+  });
+
+  it("omits the BEEF-bank line when beefBanked is absent (default) — never fabricated pre-BEEF", () => {
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      won={true} onClaim={vi.fn()} onRefund={vi.fn()} />);
+    expect(screen.queryByText(/beef share banked/i)).toBeNull();
+  });
+
+  it("never shows the BEEF-bank line on a refund (Closed) — refunds don't roll BEEF", () => {
+    render(<ClaimPanel roundId={7} roundState={RoundState.Closed} lastClaimedRound={0} busy={false}
+      beefBanked onClaim={vi.fn()} onRefund={vi.fn()} />);
+    expect(screen.queryByText(/beef share banked/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /refund/i })).toBeInTheDocument();
+  });
 });

@@ -124,6 +124,11 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSq
   // The round's on-chain draw, captured so the panel can label WON vs NO-WIN honestly.
   const [stakedJackpotSquare, setStakedJackpotSquare] = useState<number | null>(null);
   const [stakedJackpotPool, setStakedJackpotPool] = useState<bigint | null>(null);
+  // Whether this offerable round's BeefRound exists on-chain — the exact condition
+  // doClaim uses to decide whether it prepends rollBeef. Lets the panel honestly note
+  // that claiming banks the round's BEEF share (never before BEEF is live, never on a
+  // failed probe: accountExists degrades read failures to false).
+  const [beefRoundStamped, setBeefRoundStamped] = useState(false);
   useEffect(() => {
     if (!offerable) {
       setStakedRoundState(null); setStakedRoundDeadline(null);
@@ -144,6 +149,18 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSq
     const id = setInterval(poll, 5000);
     return () => { live = false; clearInterval(id); };
   }, [l1, stakedRound, offerable]);
+
+  // Mirror doClaim's bundle decision (`beefLive && accountExists(beefRoundPda(rid))`)
+  // as reactive state so the panel can pre-announce the BEEF bank. Only when BEEF is
+  // live and the round is offerable; a false/failed probe leaves it un-noted.
+  useEffect(() => {
+    if (!beefLive || !offerable) { setBeefRoundStamped(false); return; }
+    let live = true;
+    accountExists(connection, beefRoundPda(stakedRound))
+      .then((exists) => { if (live) setBeefRoundStamped(exists); })
+      .catch(() => { if (live) setBeefRoundStamped(false); });
+    return () => { live = false; };
+  }, [connection, beefLive, offerable, stakedRound]);
 
   // Did this player actually win the staked round? jackpotPool > 0 ⟺ someone hit the
   // drawn square and it pays; == 0 ⟺ no winner, the pot rolled into the jackpot. A
@@ -169,6 +186,26 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSq
           ? `Claim round ${stakedRound} below first. Staking now forfeits it.`
           : `Resolve round ${stakedRound} below first to stake again.`;
 
+  // The ClaimPanel is an ACTION surface (not just settling status) exactly when it will
+  // render a claim or refund — mirror its internal claimable/refundable test. In that
+  // state it TAKES the bet slip's slot (one action surface at a time); staking is already
+  // hard-gated (stakeBlocked) so the slip is dead weight. An offerable-but-still-settling
+  // round is not pending here, so the slip stays with its "round is settling" hint.
+  const claimActionPending =
+    offerable && (stakedRoundState === RoundState.Claimable || stakedRoundState === RoundState.Closed);
+
+  // Folded-in gate message for when the panel replaces the slip: there's no bet button
+  // to forfeit, so it just states — terse, lowercase — that betting resumes once this
+  // round is resolved. Mirrors the button verb; not shown alongside the amber gateCopy.
+  const gateNote =
+    stakedRoundState === RoundState.Closed
+      ? "refund to bet the next round"
+      : won === false
+        ? "clear to bet the next round"
+        : won === true
+          ? "claim to bet the next round"
+          : "resolve to bet the next round";
+
   // Claim-by deadline (unix secs) = staked round's deadline + the config claim
   // window carried on the snapshot. Undefined until both are known (or if the
   // keeper serves no window) — ClaimPanel then simply shows no countdown.
@@ -186,23 +223,39 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSq
           <span className="font-mono">{lamportsToSolStr(walletLamports)} SOL</span>
         </div>
       )}
-      <StakeRail
-        selectedSquares={selectedSquares}
-        enabled={!stakeBlocked}
-        busy={busy}
-        onStake={doStake}
-        onRemoveSquare={onRemoveSquare}
-        feeReserveSol={lamportsToSolStr(FEE_HEADROOM)}
-      />
-      {!loaded ? (
-        <p className="px-1 text-[10px] text-bull-muted">Checking your prior round…</p>
-      ) : priorUnresolved ? (
-        <p className="px-1 text-[10px] text-amber-400">{gateCopy}</p>
-      ) : snapshot.state !== RoundState.Open ? (
-        <p className="px-1 text-[10px] text-bull-muted">Round is settling. Betting opens with the next round.</p>
-      ) : null}
-      {offerable && stakedRoundState !== null && (
-        <ClaimPanel roundId={stakedRound} roundState={stakedRoundState} lastClaimedRound={0} claimByTs={claimByTs} won={won} busy={busy} onClaim={doClaim} onRefund={doRefund} />
+      {claimActionPending ? (
+        // Claim/refund/clear pending: the panel occupies the bet-slip slot. The essential
+        // gate message is folded into the panel (gateNote), so no standalone amber hint.
+        <ClaimPanel
+          roundId={stakedRound}
+          roundState={stakedRoundState!}
+          lastClaimedRound={0}
+          claimByTs={claimByTs}
+          won={won}
+          busy={busy}
+          onClaim={doClaim}
+          onRefund={doRefund}
+          gateNote={gateNote}
+          beefBanked={!!beefLive && beefRoundStamped}
+        />
+      ) : (
+        <>
+          <StakeRail
+            selectedSquares={selectedSquares}
+            enabled={!stakeBlocked}
+            busy={busy}
+            onStake={doStake}
+            onRemoveSquare={onRemoveSquare}
+            feeReserveSol={lamportsToSolStr(FEE_HEADROOM)}
+          />
+          {!loaded ? (
+            <p className="px-1 text-[10px] text-bull-muted">Checking your prior round…</p>
+          ) : priorUnresolved ? (
+            <p className="px-1 text-[10px] text-amber-400">{gateCopy}</p>
+          ) : snapshot.state !== RoundState.Open ? (
+            <p className="px-1 text-[10px] text-bull-muted">Round is settling. Betting opens with the next round.</p>
+          ) : null}
+        </>
       )}
       {CLUSTER !== "mainnet-beta" && (
         <a href="https://faucet.solana.com" target="_blank" rel="noreferrer" className="self-end text-[10px] text-bull-muted underline">Get devnet SOL</a>

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { RoundState, type WireSnapshot } from "@ansem/sdk";
+import { RoundState, fetchRound, type WireSnapshot } from "@ansem/sdk";
 import type { Program } from "@coral-xyz/anchor";
 import type { AnsemMiner } from "@ansem/sdk";
 import type { WalletAdapter } from "../lib/writes.js";
@@ -46,6 +46,11 @@ const snap = (over: Partial<WireSnapshot> = {}): WireSnapshot => ({
   rolloverJackpot: "0", updatedAt: 1, leaderboard: [], recentEvents: [], ...over,
 });
 
+// A resolved staked-round account for the fetchRound poll. Defaults describe a real WON
+// draw (someone hit square 0, pool > 0) so the panel labels honestly; override per test.
+const round = (over: Partial<{ state: RoundState; deadlineTs: number; jackpotSquare: number | null; jackpotPool: bigint }> = {}) =>
+  ({ state: RoundState.Claimable, deadlineTs: 0, jackpotSquare: 0, jackpotPool: 10n, ...over } as Awaited<ReturnType<typeof fetchRound>>);
+
 const renderControls = (selected: number[], beefLive?: boolean) =>
   render(
     <PlayControls
@@ -62,6 +67,10 @@ describe("PlayControls (direct mode) — wallet-balance stake gate", () => {
     vi.mocked(directStake).mockClear();
     beef.accountExists.mockClear();
     beef.accountExists.mockResolvedValue(true);
+    // Default the staked-round poll back to pending (never resolves) so a test only sees
+    // a live ClaimPanel when it opts in with mockResolvedValue.
+    vi.mocked(fetchRound).mockReset();
+    vi.mocked(fetchRound).mockReturnValue(new Promise<never>(() => {}));
     player.miner = null;
     player.config = null;
     player.loaded = true;
@@ -138,5 +147,76 @@ describe("PlayControls (direct mode) — wallet-balance stake gate", () => {
     fireEvent.click(screen.getByRole("button", { name: /place bet · one approval/i }));
     await waitFor(() => expect(directStake).toHaveBeenCalledTimes(1));
     expect(vi.mocked(directStake).mock.calls[0][0].rollBeefRound).toBeNull();
+  });
+
+  // --- claim panel takes the bet-slip slot -------------------------------------------
+  it("claim pending: the ClaimPanel takes the bet-slip slot — the slip and the amber gate both vanish", async () => {
+    // prior round 6 drew a real win (pot > 0 on the player's square) and is Claimable now
+    vi.mocked(fetchRound).mockResolvedValue(round({ state: RoundState.Claimable, jackpotSquare: 0, jackpotPool: 10n }));
+    player.miner = { roundId: 6, blockStake: [1n, ...Array<bigint>(24).fill(0n)] };
+    player.config = { multMaxBps: 0 };
+    renderControls([4]);
+    await waitFor(() => expect(screen.getByRole("button", { name: /claim ansem/i })).toBeInTheDocument());
+    expect(screen.getByText(/· WON/)).toBeInTheDocument();          // honest win labeling survives
+    expect(screen.getByText("claim to bet the next round")).toBeInTheDocument(); // gate folded into the panel
+    // the bet slip is gone — one action surface at a time
+    expect(screen.queryByLabelText(/amount per tile/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /place bet · one approval/i })).toBeNull();
+    expect(screen.queryByText(/Bet slip/i)).toBeNull();
+    // and the standalone amber "…below first" hint is not shown alongside
+    expect(screen.queryByText(/below first/i)).toBeNull();
+  });
+
+  it("refund pending: a Closed prior round shows the Refund panel in the slot, not the slip", async () => {
+    vi.mocked(fetchRound).mockResolvedValue(round({ state: RoundState.Closed, jackpotSquare: null, jackpotPool: 0n }));
+    player.miner = { roundId: 6, blockStake: [1n, ...Array<bigint>(24).fill(0n)] };
+    player.config = { multMaxBps: 0 };
+    renderControls([4]);
+    await waitFor(() => expect(screen.getByRole("button", { name: /refund/i })).toBeInTheDocument());
+    expect(screen.getByText(/· VOIDED/)).toBeInTheDocument();
+    expect(screen.getByText("refund to bet the next round")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/amount per tile/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /place bet · one approval/i })).toBeNull();
+  });
+
+  it("offerable but still settling (VrfPending): the bet slip stays — no claim/refund surface yet", async () => {
+    vi.mocked(fetchRound).mockResolvedValue(round({ state: RoundState.VrfPending, jackpotSquare: null, jackpotPool: 0n }));
+    player.miner = { roundId: 6, blockStake: [1n, ...Array<bigint>(24).fill(0n)] };
+    player.config = { multMaxBps: 0 };
+    renderControls([4]);
+    await waitFor(() => expect(screen.getByText(/wallet balance/i)).toBeInTheDocument());
+    // slip present; still-settling rounds keep the existing gate copy, no action surface
+    expect(screen.getByLabelText(/amount per tile/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /claim ansem|clear round|resolve round|refund/i })).toBeNull();
+  });
+
+  // --- beefBanked wiring -------------------------------------------------------------
+  it("BEEF-live + this round's BeefRound exists: the claim panel notes the BEEF share is banked", async () => {
+    beef.accountExists.mockResolvedValue(true); // BeefRound(stakedRound) present -> claim bundles rollBeef
+    vi.mocked(fetchRound).mockResolvedValue(round({ state: RoundState.Claimable, jackpotSquare: 0, jackpotPool: 10n }));
+    player.miner = { roundId: 6, blockStake: [1n, ...Array<bigint>(24).fill(0n)] };
+    player.config = { multMaxBps: 0 };
+    renderControls([4], true);
+    await waitFor(() => expect(screen.getByText("beef share banked · bonus keeps growing")).toBeInTheDocument());
+  });
+
+  it("pre-BEEF (beefLive unset): the claim panel never notes a BEEF bank, even when Claimable", async () => {
+    vi.mocked(fetchRound).mockResolvedValue(round({ state: RoundState.Claimable, jackpotSquare: 0, jackpotPool: 10n }));
+    player.miner = { roundId: 6, blockStake: [1n, ...Array<bigint>(24).fill(0n)] };
+    player.config = { multMaxBps: 0 };
+    renderControls([4]); // beefLive unset
+    await waitFor(() => expect(screen.getByRole("button", { name: /claim ansem/i })).toBeInTheDocument());
+    expect(screen.queryByText(/beef share banked/i)).toBeNull();
+    expect(beef.accountExists).not.toHaveBeenCalled(); // the BEEF probe never runs pre-launch
+  });
+
+  it("BEEF-live but this round's BeefRound probe is absent: no BEEF-bank note (never fabricated)", async () => {
+    beef.accountExists.mockResolvedValue(false); // probe returns false -> claim degrades to the plain ix
+    vi.mocked(fetchRound).mockResolvedValue(round({ state: RoundState.Claimable, jackpotSquare: 0, jackpotPool: 10n }));
+    player.miner = { roundId: 6, blockStake: [1n, ...Array<bigint>(24).fill(0n)] };
+    player.config = { multMaxBps: 0 };
+    renderControls([4], true);
+    await waitFor(() => expect(screen.getByRole("button", { name: /claim ansem/i })).toBeInTheDocument());
+    expect(screen.queryByText(/beef share banked/i)).toBeNull();
   });
 });
