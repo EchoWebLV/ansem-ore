@@ -9,30 +9,20 @@ describe("PhaseNav", () => {
     expect(t).toMatch(/bull\s*stake/i);
   });
 
-  it("Phase I is enabled and marked as the current product", () => {
+  it("marks Play as the current product location without advertising unshipped phases", () => {
     render(<PhaseNav />);
-    const p1 = screen.getByRole("button", { name: /phase i$/i });
-    expect(p1).toBeEnabled();
-    expect(p1).toHaveAttribute("aria-current", "page");
+    expect(screen.getByText("Play")).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText(/phase ii/i)).toBeNull();
+    expect(screen.queryByText(/phase iii/i)).toBeNull();
   });
 
-  it("Phase II and Phase III are disabled", () => {
-    render(<PhaseNav />);
-    expect(screen.getByRole("button", { name: /phase ii$/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /phase iii$/i })).toBeDisabled();
-  });
-
-  it("shows the brand logo image", () => {
-    const { container } = render(<PhaseNav />);
-    expect(container.querySelector('img[src="/bullstake-logo.svg"]')).toBeInTheDocument();
-  });
-
-  it("renders children (the wallet slot) inside the nav", () => {
-    render(
+  it("keeps the brand logo and renders sound/wallet children", () => {
+    const { container } = render(
       <PhaseNav>
         <button>WALLET</button>
       </PhaseNav>,
     );
+    expect(container.querySelector('img[src="/bullstake-logo.svg"]')).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /wallet/i })).toBeInTheDocument();
   });
 });

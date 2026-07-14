@@ -3,78 +3,22 @@
 @tailwind utilities;
 
 :root { color-scheme: dark; }
-html, body { background: #000; color: #e6e6ea; }
-body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; overflow-x: hidden; }
+html, body { background: #0a0b0a; color: #f2f1e9; }
+body { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 button, a, [data-square] { touch-action: manipulation; }
 
-/* ---------- ambient stage (behind everything) ---------- */
-
-/* Abstract backdrop: faint flowing contour lines, deepest layer (behind .bg-aura's -2).
-   Static by design — no animation cost on Seeker-class mobile GPUs. */
-.abstract-bg {
-  position: fixed; inset: 0; z-index: -3; pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%201600%20900'%20preserveAspectRatio='xMidYMid%20slice'%3E%3Cg%20fill='none'%3E%3Cpath%20stroke='rgba(53,224,122,0.05)'%20stroke-width='1.2'%20d='M-80,760C280,640,560,780,900,620S1420,430,1720,300'/%3E%3Cpath%20stroke='rgba(53,224,122,0.05)'%20stroke-width='1.2'%20d='M-120,640C320,540,620,660,960,490S1460,310,1700,170'/%3E%3Cpath%20stroke='rgba(232,196,82,0.04)'%20stroke-width='1.5'%20d='M-60,860C360,750,700,840,1080,660S1520,530,1740,460'/%3E%3Cpath%20stroke='rgba(53,224,122,0.05)'%20stroke-width='1'%20d='M-100,520C300,460,640,560,980,400S1400,210,1680,70'/%3E%3Cpath%20stroke='rgba(53,224,122,0.05)'%20stroke-width='1.2'%20d='M-40,700C260,600,580,700,920,550S1440,380,1730,240'/%3E%3Cpath%20stroke='rgba(232,196,82,0.04)'%20stroke-width='1'%20d='M-90,420C310,350,630,440,970,290S1380,110,1660,-30'/%3E%3C/g%3E%3C/svg%3E");
-  background-size: cover; background-position: center;
-}
-/* Ghosted brand watermark tucked into the corner — barely there. */
-.abstract-bg::after {
-  content: ""; position: absolute; right: -6%; bottom: -8%;
-  width: 55vmin; height: 55vmin;
-  background: url("/bullstake-logo.svg") no-repeat center / contain;
-  opacity: 0.025;
-  transform: rotate(-10deg);
+@layer components {
+  .terminal-topbar {
+    @apply flex min-h-[60px] items-center justify-between gap-4 border-b border-bull-edge px-4 lg:px-0;
+  }
+  .terminal-panel { @apply rounded-[14px] border border-bull-edge bg-bull-surface; }
+  .terminal-label { @apply text-[10px] font-semibold uppercase tracking-[0.14em] text-bull-muted; }
+  .terminal-primary { @apply rounded-[10px] bg-bull-green px-4 py-3 text-[13px] font-bold text-[#0b1209] disabled:cursor-not-allowed disabled:opacity-40; }
 }
 
-.bg-aura {
-  position: fixed; inset: 0; z-index: -2; pointer-events: none;
-  background:
-    radial-gradient(620px 460px at 50% 16%, rgba(53, 224, 122, 0.10), transparent 70%),
-    radial-gradient(520px 400px at 82% 92%, rgba(232, 196, 82, 0.05), transparent 70%);
-}
-
-/* Drifting dust: two radial-dot layers, period = background-size for a seamless loop. */
-.dust {
-  position: fixed; top: -340px; right: 0; bottom: 0; left: 0;
-  z-index: -1; pointer-events: none; opacity: 0.5;
-  background-image:
-    radial-gradient(1.6px 1.6px at 25% 25%, rgba(53, 224, 122, 0.55), transparent 55%),
-    radial-gradient(1.2px 1.2px at 70% 60%, rgba(53, 224, 122, 0.40), transparent 55%),
-    radial-gradient(1.1px 1.1px at 42% 82%, rgba(232, 196, 82, 0.35), transparent 55%),
-    radial-gradient(1.4px 1.4px at 86% 18%, rgba(53, 224, 122, 0.35), transparent 55%),
-    radial-gradient(1px 1px at 10% 62%, rgba(53, 224, 122, 0.30), transparent 55%),
-    radial-gradient(1px 1px at 58% 8%, rgba(53, 224, 122, 0.28), transparent 55%);
-  background-size: 340px 340px;
-  animation: dust-drift 70s linear infinite;
-}
-@keyframes dust-drift {
-  from { transform: translateY(0); }
-  to   { transform: translateY(340px); }
-}
-
-/* Synthwave floor: a perspective grid scrolling toward the viewer (desktop only). */
-.grid-floor {
-  position: fixed; left: 50%; bottom: -12vh;
-  width: 170vw; height: 46vh;
-  transform: translateX(-50%) perspective(620px) rotateX(62deg);
-  transform-origin: center bottom;
-  z-index: -1; pointer-events: none;
-  background-image:
-    linear-gradient(rgba(53, 224, 122, 0.13) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(53, 224, 122, 0.13) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent 85%);
-  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent 85%);
-  animation: floor-scroll 3.2s linear infinite;
-}
-@keyframes floor-scroll {
-  from { background-position-y: 0; }
-  to   { background-position-y: 44px; }
-}
-
-/* Edge falloff that pulls the eye to the board (desktop only). */
-.vignette {
-  position: fixed; inset: 0; z-index: -1; pointer-events: none;
-  background: radial-gradient(120% 90% at 50% 40%, transparent 58%, rgba(0, 0, 0, 0.55) 100%);
+:where(button, a, input, [data-square]):focus-visible {
+  outline: 2px solid #a8f080;
+  outline-offset: 3px;
 }
 
 /* Full-screen gold wash when the jackpot finale strikes (desktop only). */
@@ -89,16 +33,6 @@ button, a, [data-square] { touch-action: manipulation; }
   100% { opacity: 0; }
 }
 
-/* Desktop atmosphere boost. */
-@media (min-width: 1024px) {
-  .dust { opacity: 0.7; }
-  .bg-aura {
-    background:
-      radial-gradient(920px 660px at 50% 12%, rgba(53, 224, 122, 0.13), transparent 70%),
-      radial-gradient(720px 540px at 85% 92%, rgba(232, 196, 82, 0.07), transparent 70%);
-  }
-}
-
 /* ---------- holo-card stage ---------- */
 
 .stage { perspective: 1000px; }
@@ -106,25 +40,6 @@ button, a, [data-square] { touch-action: manipulation; }
   transform-style: preserve-3d;
   will-change: transform;
   transition: transform 0.25s ease-out;
-}
-
-/* Cursor-tracked sheen across the card — desktop hover only. */
-.stage-glare {
-  position: absolute; inset: 0; border-radius: 18px;
-  pointer-events: none; opacity: 0; transition: opacity 0.3s;
-  background: radial-gradient(
-    340px 240px at var(--gx, 50%) var(--gy, 50%),
-    rgba(53, 224, 122, 0.09), transparent 65%
-  );
-}
-@media (min-width: 1024px) and (hover: hover) {
-  .stage:hover .stage-glare { opacity: 1; }
-}
-
-.board-float { animation: board-float 6s ease-in-out infinite; }
-@keyframes board-float {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-5px); }
 }
 
 /* ---------- hex cell life ---------- */
@@ -202,9 +117,9 @@ button, a, [data-square] { touch-action: manipulation; }
 /* ---------- accessibility ---------- */
 
 @media (prefers-reduced-motion: reduce) {
-  .dust, .board-float, .cell-face.pop, .cell-face.burst,
+  .cell-face.pop, .cell-face.burst,
   .glow-live, .bull-eye, .jackpot-ring, .stage-card,
-  .grid-floor, .gold-flash, .stage-glare,
+  .gold-flash,
   .odometer-pop, .ticker-marquee {
     animation: none !important;
     transition: none !important;
@@ -217,7 +132,7 @@ button, a, [data-square] { touch-action: manipulation; }
 .wallet-adapter-button-trigger {
   background: rgba(53, 224, 122, 0.1) !important;
   border: 1px solid #35e07a !important;
-  border-radius: 9999px !important;
+  border-radius: 10px !important;
   color: #35e07a !important;
   font-family: var(--font-geist-mono, ui-monospace, SFMono-Regular, Menlo, monospace) !important;
   font-size: 12px !important;
@@ -226,7 +141,6 @@ button, a, [data-square] { touch-action: manipulation; }
   text-transform: uppercase;
   height: 38px !important;
   padding: 0 18px !important;
-  box-shadow: 0 0 22px -8px rgba(53, 224, 122, 0.9);
   transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
 }
 .wallet-adapter-button:hover,
