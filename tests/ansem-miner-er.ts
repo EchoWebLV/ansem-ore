@@ -242,19 +242,6 @@ describe("ansem-miner (ER)", () => {
     );
   });
 
-  it("task 3: delegate_miner hands the persistent miner to the DLP (owner -> DLP)", async () => {
-    await program.methods.delegateMiner()
-      .accounts({ payer: player.publicKey, miner: minerPda })
-      .remainingAccounts(validatorMeta)
-      .signers([player])
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
-
-    assert.equal(
-      await awaitOwner(provider.connection, minerPda), DLP_PROGRAM_ID,
-      "miner should be owned by the delegation program"
-    );
-  });
-
   it("task 4: join_round locks the escrow against withdrawal (no debit)", async () => {
     const before = await program.account.playerEscrow.fetch(escrowPda);
     assert.equal(before.activeRound.toNumber(), 0, "precondition: not yet joined");
@@ -283,6 +270,19 @@ describe("ansem-miner (ER)", () => {
       withdrawFailed = /WithdrawLocked/.test(e.toString());
     }
     assert.isTrue(withdrawFailed, "withdraw must be locked while joined to a round");
+  });
+
+  it("task 3: delegate_miner hands the persistent miner to the DLP (owner -> DLP)", async () => {
+    await program.methods.delegateMiner()
+      .accounts({ payer: player.publicKey, miner: minerPda })
+      .remainingAccounts(validatorMeta)
+      .signers([player])
+      .rpc({ skipPreflight: true, commitment: "confirmed" });
+
+    assert.equal(
+      await awaitOwner(provider.connection, minerPda), DLP_PROGRAM_ID,
+      "miner should be owned by the delegation program"
+    );
   });
 
   it("task 5: stake runs on the ER (delegated round/miner updated; L1 escrow untouched)", async () => {
