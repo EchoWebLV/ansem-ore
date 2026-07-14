@@ -38,16 +38,25 @@ pub const DEFAULT_CLAIM_WINDOW_SECS: i64 = 86_400;
 pub const SWAP_MODE_MOCK: u8 = 0;
 pub const SWAP_MODE_JUPITER: u8 = 1;
 
-// ---- BEEF vault emission layer (plan 2026-07-09-beef-vault-emission) ----
+// ---- BEEF emission layer (seeds) ----
 pub const BEEF_CONFIG_SEED: &[u8] = b"beef_config";
 pub const BEEF_MINER_SEED: &[u8] = b"beef_miner";
 pub const BEEF_ROUND_SEED: &[u8] = b"beef_round";
 
-// Emission divisor: emission_per_round = free_vault / divisor. 720_000 would be
-// 0.2%/day (yearly halving) at 60s rounds; 1_800_000 pre-scales for the expected
-// ~2.5x average hold-to-grow claim multiplier so NET drain stays on that curve.
-pub const DEFAULT_BEEF_DIVISOR: u64 = 1_800_000;
+// Mint-on-emission (spec 2026-07-14-beef-on-ansem-design): per-round mint =
+// MAX_ROUND_MINT * pot/(pot + SAT). 6-decimal base units. Replaces the dormant
+// vault-drip divisor model (BEEF is now the program's own classic-SPL mint).
+pub const BEEF_MAX_ROUND_MINT: u64 = 210_000_000; // 210 BEEF
+pub const BEEF_SAT_LAMPORTS: u64 = 1_000_000_000; // half-max at 1 SOL pot
+pub const BEEF_HARD_CAP: u64 = 21_000_000_000_000; // 21,000,000 BEEF
+pub const BEEF_TREASURY_BPS: u16 = 2_000; // 20% continuous treasury cut
+
 pub const DEFAULT_BEEF_TICK_BPS: u16 = 3; // +0.03% per tick while held
 pub const DEFAULT_BEEF_BONUS_CAP_BPS: u16 = 30_000; // +300% -> 4x payout, ~7 days
 pub const DEFAULT_BEEF_ACTIVITY_WINDOW_SECS: i64 = 86_400; // daily-streak gate
 pub const DEFAULT_BEEF_SECS_PER_TICK: i64 = 60; // one tick per round-length
+
+// ---- Jackpot: random-trigger + bet-scaled cap (spec D6, Motherlode pattern) ----
+pub const JACKPOT_CONFIG_SEED: &[u8] = b"jackpot_config";
+pub const DEFAULT_JACKPOT_TRIGGER_ODDS: u16 = 25; // 1-in-25 winner rounds
+pub const DEFAULT_JACKPOT_CAP_MULT: u16 = 100; // bite <= 100x winning-square stake value

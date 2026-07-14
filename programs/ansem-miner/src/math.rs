@@ -105,6 +105,56 @@ pub fn beef_payout(unclaimed: u64, bonus_bps: u16) -> u64 {
     ((unclaimed as u128 * (10_000u128 + bonus_bps as u128)) / 10_000u128) as u64
 }
 
+// ---- Mint-on-emission curve + jackpot trigger (spec 2026-07-14-beef-on-ansem) ----
+
+/// Pot-scaled saturating emission: MAX * pot / (pot + S). Floors. 0 at pot 0.
+/// u128 intermediates so `max * pot` never overflows (proven no-panic even at
+/// u64::MAX inputs — see the emission_no_overflow_at_extremes test).
+pub fn beef_emission(pot_lamports: u64, max_round_mint: u64, sat_lamports: u64) -> u64 {
+    if pot_lamports == 0 || max_round_mint == 0 {
+        return 0;
+    }
+    ((max_round_mint as u128 * pot_lamports as u128)
+        / (pot_lamports as u128 + sat_lamports as u128)) as u64
+}
+
+/// Jackpot-round draw from the round's frozen randomness. Reads bytes 16..24 LE
+/// as the draw and fires when `draw % odds == 0`.
+///
+/// VERIFICATION (Task 3 Step 1, spec D6 fairness claim — confirmed against
+/// settle.rs / vrf_settle.rs 2026-07-14):
+/// (a) DISJOINT FROM THE WINNING-SQUARE DRAW. The winning square is
+///     `jackpot_block(&randomness, b"jackpot")` = keccak256(randomness ++
+///     "jackpot")[0] % 25, and return multipliers are keccak256(randomness ++
+///     [square])[0..2]. Both consume DOMAIN-SEPARATED HASHES of the full 32
+///     bytes and take bytes off the HASH OUTPUT — neither slices raw bytes
+///     16..24. So this trigger's raw-byte draw is independent of the square/return
+///     draws by construction (domain separation) AND by disjoint extraction. No
+///     move to bytes 24..32 is needed.
+/// (b) EXACTLY ONE RANDOMNESS WRITE PER ROUND (no keeper re-roll / fishing). A
+///     Round is `init`'d to STATE_OPEN once (round.rs, per-round_id PDA). From
+///     OPEN the only randomness writers are `settle` (OPEN -> SETTLED) and the
+///     VRF path `request_settle` (OPEN -> VRF_PENDING) + `settle_callback`
+///     (VRF_PENDING -> SETTLED); each guards on its inbound state and flips it,
+///     so `round.randomness` is written exactly once. Nothing ever writes
+///     STATE_OPEN except round creation, and `cancel_round` only moves a round to
+///     the terminal STATE_CLOSED — there is no path back to OPEN or a second
+///     request. The trigger is computed post-settle from the immutable frozen
+///     randomness, so the keeper cannot re-request to fish for a favourable draw.
+///     (On mainnet the fairness rests on the VRF `settle_callback` path being the
+///     one used, exactly as the winning-square draw already does; the admin
+///     `settle` fallback lets the admin choose randomness for the square AND this
+///     trigger equally — a pre-existing M1 trust property, not introduced here.)
+///
+/// odds semantics: 0 or 1 = every winner round pays (legacy behavior); N>1 = 1-in-N.
+pub fn jackpot_triggered(randomness: &[u8; 32], odds: u16) -> bool {
+    if odds <= 1 {
+        return true;
+    }
+    let draw = u64::from_le_bytes(randomness[16..24].try_into().unwrap());
+    draw % odds as u64 == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +267,45 @@ mod tests {
         assert_eq!(beef_payout(1_000_000, 0), 1_000_000);
         assert_eq!(beef_payout(1_000_000, 30_000), 4_000_000); // the 4x cap
         assert_eq!(beef_payout(3, 3_333), 3);                  // floors
+    }
+
+    // ---- Mint-on-emission curve + jackpot trigger (spec 2026-07-14-beef-on-ansem) ----
+
+    #[test]
+    fn emission_zero_pot_is_zero() {
+        assert_eq!(beef_emission(0, 210_000_000, 1_000_000_000), 0);
+    }
+    #[test]
+    fn emission_half_max_at_saturation_pot() {
+        // pot == S -> MAX/2
+        assert_eq!(beef_emission(1_000_000_000, 210_000_000, 1_000_000_000), 105_000_000);
+    }
+    #[test]
+    fn emission_approaches_max() {
+        let e = beef_emission(100_000_000_000, 210_000_000, 1_000_000_000);
+        assert!(e > 207_000_000 && e < 210_000_000);
+    }
+    #[test]
+    fn emission_dust_pot_mints_dust() {
+        // 0.01 SOL pot -> ~1% of half... exact: 210e6 * 1e7 / (1e7 + 1e9) = 2_079_207
+        assert_eq!(beef_emission(10_000_000, 210_000_000, 1_000_000_000), 2_079_207);
+    }
+    #[test]
+    fn emission_no_overflow_at_extremes() {
+        assert!(beef_emission(u64::MAX, u64::MAX, 1) <= u64::MAX);
+    }
+    #[test]
+    fn trigger_odds_one_always_fires() {
+        assert!(jackpot_triggered(&[0u8; 32], 1));
+        assert!(jackpot_triggered(&[7u8; 32], 0)); // 0 treated as always (disabled gate)
+    }
+    #[test]
+    fn trigger_uses_bytes_16_24_le() {
+        let mut r = [0u8; 32];
+        // draw = 25 -> 25 % 25 == 0 -> fires at odds 25
+        r[16] = 25;
+        assert!(jackpot_triggered(&r, 25));
+        r[16] = 26; // 26 % 25 == 1 -> no fire
+        assert!(!jackpot_triggered(&r, 25));
     }
 }
