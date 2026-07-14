@@ -28,8 +28,9 @@ import { Wallet } from "@coral-xyz/anchor";
 import { readFileSync } from "node:fs";
 import {
   createProgram, configPda, roundPda, fetchConfig, fetchRound,
-  stakeDirectIx, RoundState, GRID_SIZE, BN,
+  stakeDirectIx, rollBeefIx, beefRoundPda, RoundState, GRID_SIZE, BN,
 } from "@ansem/sdk";
+import { rollStampedRound } from "./_seed-beef-roll.mjs";
 
 const req = (k) => {
   const v = process.env[k];
@@ -91,6 +92,7 @@ let roundsStaked = 0;
 let totalStaked = 0n;
 const POLL_MS = 3000;
 const SETTLE_TIMEOUT_MS = 15 * 60 * 1000; // per-round safety valve, poll-based (no duration assumption)
+const ROLL_ATTEMPTS = Math.ceil(SETTLE_TIMEOUT_MS / POLL_MS);
 
 while (true) {
   const c = await fetchConfig(program, configPda());
@@ -131,6 +133,17 @@ while (true) {
     }
     await sleep(POLL_MS);
   }
+
+  const rollSig = await rollStampedRound({
+    roundId: rid,
+    readBeefRound: (roundId) => program.account.beefRound.fetch(beefRoundPda(roundId)),
+    sendRoll: (roundId) => rollBeefIx(program, seeder.publicKey, roundId)
+      .rpc({ commitment: "confirmed" }),
+    sleep,
+    attempts: ROLL_ATTEMPTS,
+    delayMs: POLL_MS,
+  });
+  console.log(`round ${rid}: rolled stamped BEEF for seeder sig ${rollSig}`);
 
   const cAfter = await fetchConfig(program, configPda());
   console.log(`round ${rid} settled | staked total ${totalStaked} lamports (${Number(totalStaked) / 1e9} SOL) | rolloverJackpot ${cAfter.rolloverJackpot} raw = ${human(cAfter.rolloverJackpot)} ANSEM (target ${human(target)})`);
