@@ -1,6 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{Mint, Token};
+// Interface types so the mock PDA mint (classic SPL) and the real external ANSEM mint
+// (Token-2022) both bind through the same accounts. The devnet mock init still passes
+// the classic Token program, so its behavior is unchanged.
+use anchor_spl::token_interface::{Mint, TokenInterface};
 
 use crate::constants::*;
 use crate::error::AnsemError;
@@ -32,8 +35,9 @@ pub struct Initialize<'info> {
         seeds = [ANSEM_MINT_SEED], bump,
         mint::decimals = ANSEM_DECIMALS,
         mint::authority = mint_authority,
+        mint::token_program = token_program,
     )]
-    pub ansem_mint: Account<'info, Mint>,
+    pub ansem_mint: InterfaceAccount<'info, Mint>,
 
     /// CHECK: vault authority PDA (owns the payout token vault); ATA created lazily at swap
     #[account(seeds = [VAULT_AUTH_SEED], bump)]
@@ -47,7 +51,7 @@ pub struct Initialize<'info> {
     #[account(seeds = [TREASURY_SEED], bump)]
     pub treasury: UncheckedAccount<'info>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -97,8 +101,9 @@ pub struct InitializeReal<'info> {
     )]
     pub config: Account<'info, Config>,
 
-    // The REAL ANSEM mint — pre-existing, we hold no authority over it.
-    pub ansem_mint: Account<'info, Mint>,
+    // The REAL ANSEM mint — pre-existing, we hold no authority over it. Interface type
+    // so a Token-2022 mint (real $ANSEM) binds here as cleanly as a classic SPL mint.
+    pub ansem_mint: InterfaceAccount<'info, Mint>,
 
     /// CHECK: mint authority PDA — bump recorded for layout parity; unused in real mode
     #[account(seeds = [MINT_AUTH_SEED], bump)]

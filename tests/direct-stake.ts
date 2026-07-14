@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { assert } from "chai";
-import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { keccak256 } from "js-sha3";
 
 const enc = (s: string) => Buffer.from(s);
@@ -85,17 +85,19 @@ describe("direct-stake engine", () => {
     throw new Error("round never became cancelable");
   }
 
+  // tokenProgram is no longer auto-resolvable (the program's token layer is an Interface);
+  // the mock mint is classic SPL, so pass the classic token program explicitly.
   const swapAccounts = (roundPda: PublicKey) => ({
     payer: admin.publicKey, round: roundPda, ansemMint,
     mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault,
-    potVault, treasury,
+    potVault, treasury, tokenProgram: TOKEN_PROGRAM_ID,
   });
   const stakeDirectAccts = (pk: PublicKey, roundPda: PublicKey) => ({
     authority: pk, config: configPda, round: roundPda, miner: minerOf(pk), potVault,
   });
   const claimDirectAccts = (pk: PublicKey, roundPda: PublicKey, ata: PublicKey) => ({
     authority: pk, config: configPda, round: roundPda, miner: minerOf(pk),
-    ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: ata,
+    ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: ata, tokenProgram: TOKEN_PROGRAM_ID,
   });
 
   async function fundedPlayer(sol = 3): Promise<anchor.web3.Keypair> {
@@ -106,7 +108,7 @@ describe("direct-stake engine", () => {
   }
 
   it("initializes", async () => {
-    await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
+    await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
     const cfg = await program.account.config.fetch(configPda);
     assert.isTrue(cfg.currentRoundFinalized);
   });

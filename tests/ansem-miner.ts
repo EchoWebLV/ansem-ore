@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { keccak256 } from "js-sha3";
 
 const enc = (s: string) => Buffer.from(s);
@@ -48,7 +48,7 @@ describe("ansem-miner", () => {
   const STAKE_WINDOW = 15;
 
   it("initializes config and mock mint", async () => {
-    await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
+    await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
     const cfg = await program.account.config.fetch(configPda);
     assert.equal(cfg.admin.toBase58(), admin.publicKey.toBase58());
     assert.equal(cfg.ansemMint.toBase58(), ansemMint.toBase58());
@@ -312,14 +312,16 @@ describe("ansem-miner", () => {
   const jackpotSquareOf = (rnd: Buffer) => computeJackpotBlock(rnd, "jackpot");
 
   // Account-set helpers (lottery model: a single payout_vault, no reserve jackpots).
+  // tokenProgram is no longer auto-resolvable (the program's token layer is an Interface);
+  // the mock mint is classic SPL, so pass the classic token program explicitly.
   const swapAccounts = (roundPda: PublicKey) => ({
     payer: admin.publicKey, round: roundPda, ansemMint,
     mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault,
-    potVault, treasury,
+    potVault, treasury, tokenProgram: TOKEN_PROGRAM_ID,
   });
   const claimAccounts = (roundPda: PublicKey, authority: PublicKey, playerAta: PublicKey) => ({
     authority, round: roundPda, ansemMint, vaultAuthority: vaultAuth,
-    payoutVault, playerAta,
+    payoutVault, playerAta, tokenProgram: TOKEN_PROGRAM_ID,
   });
 
   // Hoisted to describe-scope (rather than declared inside the swap test) so

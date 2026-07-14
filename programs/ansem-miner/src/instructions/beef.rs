@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer as TokenTransfer};
+// Interface types: BEEF's future token is a pump.fun (Token-2022) mint, so the vault +
+// player ATA + payout all go through the Token-2022-compatible interface layer.
+use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::constants::*;
 use crate::error::AnsemError;
@@ -31,7 +33,7 @@ pub struct InitBeef<'info> {
         constraint = config.admin == admin.key() @ AnsemError::Unauthorized)]
     pub config: Box<Account<'info, Config>>,
 
-    pub beef_mint: Box<Account<'info, Mint>>,
+    pub beef_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// CHECK: existing payout vault authority PDA — reused as the BEEF vault owner.
     #[account(seeds = [VAULT_AUTH_SEED], bump = config.vault_auth_bump)]
@@ -44,7 +46,7 @@ pub struct InitBeef<'info> {
         constraint = beef_vault.mint == beef_mint.key() @ AnsemError::BadBeefVault,
         constraint = beef_vault.owner == vault_authority.key() @ AnsemError::BadBeefVault,
     )]
-    pub beef_vault: Box<Account<'info, TokenAccount>>,
+    pub beef_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(init, payer = admin, space = 8 + BeefConfig::INIT_SPACE,
         seeds = [BEEF_CONFIG_SEED], bump)]
@@ -125,7 +127,7 @@ pub struct StampBeef<'info> {
     pub beef_config: Box<Account<'info, BeefConfig>>,
 
     #[account(address = beef_config.beef_vault @ AnsemError::BadBeefVault)]
-    pub beef_vault: Box<Account<'info, TokenAccount>>,
+    pub beef_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     // `init` (not init_if_needed) = the once-only stamp guard.
     #[account(init, payer = payer, space = 8 + BeefRound::INIT_SPACE,
@@ -249,25 +251,28 @@ pub struct ClaimBeef<'info> {
     pub beef_miner: Box<Account<'info, BeefMiner>>,
 
     #[account(address = beef_config.beef_mint @ AnsemError::BadBeefVault)]
-    pub beef_mint: Box<Account<'info, Mint>>,
+    pub beef_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// CHECK: same vault authority PDA that signs ANSEM payouts.
     #[account(seeds = [VAULT_AUTH_SEED], bump)]
     pub vault_authority: UncheckedAccount<'info>,
 
     #[account(mut, address = beef_config.beef_vault @ AnsemError::BadBeefVault)]
-    pub beef_vault: Box<Account<'info, TokenAccount>>,
+    pub beef_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(init_if_needed, payer = authority,
-        associated_token::mint = beef_mint, associated_token::authority = authority)]
-    pub player_beef_ata: Box<Account<'info, TokenAccount>>,
+        associated_token::mint = beef_mint, associated_token::authority = authority,
+        associated_token::token_program = token_program)]
+    pub player_beef_ata: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 
 pub fn claim_beef_handler(ctx: Context<ClaimBeef>) -> Result<()> {
+    // transfer_checked needs the mint decimals; scalar copy up front (Token-2022 shape).
+    let beef_decimals = ctx.accounts.beef_mint.decimals;
     let now = Clock::get()?.unix_timestamp;
     let bm = &mut ctx.accounts.beef_miner;
     let bc = &mut ctx.accounts.beef_config;
@@ -280,17 +285,19 @@ pub fn claim_beef_handler(ctx: Context<ClaimBeef>) -> Result<()> {
         // ctx.bumps carries the verified bump for any seeds-checked account —
         // no find_program_address re-derivation needed.
         let va_seeds: &[&[u8]] = &[VAULT_AUTH_SEED, &[ctx.bumps.vault_authority]];
-        token::transfer(
+        token_interface::transfer_checked(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.key(),
-                TokenTransfer {
+                TransferChecked {
                     from: ctx.accounts.beef_vault.to_account_info(),
+                    mint: ctx.accounts.beef_mint.to_account_info(),
                     to: ctx.accounts.player_beef_ata.to_account_info(),
                     authority: ctx.accounts.vault_authority.to_account_info(),
                 },
                 &[va_seeds],
             ),
             payout,
+            beef_decimals,
         )?;
     }
 

@@ -1,7 +1,8 @@
+import { PublicKey } from "@solana/web3.js";
 import {
   ConfigState, RoundStateData, fetchConfig, fetchRound, fetchMiner,
   configPda, roundPda, minerPda, sleep, DLP_PROGRAM_ID,
-  fetchBeefConfig, beefConfigPda,
+  fetchBeefConfig, beefConfigPda, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
 } from "@ansem/sdk";
 import type { KeeperConfig } from "./env.js";
 import { buildChain, Chain } from "./chain.js";
@@ -75,6 +76,25 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
     async start() {
       server = await startReadServer(cfg.httpPort, () => latest);
       log.info("keeper up", { httpPort: server.port, keeper: ctx.keeper.toBase58() });
+
+      // Detect the ANSEM mint's owning token program ONCE (classic vs Token-2022) so the
+      // real-swap inventory ATA + execute_swap_real tokenProgram match the mint on-chain.
+      // Real $ANSEM is Token-2022; the devnet mock PDA mint is classic. Defaults classic.
+      try {
+        const cfg0 = await fetchConfig(chain.program, configPda());
+        const mintInfo = await chain.conn.getAccountInfo(new PublicKey(cfg0.ansemMint), "confirmed");
+        ctx.tokenProgramId = mintInfo && mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
+        ctx.log.info("ANSEM mint token program detected", {
+          mint: new PublicKey(cfg0.ansemMint).toBase58(),
+          tokenProgram: ctx.tokenProgramId.toBase58(),
+          token2022: ctx.tokenProgramId.equals(TOKEN_2022_PROGRAM_ID),
+        });
+      } catch {
+        ctx.tokenProgramId = TOKEN_PROGRAM_ID;
+        ctx.log.info("ANSEM mint token program detection failed — defaulting classic");
+      }
 
       // BEEF emission layer: enabled iff BeefConfig exists on-chain at startup.
       try {

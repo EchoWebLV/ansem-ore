@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey, Keypair, Transaction } from "@solana/web3.js";
 import { assert } from "chai";
-import { createMint, createAccount, mintTo, transfer, getAccount, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { createMint, createAccount, mintTo, transfer, getAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 const enc = (s: string) => Buffer.from(s);
 const u64le = (n: number) => new anchor.BN(n).toArrayLike(Buffer, "le", 8);
@@ -69,9 +69,12 @@ describe("beef vault emission", () => {
     throw new Error("round never became settleable");
   }
 
+  // tokenProgram is no longer auto-resolvable (the program's token layer is an Interface);
+  // the mock ANSEM + BEEF mints are classic SPL, so pass the classic token program.
   const swapAccounts = (roundPda: PublicKey) => ({
     payer: admin.publicKey, round: roundPda, ansemMint,
     mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault, potVault, treasury,
+    tokenProgram: TOKEN_PROGRAM_ID,
   });
   const stakeDirectAccts = (pk: PublicKey, roundPda: PublicKey) => ({
     authority: pk, config: configPda, round: roundPda, miner: minerOf(pk), potVault,
@@ -85,7 +88,7 @@ describe("beef vault emission", () => {
 
   it("bootstraps: initialize (tolerant) + mock BEEF mint + vault owned by vault_authority", async () => {
     try {
-      await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
+      await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
     } catch (e: any) {
       if (!/already in use/.test(e.toString())) throw e;
     }
@@ -236,7 +239,8 @@ describe("beef vault emission", () => {
       .accounts(rollAccts(p3.publicKey, r.id, r.pda)).instruction();
     const claimIx = await program.methods.claimDirect(new anchor.BN(r.id))
       .accounts({ authority: p3.publicKey, config: configPda, round: r.pda, miner: minerOf(p3.publicKey),
-        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p3Ata }).instruction();
+        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p3Ata,
+        tokenProgram: TOKEN_PROGRAM_ID }).instruction();
     await provider.sendAndConfirm(new Transaction().add(rollIx, claimIx), [p3]);
 
     const bm = await program.account.beefMiner.fetch(beefMinerOf(p3.publicKey));
@@ -252,7 +256,8 @@ describe("beef vault emission", () => {
     const p4Ata = getAssociatedTokenAddressSync(ansemMint, p4.publicKey);
     await program.methods.claimDirect(new anchor.BN(r.id))
       .accounts({ authority: p4.publicKey, config: configPda, round: r.pda, miner: minerOf(p4.publicKey),
-        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p4Ata }).signers([p4]).rpc();
+        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p4Ata,
+        tokenProgram: TOKEN_PROGRAM_ID }).signers([p4]).rpc();
     await program.methods.rollBeef(new anchor.BN(r.id))
       .accounts(rollAccts(p4.publicKey, r.id, r.pda)).signers([p4]).rpc();
     const bm = await program.account.beefMiner.fetch(beefMinerOf(p4.publicKey));
@@ -263,6 +268,7 @@ describe("beef vault emission", () => {
     authority: pk, beefConfig: beefConfigPda, beefMiner: beefMinerOf(pk),
     beefMint, vaultAuthority: vaultAuth, beefVault,
     playerBeefAta: getAssociatedTokenAddressSync(beefMint, pk),
+    tokenProgram: TOKEN_PROGRAM_ID,
   });
 
   it("claim_beef pays unclaimed*(1+bonus), decrements owed, resets; double-claim pays zero", async () => {
@@ -343,7 +349,8 @@ describe("beef vault emission", () => {
     const p5Ata = getAssociatedTokenAddressSync(ansemMint, p5.publicKey);
     await program.methods.claimDirect(new anchor.BN(r.id))
       .accounts({ authority: p5.publicKey, config: configPda, round: r.pda, miner: minerOf(p5.publicKey),
-        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p5Ata }).signers([p5]).rpc();
+        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p5Ata,
+        tokenProgram: TOKEN_PROGRAM_ID }).signers([p5]).rpc();
     const won = Number((await getAccount(provider.connection, p5Ata)).amount);
     assert.isAbove(won, 0); // sole staker -> wins the jackpot regardless of BEEF
 
@@ -373,8 +380,10 @@ describe("beef vault emission", () => {
     config: configPda,
     beefConfig: beefConfigPda,
     vaultAuthority: vaultAuth,
+    beefMint, // required for transfer_checked (mint + decimals)
     beefVault,
     destinationAta: destAta,
+    tokenProgram: TOKEN_PROGRAM_ID,
   });
 
   it("sweep_beef_excess: exact free surplus leaves; +1 unit and non-admin fail; vault restored", async () => {

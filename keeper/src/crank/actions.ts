@@ -5,7 +5,7 @@ import {
   createRoundIx, delegateRoundIx, requestSettleIx, commitRoundIx, commitMinerIx,
   reconcileMinerIx, executeSwapMockIx, executeSwapRealIx, cancelRoundIx, setRoundDurationIx, stampBeefIx,
   erRpcTolerant, retryPastDeadline, l1Send, awaitOwnerIs, flushCommit, fetchMiner,
-  DLP_PROGRAM_ID, PROGRAM_ID,
+  DLP_PROGRAM_ID, PROGRAM_ID, TOKEN_PROGRAM_ID,
   type ConfigState, type RoundStateData,
 } from "@ansem/sdk";
 import type { Logger } from "../logger.js";
@@ -32,6 +32,10 @@ export interface ActionCtx {
   swapMode: "mock" | "real";
   jupBaseUrl: string;
   slippageBps: number;
+  /** Owning program of config.ansem_mint (classic vs Token-2022), detected once at startup.
+   *  Threads into the inventory-ATA derivation + execute_swap_real's tokenProgram account so
+   *  a Token-2022 $ANSEM mint settles correctly. Defaults classic if unset. */
+  tokenProgramId?: PublicKey;
   /** Alert floor (ANSEM base units): warn when keeper inventory drops below this. 0 disables. */
   inventoryMinAnsem: bigint;
   /** Injected so the Jupiter quote is stubbable in tests; defaults to global fetch in service. */
@@ -196,6 +200,9 @@ export async function realExecuteSwap(
 /** Live real-swap deps: Jupiter quote + on-chain ATA balance + execute_swap_real send. */
 export function liveRealSwapDeps(ctx: ActionCtx, roundId: number, config: ConfigState): RealSwapDeps {
   const ansemMint = new PublicKey(config.ansemMint);
+  // Whichever program owns the mint (classic or Token-2022) — threaded into BOTH the
+  // inventory-ATA derivation and execute_swap_real so the shapes match on-chain.
+  const tokenProgramId = ctx.tokenProgramId ?? TOKEN_PROGRAM_ID;
   return {
     quote: (net) =>
       quoteSolToAnsem(
@@ -203,13 +210,13 @@ export function liveRealSwapDeps(ctx: ActionCtx, roundId: number, config: Config
         ctx.fetchImpl, net,
       ),
     inventory: async () => {
-      const ata = ataForMint(ansemMint, ctx.keeper);
+      const ata = ataForMint(ansemMint, ctx.keeper, tokenProgramId);
       const bal = await ctx.conn.getTokenAccountBalance(ata).catch(() => null);
       return bal ? BigInt(bal.value.amount) : 0n;
     },
     sendSwap: async (ansemOut) => {
       await l1Send(() =>
-        executeSwapRealIx(ctx.program, ctx.keeper, roundId, new BN(ansemOut.toString()), ansemMint).rpc());
+        executeSwapRealIx(ctx.program, ctx.keeper, roundId, new BN(ansemOut.toString()), ansemMint, tokenProgramId).rpc());
       ctx.log.info("round swapped (real) -> CLAIMABLE", { roundId, ansemOut: ansemOut.toString() });
     },
     log: ctx.log,

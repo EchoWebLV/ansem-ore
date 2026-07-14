@@ -2,6 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { assert } from "chai";
 
 const enc = (s: string) => Buffer.from(s);
@@ -37,7 +38,7 @@ describe("join_round stamps the miner (CRIT-1 regression)", () => {
 
   before("initialize, fund, open a round, init the miner", async function () {
     this.timeout(60000);
-    await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc()
+    await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc()
       .catch((e: any) => { if (!/already in use|custom program error: 0x0\b/i.test(String(e))) throw e; });
     const sig = await provider.connection.requestAirdrop(
       player.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL);

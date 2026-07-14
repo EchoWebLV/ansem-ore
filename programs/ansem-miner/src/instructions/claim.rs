@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+// Token-2022-compatible payout: transfer_checked (mint + decimals) over interface types.
+use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::constants::*;
 use crate::error::AnsemError;
@@ -33,25 +34,29 @@ pub struct Claim<'info> {
     pub escrow: Box<Account<'info, PlayerEscrow>>,
 
     #[account(address = config.ansem_mint)]
-    pub ansem_mint: Box<Account<'info, Mint>>,
+    pub ansem_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// CHECK: vault authority PDA
     #[account(seeds = [VAULT_AUTH_SEED], bump = config.vault_auth_bump)]
     pub vault_authority: UncheckedAccount<'info>,
 
-    #[account(mut, associated_token::mint = ansem_mint, associated_token::authority = vault_authority)]
-    pub payout_vault: Box<Account<'info, TokenAccount>>,
+    #[account(mut, associated_token::mint = ansem_mint, associated_token::authority = vault_authority,
+        associated_token::token_program = token_program)]
+    pub payout_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(init_if_needed, payer = authority,
-        associated_token::mint = ansem_mint, associated_token::authority = authority)]
-    pub player_ata: Box<Account<'info, TokenAccount>>,
+        associated_token::mint = ansem_mint, associated_token::authority = authority,
+        associated_token::token_program = token_program)]
+    pub player_ata: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 
 pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
+    // transfer_checked needs the mint decimals; scalar copy up front (Token-2022 shape).
+    let ansem_decimals = ctx.accounts.ansem_mint.decimals;
     let cfg = &ctx.accounts.config;
     let round = &ctx.accounts.round;
     require!(round.state == STATE_CLAIMABLE, AnsemError::BadRoundState);
@@ -81,17 +86,19 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
     if amount > 0 {
         let va_bump = cfg.vault_auth_bump;
         let va_seeds: &[&[u8]] = &[VAULT_AUTH_SEED, &[va_bump]];
-        token::transfer(
+        token_interface::transfer_checked(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.key(),
-                Transfer {
+                TransferChecked {
                     from: ctx.accounts.payout_vault.to_account_info(),
+                    mint: ctx.accounts.ansem_mint.to_account_info(),
                     to: ctx.accounts.player_ata.to_account_info(),
                     authority: ctx.accounts.vault_authority.to_account_info(),
                 },
                 &[va_seeds],
             ),
             amount,
+            ansem_decimals,
         )?;
     }
 

@@ -8,6 +8,7 @@ import { delegateRoundIx, executeSwapMockIx, initializeRealIx, executeSwapRealIx
   setStakeLimitsIx } from "../src/instructions/keeper.js";
 import { configPda, roundPda, minerPda, escrowPda, payoutVault, treasuryPda, beefConfigPda,
   payoutVaultForMint, ataForMint, programDataPda } from "../src/pdas.js";
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "../src/constants.js";
 
 const program = () => createProgram(new Connection("http://127.0.0.1:9999"), new Wallet(Keypair.generate()));
 const has = (ix: { keys: { pubkey: PublicKey }[] }, pk: PublicKey) =>
@@ -77,13 +78,16 @@ describe("mainnet-path builders resolve the right accounts", () => {
     expect(has(ix, dest)).toBe(true);
   });
 
-  it("sweepBeefExcess references the beef vault, destination ATA + beef config", async () => {
+  it("sweepBeefExcess references the beef mint, vault, destination ATA + beef config", async () => {
+    const beefMint = Keypair.generate().publicKey;
     const beefVault = Keypair.generate().publicKey;
     const destAta = Keypair.generate().publicKey;
-    const ix = await sweepBeefExcessIx(program(), admin, new BN(10), beefVault, destAta).instruction();
+    const ix = await sweepBeefExcessIx(program(), admin, new BN(10), beefMint, beefVault, destAta).instruction();
+    expect(has(ix, beefMint)).toBe(true);
     expect(has(ix, beefVault)).toBe(true);
     expect(has(ix, destAta)).toBe(true);
     expect(has(ix, beefConfigPda())).toBe(true);
+    expect(has(ix, TOKEN_PROGRAM_ID)).toBe(true); // classic default
   });
 
   it("closeRound seeds the round PDA from roundId + pins admin_dest", async () => {
@@ -104,5 +108,38 @@ describe("mainnet-path builders resolve the right accounts", () => {
   it("setStakeLimits resolves the admin-gated config", async () => {
     const ix = await setStakeLimitsIx(program(), admin, new BN(10_000_000), new BN(1_000_000_000)).instruction();
     expect(has(ix, configPda())).toBe(true);
+  });
+});
+
+// Token-2022 support: the token layer is now anchor_spl::token_interface, so tokenProgram
+// is passed explicitly and the ATA seeds must include the mint's owning program. These
+// prove the builders thread the SAME program into both the ATA derivation and the account.
+describe("token-program threading (Token-2022 vs classic)", () => {
+  const keeper = Keypair.generate().publicKey;
+  const mint = Keypair.generate().publicKey;
+
+  it("executeSwapReal defaults to the classic token program", async () => {
+    const ix = await executeSwapRealIx(program(), keeper, 7, new BN(1_000), mint).instruction();
+    expect(has(ix, TOKEN_PROGRAM_ID)).toBe(true);
+    expect(has(ix, payoutVaultForMint(mint, TOKEN_PROGRAM_ID))).toBe(true);
+    expect(has(ix, ataForMint(mint, keeper, TOKEN_PROGRAM_ID))).toBe(true);
+  });
+
+  it("executeSwapReal threads Token-2022 into the payout vault, source ATA + tokenProgram", async () => {
+    const ix = await executeSwapRealIx(program(), keeper, 7, new BN(1_000), mint, TOKEN_2022_PROGRAM_ID).instruction();
+    expect(has(ix, TOKEN_2022_PROGRAM_ID)).toBe(true);
+    // 2022-derived ATAs differ from the classic derivation for the same mint/owner.
+    expect(has(ix, payoutVaultForMint(mint, TOKEN_2022_PROGRAM_ID))).toBe(true);
+    expect(has(ix, ataForMint(mint, keeper, TOKEN_2022_PROGRAM_ID))).toBe(true);
+    expect(payoutVaultForMint(mint, TOKEN_2022_PROGRAM_ID).equals(payoutVaultForMint(mint, TOKEN_PROGRAM_ID))).toBe(false);
+  });
+
+  it("sweepBeefExcess threads Token-2022 into the tokenProgram account", async () => {
+    const admin = Keypair.generate().publicKey;
+    const beefMint = Keypair.generate().publicKey;
+    const beefVault = Keypair.generate().publicKey;
+    const destAta = Keypair.generate().publicKey;
+    const ix = await sweepBeefExcessIx(program(), admin, new BN(10), beefMint, beefVault, destAta, TOKEN_2022_PROGRAM_ID).instruction();
+    expect(has(ix, TOKEN_2022_PROGRAM_ID)).toBe(true);
   });
 });

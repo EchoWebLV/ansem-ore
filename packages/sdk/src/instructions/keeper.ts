@@ -4,7 +4,7 @@ import { PublicKey } from "@solana/web3.js";
 import { AnsemMiner } from "../idl/ansem_miner.js";
 import { configPda, roundPda, payoutVault, vaultAuthPda, mintAuthPda, potVaultPda, treasuryPda, ansemMintPda,
   beefConfigPda, beefRoundPda, payoutVaultForMint, ataForMint, programDataPda } from "../pdas.js";
-import { VRF_BASE_QUEUE, PROGRAM_ID } from "../constants.js";
+import { VRF_BASE_QUEUE, PROGRAM_ID, TOKEN_PROGRAM_ID } from "../constants.js";
 
 const validatorMeta = (v: PublicKey) => [{ pubkey: v, isSigner: false, isWritable: false }];
 
@@ -31,10 +31,13 @@ export const commitMinerIx = (erProgram: Program<AnsemMiner>, keeper: PublicKey,
 export const reconcileMinerIx = (p: Program<AnsemMiner>, roundId: number, escrow: PublicKey, miner: PublicKey) =>
   p.methods.reconcileMiner(new BN(roundId)).accountsPartial({ config: configPda(), escrow, miner });
 
+// The mock PDA mint is always classic SPL; tokenProgram is no longer auto-resolvable
+// (the program's token layer is an Interface with two ids), so pass it explicitly.
 export const executeSwapMockIx = (p: Program<AnsemMiner>, keeper: PublicKey, roundId: number) =>
   p.methods.executeSwapMock().accountsPartial({
     payer: keeper, round: roundPda(roundId), ansemMint: ansemMintPda(), mintAuthority: mintAuthPda(),
     vaultAuthority: vaultAuthPda(), payoutVault: payoutVault(), potVault: potVaultPda(), treasury: treasuryPda(),
+    tokenProgram: TOKEN_PROGRAM_ID,
   });
 
 export const cancelRoundIx = (p: Program<AnsemMiner>, keeper: PublicKey, roundId: number) =>
@@ -89,14 +92,19 @@ export const initializeRealIx = (
  * the keeper's own ATA (`sourceAta`) into the payout vault (no minting), pot -> treasury.
  * Admin-gated on config.admin == payer inside the accounts.
  */
+// `tokenProgramId` selects the mint's owning program (classic for the mock/devnet mint,
+// Token-2022 for real $ANSEM). It threads into BOTH the ATA derivation (payout vault +
+// keeper source ATA) AND the tokenProgram account passed to the ix. Defaults to classic.
 export const executeSwapRealIx = (
   p: Program<AnsemMiner>, keeper: PublicKey, roundId: number, ansemOut: BN, ansemMint: PublicKey,
+  tokenProgramId: PublicKey = TOKEN_PROGRAM_ID,
 ) => p.methods.executeSwapReal(ansemOut).accountsPartial({
   payer: keeper, round: roundPda(roundId), ansemMint,
   vaultAuthority: vaultAuthPda(),
-  payoutVault: payoutVaultForMint(ansemMint),
-  sourceAta: ataForMint(ansemMint, keeper),
+  payoutVault: payoutVaultForMint(ansemMint, tokenProgramId),
+  sourceAta: ataForMint(ansemMint, keeper, tokenProgramId),
   potVault: potVaultPda(), treasury: treasuryPda(),
+  tokenProgram: tokenProgramId,
 });
 
 /** sweep_treasury — admin exit: move `amount` treasury lamports to any `destination`. */
@@ -104,15 +112,18 @@ export const sweepTreasuryIx = (p: Program<AnsemMiner>, admin: PublicKey, amount
   p.methods.sweepTreasury(amount).accountsPartial({ admin, treasury: treasuryPda(), destination });
 
 /**
- * sweep_beef_excess — admin exit for BEEF above the total_owed solvency floor. `beefVault`
- * is passed explicitly (its address is a runtime beef_config field, not a static PDA — same
- * convention as the other beef builders); `destinationAta` is the admin-named BEEF ATA.
+ * sweep_beef_excess — admin exit for BEEF above the total_owed solvency floor. `beefMint`
+ * and `beefVault` are passed explicitly (runtime beef_config fields, not static PDAs — same
+ * convention as the other beef builders); `destinationAta` is the admin-named BEEF ATA. The
+ * mint account is required for transfer_checked; `tokenProgramId` (default classic) selects
+ * its owning program so a Token-2022 BEEF mint settles correctly.
  */
 export const sweepBeefExcessIx = (
-  p: Program<AnsemMiner>, admin: PublicKey, amount: BN, beefVault: PublicKey, destinationAta: PublicKey,
+  p: Program<AnsemMiner>, admin: PublicKey, amount: BN, beefMint: PublicKey, beefVault: PublicKey,
+  destinationAta: PublicKey, tokenProgramId: PublicKey = TOKEN_PROGRAM_ID,
 ) => p.methods.sweepBeefExcess(amount).accountsPartial({
   admin, config: configPda(), beefConfig: beefConfigPda(), vaultAuthority: vaultAuthPda(),
-  beefVault, destinationAta,
+  beefMint, beefVault, destinationAta, tokenProgram: tokenProgramId,
 });
 
 /**

@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program::{self, Transfer as SolTransfer};
-use anchor_spl::token::{self, Token, TokenAccount, Transfer as TokenTransfer};
+// Token-2022-compatible BEEF sweep: transfer_checked (mint + decimals) over interface types.
+use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::constants::*;
 use crate::error::AnsemError;
@@ -74,13 +75,17 @@ pub struct SweepBeefExcess<'info> {
     #[account(seeds = [VAULT_AUTH_SEED], bump = config.vault_auth_bump)]
     pub vault_authority: UncheckedAccount<'info>,
 
+    // Pinned to beef_config.beef_mint — transfer_checked needs the mint account + decimals.
+    #[account(address = beef_config.beef_mint @ AnsemError::BadBeefVault)]
+    pub beef_mint: InterfaceAccount<'info, Mint>,
+
     #[account(mut, address = beef_config.beef_vault @ AnsemError::BadBeefVault)]
-    pub beef_vault: Account<'info, TokenAccount>,
+    pub beef_vault: InterfaceAccount<'info, TokenAccount>,
 
     #[account(mut, token::mint = beef_config.beef_mint)]
-    pub destination_ata: Account<'info, TokenAccount>,
+    pub destination_ata: InterfaceAccount<'info, TokenAccount>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 pub fn sweep_beef_excess_handler(ctx: Context<SweepBeefExcess>, amount: u64) -> Result<()> {
@@ -95,17 +100,21 @@ pub fn sweep_beef_excess_handler(ctx: Context<SweepBeefExcess>, amount: u64) -> 
     require!(amount <= free, AnsemError::InsufficientBalance);
 
     // vault_authority-signed SPL transfer, same idiom as claim_direct / claim_beef.
+    // transfer_checked (mint + decimals) so a Token-2022 BEEF mint settles correctly.
+    let decimals = ctx.accounts.beef_mint.decimals;
     let seeds: &[&[u8]] = &[VAULT_AUTH_SEED, &[ctx.accounts.config.vault_auth_bump]];
-    token::transfer(
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.key(),
-            TokenTransfer {
+            TransferChecked {
                 from: ctx.accounts.beef_vault.to_account_info(),
+                mint: ctx.accounts.beef_mint.to_account_info(),
                 to: ctx.accounts.destination_ata.to_account_info(),
                 authority: ctx.accounts.vault_authority.to_account_info(),
             },
             &[seeds],
         ),
         amount,
+        decimals,
     )
 }

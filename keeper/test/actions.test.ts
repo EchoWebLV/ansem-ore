@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { PublicKey } from "@solana/web3.js";
+import { ataForMint, TOKEN_2022_PROGRAM_ID } from "@ansem/sdk";
 import {
   commitToL1, CommitDeps, finalizeSettled, FinalizeDeps, isNotThisRoundError,
-  realExecuteSwap, RealSwapDeps,
+  realExecuteSwap, RealSwapDeps, liveRealSwapDeps, ActionCtx,
 } from "../src/crank/actions.js";
 
 const wallet = () => PublicKey.unique();
@@ -169,5 +170,38 @@ describe("realExecuteSwap (real-mode payout guard)", () => {
     await realExecuteSwap(42, 1_000_000n, 0, 5000n, deps);
     expect(sent).toBe(true);
     expect(warns.some((w) => /below alert floor/.test(w.m))).toBe(true);
+  });
+});
+
+// Token-2022 support: the keeper detects the ANSEM mint's owning program at startup and
+// threads it through the inventory-ATA derivation (so the balance read hits the right ATA).
+describe("liveRealSwapDeps inventory ATA respects the detected token program", () => {
+  const mint = PublicKey.unique();
+  const keeper = PublicKey.unique();
+
+  // Minimal ctx: inventory() only touches conn.getTokenAccountBalance + keeper + tokenProgramId.
+  const ctxWith = (tokenProgramId?: PublicKey) => {
+    let captured: PublicKey | null = null;
+    const conn = {
+      getTokenAccountBalance: async (ata: PublicKey) => { captured = ata; return { value: { amount: "123" } }; },
+    };
+    const ctx = { conn, keeper, tokenProgramId } as unknown as ActionCtx;
+    return { ctx, captured: () => captured };
+  };
+  const config = { ansemMint: mint } as any;
+
+  it("derives the Token-2022 ATA when the mint is Token-2022", async () => {
+    const { ctx, captured } = ctxWith(TOKEN_2022_PROGRAM_ID);
+    const bal = await liveRealSwapDeps(ctx, 7, config).inventory();
+    expect(bal).toBe(123n);
+    expect(captured()!.equals(ataForMint(mint, keeper, TOKEN_2022_PROGRAM_ID))).toBe(true);
+    // The 2022 ATA differs from the classic derivation for the same mint/owner.
+    expect(captured()!.equals(ataForMint(mint, keeper))).toBe(false);
+  });
+
+  it("defaults to the classic ATA when tokenProgramId is unset", async () => {
+    const { ctx, captured } = ctxWith(undefined);
+    await liveRealSwapDeps(ctx, 7, config).inventory();
+    expect(captured()!.equals(ataForMint(mint, keeper))).toBe(true);
   });
 });

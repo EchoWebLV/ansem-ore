@@ -1,7 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program::{self, Transfer as SolTransfer};
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer as TokenTransfer};
+// Token-2022-compatible layer: interface types accept BOTH classic SPL (the devnet
+// mock PDA mint) and Token-2022 (real ANSEM / future pump.fun BEEF). transfer_checked
+// (mint + decimals) is REQUIRED for Token-2022; mint_to is unchanged.
+use anchor_spl::token_interface::{
+    self, Mint, MintTo, TokenAccount, TokenInterface, TransferChecked,
+};
 
 use crate::constants::*;
 use crate::error::AnsemError;
@@ -87,7 +92,7 @@ pub struct ExecuteSwapMock<'info> {
     pub round: Box<Account<'info, Round>>,
 
     #[account(mut, address = config.ansem_mint)]
-    pub ansem_mint: Box<Account<'info, Mint>>,
+    pub ansem_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// CHECK: mint authority PDA
     #[account(seeds = [MINT_AUTH_SEED], bump = config.mint_auth_bump)]
@@ -100,9 +105,10 @@ pub struct ExecuteSwapMock<'info> {
     #[account(
         init_if_needed, payer = payer,
         associated_token::mint = ansem_mint,
-        associated_token::authority = vault_authority
+        associated_token::authority = vault_authority,
+        associated_token::token_program = token_program
     )]
-    pub payout_vault: Box<Account<'info, TokenAccount>>,
+    pub payout_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// CHECK: SOL pot vault PDA
     #[account(mut, seeds = [POT_VAULT_SEED], bump = config.pot_vault_bump)]
@@ -112,7 +118,7 @@ pub struct ExecuteSwapMock<'info> {
     #[account(mut, seeds = [TREASURY_SEED], bump = config.treasury_bump)]
     pub treasury: UncheckedAccount<'info>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -169,7 +175,7 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     // Mint ANSEM proceeds to the payout vault.
     let ansem_out = (net as u128 * mock_rate as u128 / LAMPORTS_PER_SOL as u128) as u64;
     let ma_seeds: &[&[u8]] = &[MINT_AUTH_SEED, &[mint_auth_bump]];
-    token::mint_to(
+    token_interface::mint_to(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.key(),
             MintTo {
@@ -212,7 +218,7 @@ pub struct ExecuteSwapReal<'info> {
     pub round: Box<Account<'info, Round>>,
 
     #[account(address = config.ansem_mint)]
-    pub ansem_mint: Box<Account<'info, Mint>>,
+    pub ansem_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// CHECK: vault authority PDA (owner of payout vault)
     #[account(seeds = [VAULT_AUTH_SEED], bump = config.vault_auth_bump)]
@@ -221,14 +227,15 @@ pub struct ExecuteSwapReal<'info> {
     #[account(
         init_if_needed, payer = payer,
         associated_token::mint = ansem_mint,
-        associated_token::authority = vault_authority
+        associated_token::authority = vault_authority,
+        associated_token::token_program = token_program
     )]
-    pub payout_vault: Box<Account<'info, TokenAccount>>,
+    pub payout_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     // Keeper-owned inventory the round's proceeds are paid FROM (in-instruction transfer,
     // authorized by the keeper/payer — refundable by design: it is the keeper's own ATA).
     #[account(mut, token::mint = ansem_mint, token::authority = payer)]
-    pub source_ata: Box<Account<'info, TokenAccount>>,
+    pub source_ata: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// CHECK: SOL pot vault PDA
     #[account(mut, seeds = [POT_VAULT_SEED], bump = config.pot_vault_bump)]
@@ -238,7 +245,7 @@ pub struct ExecuteSwapReal<'info> {
     #[account(mut, seeds = [TREASURY_SEED], bump = config.treasury_bump)]
     pub treasury: UncheckedAccount<'info>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -254,6 +261,9 @@ pub fn execute_swap_real_handler(ctx: Context<ExecuteSwapReal>, ansem_out: u64) 
     let rollover_in = ctx.accounts.config.rollover_jackpot;
     let min_swap_rate = ctx.accounts.config.min_swap_rate;
     let obligations_before = ctx.accounts.config.ansem_obligations;
+    // transfer_checked needs the mint's decimals (Token-2022 requirement). Read it as a
+    // scalar copy up front so the mint InterfaceAccount isn't borrowed across the CPI.
+    let ansem_decimals = ctx.accounts.ansem_mint.decimals;
 
     require!(swap_mode == SWAP_MODE_JUPITER, AnsemError::WrongSwapMode);
     require!(ctx.accounts.round.state == STATE_SETTLED, AnsemError::BadRoundState);
@@ -291,16 +301,19 @@ pub fn execute_swap_real_handler(ctx: Context<ExecuteSwapReal>, ansem_out: u64) 
     }
 
     // Pay the round's proceeds IN from keeper inventory — atomic, exact, no minting.
-    token::transfer(
+    // transfer_checked (not transfer) so Token-2022 mints settle correctly.
+    token_interface::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.key(),
-            TokenTransfer {
+            TransferChecked {
                 from: ctx.accounts.source_ata.to_account_info(),
+                mint: ctx.accounts.ansem_mint.to_account_info(),
                 to: ctx.accounts.payout_vault.to_account_info(),
                 authority: ctx.accounts.payer.to_account_info(),
             },
         ),
         ansem_out,
+        ansem_decimals,
     )?;
 
     // Post-transfer solvency: the payout vault must now cover EVERYTHING owed to players

@@ -48,6 +48,13 @@ export enum RoundState {
 // gates initialize_real to the program's upgrade authority (see programDataPda).
 export const BPF_LOADER_UPGRADEABLE_ID = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 
+// SPL token programs. The mock PDA mint (devnet) is classic SPL; the real $ANSEM mint
+// on mainnet is Token-2022. The program's token layer uses anchor_spl::token_interface,
+// so builders thread whichever program owns the mint into ATA derivation + the
+// `tokenProgram` account (which is no longer auto-resolvable — the interface has 2 ids).
+export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+export const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+
 // Known devnet infra
 export const DLP_PROGRAM_ID = new PublicKey("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
 export const GUM_PROGRAM_ID = new PublicKey("KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5");

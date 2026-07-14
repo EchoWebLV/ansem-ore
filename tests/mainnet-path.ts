@@ -10,6 +10,7 @@ import {
   getAccount,
   getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
+  TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 import { keccak256 } from "js-sha3";
 
@@ -101,14 +102,20 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
   before(async () => {
     await airdrop(keeperAdmin.publicKey, 2);
     await airdrop(stranger.publicKey, 2);
-    // A plain, pre-existing SPL mint (6 decimals) stands in for the real ANSEM mint.
-    // The program holds NO authority over it; it is passed in as an external account.
+    // A pre-existing TOKEN-2022 mint (6 decimals) stands in for the real $ANSEM mint,
+    // which is a Token-2022 mint on mainnet (owner TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb).
+    // The program holds NO authority over it; it is passed in as an external account, and
+    // every token op below runs against TOKEN_2022_PROGRAM_ID so the suite proves the EXACT
+    // real-ANSEM shape end-to-end (init -> stake -> settle -> swap_real -> claim -> sweeps -> close).
     ansemMint = await createMint(
       provider.connection,
       deployer.payer,
       deployer.publicKey,
       null,
-      6
+      6,
+      undefined,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
     );
   });
 
@@ -220,6 +227,8 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     sourceAta: srcAta,
     potVault,
     treasury,
+    // token_program is no longer auto-resolvable (Interface has two ids) — pass Token-2022.
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
   });
   const stakeRealAccounts = (pk: PublicKey, rPda: PublicKey) => ({
     authority: pk,
@@ -237,28 +246,33 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     vaultAuthority: vaultAuth,
     payoutVault,
     playerAta: ata,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
   });
 
   const balOf = async (ata: PublicKey): Promise<bigint> => {
     try {
-      return (await getAccount(provider.connection, ata)).amount;
+      return (await getAccount(provider.connection, ata, undefined, TOKEN_2022_PROGRAM_ID)).amount;
     } catch {
       return 0n; // ATA not created yet
     }
   };
 
   it("real round: fund keeper inventory, two wallets stake, settle to a known jackpot", async () => {
-    payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
+    payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true, TOKEN_2022_PROGRAM_ID);
     await airdrop(winner.publicKey, 3);
     await airdrop(loser.publicKey, 3);
 
-    // Simulated Jupiter buy: mint EXTERNAL supply into the keeper's own ATA. The
+    // Simulated Jupiter buy: mint EXTERNAL supply into the keeper's own Token-2022 ATA. The
     // program never has this mint's authority — swap must pull from here, not mint.
     const keeperAtaAcc = await getOrCreateAssociatedTokenAccount(
       provider.connection,
       deployer.payer,
       ansemMint!,
-      keeperAdmin.publicKey
+      keeperAdmin.publicKey,
+      undefined,
+      undefined,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
     );
     keeperAta = keeperAtaAcc.address;
     await mintTo(
@@ -267,7 +281,10 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
       ansemMint!,
       keeperAta,
       deployer.publicKey, // deployer is the external mint's authority (createMint above)
-      KEEPER_INVENTORY
+      KEEPER_INVENTORY,
+      undefined,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
     );
     assert.equal((await balOf(keeperAta)).toString(), KEEPER_INVENTORY.toString());
 
@@ -396,7 +413,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     const treasuryBefore = BigInt(await provider.connection.getBalance(treasury));
     const sourceBefore = await balOf(keeperAta);
     const payoutBefore = await balOf(payoutVault);
-    const supplyBefore = (await getMint(provider.connection, ansemMint!)).supply;
+    const supplyBefore = (await getMint(provider.connection, ansemMint!, undefined, TOKEN_2022_PROGRAM_ID)).supply;
     assert.equal(cfg0.ansemObligations.toString(), "0", "no obligations before the first swap");
     assert.equal(cfg0.rolloverJackpot.toString(), "0", "no rollover before the first swap");
 
@@ -416,7 +433,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     // payout +ansem_out, and the mint's total supply is UNCHANGED.
     const sourceAfter = await balOf(keeperAta);
     const payoutAfter = await balOf(payoutVault);
-    const supplyAfter = (await getMint(provider.connection, ansemMint!)).supply;
+    const supplyAfter = (await getMint(provider.connection, ansemMint!, undefined, TOKEN_2022_PROGRAM_ID)).supply;
     const out = BigInt(ANSEM_OUT.toString());
     assert.equal((sourceBefore - sourceAfter).toString(), out.toString(), "ansem_out debited from keeper ATA");
     assert.equal((payoutAfter - payoutBefore).toString(), out.toString(), "ansem_out credited to payout_vault");
@@ -454,7 +471,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
   });
 
   it("winner claim_direct receives REAL ANSEM and obligations decrement by the paid amount", async () => {
-    const winnerAta = getAssociatedTokenAddressSync(ansemMint!, winner.publicKey);
+    const winnerAta = getAssociatedTokenAddressSync(ansemMint!, winner.publicKey, false, TOKEN_2022_PROGRAM_ID);
     const cfg0: any = await program.account.config.fetch(configPda);
     const r0: any = await program.account.round.fetch(roundPda);
 
@@ -713,7 +730,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
 
     // Winner (sole jackpot-square staker) claims their full jackpot share; the loser
     // deliberately does NOT claim, so entitlement_total - claimed_proceeds > 0.
-    const jWinnerAta = getAssociatedTokenAddressSync(ansemMint!, jWinner.publicKey);
+    const jWinnerAta = getAssociatedTokenAddressSync(ansemMint!, jWinner.publicKey, false, TOKEN_2022_PROGRAM_ID);
     await program.methods
       .claimDirect(new anchor.BN(jRoundId))
       .accounts(claimRealAccounts(jWinner.publicKey, jRoundPda, jWinnerAta))
@@ -812,7 +829,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     );
 
     // A claim against the reaped round now fails (account gone).
-    const jLoserAta = getAssociatedTokenAddressSync(ansemMint!, jLoser.publicKey);
+    const jLoserAta = getAssociatedTokenAddressSync(ansemMint!, jLoser.publicKey, false, TOKEN_2022_PROGRAM_ID);
     let claimThrew = false;
     try {
       await program.methods
@@ -924,7 +941,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(r.state, 4, "STATE_CLAIMABLE — a full round played after prior closes");
 
     // And a winner can still claim real ANSEM on this post-close round.
-    const eWinnerAta = getAssociatedTokenAddressSync(ansemMint!, eWinner.publicKey);
+    const eWinnerAta = getAssociatedTokenAddressSync(ansemMint!, eWinner.publicKey, false, TOKEN_2022_PROGRAM_ID);
     await program.methods
       .claimDirect(new anchor.BN(id))
       .accounts(claimRealAccounts(eWinner.publicKey, pda, eWinnerAta))

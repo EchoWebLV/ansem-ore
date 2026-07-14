@@ -4,6 +4,7 @@ import { PublicKey } from "@solana/web3.js";
 import { AnsemMiner } from "../idl/ansem_miner.js";
 import { configPda, roundPda, minerPda, escrowPda, playerAta, payoutVault, vaultAuthPda, ansemMintPda,
   beefConfigPda, beefMinerPda, beefRoundPda, playerBeefAta } from "../pdas.js";
+import { TOKEN_PROGRAM_ID } from "../constants.js";
 
 export const depositIx = (p: Program<AnsemMiner>, wallet: PublicKey, lamports: BN) =>
   p.methods.deposit(lamports).accountsPartial({ authority: wallet });
@@ -35,10 +36,15 @@ export const stakeIx = (
   miner: minerPda(stakerWallet), escrow: escrowPda(stakerWallet), sessionToken,
 });
 
-export const claimIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>
+// tokenProgram is no longer auto-resolvable (the program's token layer is an Interface);
+// pass it explicitly. Defaults classic (the devnet PDA mint); a real Token-2022 mint threads
+// its program into the ATA seeds + the tokenProgram account together.
+export const claimIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number,
+  tokenProgramId: PublicKey = TOKEN_PROGRAM_ID) =>
   p.methods.claim(new BN(roundId)).accountsPartial({
     authority: wallet, round: roundPda(roundId), ansemMint: ansemMintPda(),
-    vaultAuthority: vaultAuthPda(), payoutVault: payoutVault(), playerAta: playerAta(wallet),
+    vaultAuthority: vaultAuthPda(), payoutVault: payoutVault(tokenProgramId),
+    playerAta: playerAta(wallet, tokenProgramId), tokenProgram: tokenProgramId,
   });
 
 export const refundIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>
@@ -56,10 +62,12 @@ export const stakeDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId
     authority: wallet, config: configPda(), round: roundPda(roundId), miner: minerPda(wallet),
   });
 
-export const claimDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>
+export const claimDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number,
+  tokenProgramId: PublicKey = TOKEN_PROGRAM_ID) =>
   p.methods.claimDirect(new BN(roundId)).accountsPartial({
     authority: wallet, config: configPda(), round: roundPda(roundId), miner: minerPda(wallet),
-    ansemMint: ansemMintPda(), vaultAuthority: vaultAuthPda(), payoutVault: payoutVault(), playerAta: playerAta(wallet),
+    ansemMint: ansemMintPda(), vaultAuthority: vaultAuthPda(), payoutVault: payoutVault(tokenProgramId),
+    playerAta: playerAta(wallet, tokenProgramId), tokenProgram: tokenProgramId,
   });
 
 export const refundDirectIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: number) =>
@@ -82,9 +90,10 @@ export const rollBeefIx = (p: Program<AnsemMiner>, wallet: PublicKey, roundId: n
     beefRound: beefRoundPda(roundId), beefConfig: beefConfigPda(), beefMiner: beefMinerPda(wallet),
   });
 
-export const claimBeefIx = (p: Program<AnsemMiner>, wallet: PublicKey, beefMint: PublicKey, beefVault: PublicKey) =>
+export const claimBeefIx = (p: Program<AnsemMiner>, wallet: PublicKey, beefMint: PublicKey, beefVault: PublicKey,
+  tokenProgramId: PublicKey = TOKEN_PROGRAM_ID) =>
   p.methods.claimBeef().accountsPartial({
     authority: wallet, beefConfig: beefConfigPda(), beefMiner: beefMinerPda(wallet),
     beefMint, vaultAuthority: vaultAuthPda(), beefVault,
-    playerBeefAta: playerBeefAta(beefMint, wallet),
+    playerBeefAta: playerBeefAta(beefMint, wallet, tokenProgramId), tokenProgram: tokenProgramId,
   });
