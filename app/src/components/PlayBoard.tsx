@@ -4,6 +4,7 @@ import { useAnchorWallet } from "@solana/wallet-adapter-react";
 import { RoundState, type WireSnapshot } from "@ansem/sdk";
 import { useKeeperSnapshot } from "../hooks/use-keeper-snapshot.js";
 import { useReveal } from "../hooks/use-reveal.js";
+import { useBeefConfig } from "../hooks/use-beef-config.js";
 import type { KeeperClientOpts, KeeperClient } from "../lib/keeper-client.js";
 import { useL1Program } from "../lib/anchor.js";
 import type { WalletAdapter } from "../lib/writes.js";
@@ -21,6 +22,7 @@ import { VerifyPanel, type Receipt, type ReceiptInput } from "./VerifyPanel.js";
 import { JackpotMeter } from "./JackpotMeter.js";
 import { WinTicker } from "./WinTicker.js";
 import { ListingBanner } from "./ListingBanner.js";
+import { BeefChip } from "./BeefChip.js";
 
 // Instant-boot placeholder: the real board geometry with zeroed data, so the
 // page looks loaded the moment it paints while the keeper link comes up.
@@ -44,6 +46,9 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
   const reveal = useReveal(snapshot);
   const l1 = useL1Program();
   const wallet = useAnchorWallet();
+  // BEEF gate: the on-chain BeefConfig probe (null pre-launch / when disconnected). Drives
+  // BOTH the HUD chip mount and the claim/stake bundle ordering, so they never diverge.
+  const beefConfig = useBeefConfig(l1);
   const [selected, setSelected] = useState<number[]>([]);
   const toggleSquare = (id: number) =>
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -107,7 +112,16 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
             <section aria-label="Round board" className="xl:col-start-2 xl:row-start-1 xl:row-span-4">
               <Stage className="w-full">
                 <div className="terminal-panel overflow-hidden">
-                  <Hud snapshot={reveal.snapshotOverride ?? snapshot} nowMs={nowMs} reveal={reveal} />
+                  <Hud
+                    snapshot={reveal.snapshotOverride ?? snapshot}
+                    nowMs={nowMs}
+                    reveal={reveal}
+                    chipSlot={
+                      beefConfig && canPlay ? (
+                        <BeefChip l1={l1!} wallet={wallet as unknown as WalletAdapter} beefConfig={beefConfig} />
+                      ) : undefined
+                    }
+                  />
                   <Board
                     snapshot={reveal.snapshotOverride ?? snapshot}
                     selectedSquares={selected}
@@ -146,6 +160,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
                   onRemoveSquare={removeSquare}
                   onStaked={() => setSelected([])}
                   onReceipt={addReceipt}
+                  beefLive={!!beefConfig}
                 />
               </section>
             )}

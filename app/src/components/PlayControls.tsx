@@ -3,12 +3,13 @@ import { useEffect, useState } from "react";
 import type { Program } from "@coral-xyz/anchor";
 import { useConnection } from "@solana/wallet-adapter-react";
 import {
-  claimDirectIx, refundDirectIx, roundPda, fetchRound, fetchConfig, configPda,
+  refundDirectIx, roundPda, beefRoundPda, fetchRound, fetchConfig, configPda,
   RoundState, type AnsemMiner, type BN,
 } from "@ansem/sdk";
 import { PublicKey } from "@solana/web3.js";
 import { usePlayerState } from "../hooks/use-player-state.js";
-import { directStake, type WalletAdapter } from "../lib/writes.js";
+import { directStake, claimRound, type WalletAdapter } from "../lib/writes.js";
+import { accountExists } from "../lib/beef.js";
 import { CLUSTER } from "../lib/explorer.js";
 import { lamportsToSolStr } from "../lib/amount.js";
 import type { AppSnapshot } from "../lib/keeper-client.js";
@@ -25,12 +26,20 @@ export interface PlayControlsProps {
   onStaked?: () => void;
   /** Fired with an explorer-linkable artifact after every landed action. */
   onReceipt?: (r: ReceiptInput) => void;
+  /**
+   * BEEF is live on-chain (BeefConfig exists). Same gate the BeefChip uses. When false
+   * (today's mainnet, or wallet disconnected), claim/stake bundles are EXACTLY the
+   * pre-BEEF single transactions — zero behavior change. When true, a defensive
+   * `rollBeef` is prepended so a played round's BEEF share is captured before the
+   * ANSEM claim/stake zeroes the stake it is computed from.
+   */
+  beefLive?: boolean;
 }
 
 // Direct-stake engine (ORE model): pick squares -> ONE approval moves the SOL
 // wallet->pot in that tx. No escrow, no session key, no round entry. Winnings
 // are pull-claimed per round (claim_direct); cancelled rounds refund exactly.
-export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSquare, onStaked, onReceipt }: PlayControlsProps) {
+export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSquare, onStaked, onReceipt, beefLive }: PlayControlsProps) {
   const { connection } = useConnection();
   const owner = wallet.publicKey;
   const { miner, config, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
@@ -74,7 +83,14 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSq
     if (walletLamports !== null && total + FEE_HEADROOM > walletLamports) {
       throw new Error(`that's ${lamportsToSolStr(total)} SOL + fees — more than your wallet holds`);
     }
-    const sig = await directStake({ l1, owner, roundId, squares, amountPerSquare });
+    // Staking a NEW round re-stamps (zeroes) the miner — roll the prior stamped round's
+    // BEEF share FIRST so it survives. Only when BEEF is live AND that round is stamped;
+    // otherwise the bundle is exactly the pre-BEEF [stakeDirect…] (BEEF never blocks a stake).
+    const rollBeefRound =
+      beefLive && stakedRound > 0 && stakedRound !== roundId && (await accountExists(connection, beefRoundPda(stakedRound)))
+        ? stakedRound
+        : null;
+    const sig = await directStake({ l1, owner, roundId, squares, amountPerSquare, rollBeefRound });
     onReceipt?.({ label: `stake ×${squares.length} · one approval`, sig });
     onStaked?.();
   });
@@ -88,7 +104,10 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSq
     const ansemMint = new PublicKey(cfg.ansemMint);
     const mintInfo = await connection.getAccountInfo(ansemMint);
     if (!mintInfo) throw new Error("could not resolve the ANSEM mint on-chain");
-    const sig = await claimDirectIx(l1, owner, rid, ansemMint, mintInfo.owner).rpc();
+    // Roll this round's BEEF share FIRST (claim_direct zeroes the stake it's derived from),
+    // but only when BEEF is live AND the round is stamped — else exactly the pre-BEEF claim.
+    const rollBeef = !!beefLive && (await accountExists(connection, beefRoundPda(rid)));
+    const sig = await claimRound({ l1, owner, roundId: rid, ansemMint, ansemTokenProgramId: mintInfo.owner, rollBeef });
     onReceipt?.({ label: `claim round ${rid}`, sig });
   });
   const doRefund = (rid: number) => run(async () => {

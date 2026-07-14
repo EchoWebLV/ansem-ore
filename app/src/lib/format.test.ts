@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { RoundState } from "@ansem/sdk";
-import { lamportsToSol, formatSol, formatAnsem, stateLabel, secondsLeft, formatCountdown, formatUntil, formatHms, shortAddr, eventToText } from "./format.js";
+import { lamportsToSol, formatSol, formatAnsem, formatBeef, stateLabel, secondsLeft, formatCountdown, formatUntil, formatHms, shortAddr, eventToText } from "./format.js";
 
 describe("format helpers", () => {
   it("lamportsToSol parses stringified lamports without precision loss", () => {
@@ -18,6 +18,12 @@ describe("format helpers", () => {
     expect(formatAnsem("27720000")).toBe("27.72 ANSEM");
     expect(formatAnsem("3044903400")).toBe("3044.9 ANSEM");
     expect(formatAnsem("0")).toBe("0 ANSEM");
+  });
+
+  it("formatBeef renders 1e6 base units as a trimmed BEEF string (bigint or wire string)", () => {
+    expect(formatBeef(27_300_000n)).toBe("27.3 BEEF");
+    expect(formatBeef("210000000")).toBe("210 BEEF");
+    expect(formatBeef(0n)).toBe("0 BEEF");
   });
 
   it("stateLabel maps each RoundState", () => {

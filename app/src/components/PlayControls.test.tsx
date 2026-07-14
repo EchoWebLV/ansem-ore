@@ -10,6 +10,7 @@ vi.mock("@ansem/sdk", async (importOriginal) => {
   return {
     ...actual,
     roundPda: vi.fn(() => ({})),
+    beefRoundPda: vi.fn(() => ({})),
     fetchRound: vi.fn(() => new Promise(() => {})),
   };
 });
@@ -18,7 +19,12 @@ vi.mock("@ansem/sdk", async (importOriginal) => {
 // 100_000_000-lamport bet. The old escrow deposit sent that on-chain and died in
 // simulation ("Transfer: insufficient lamports 59102330, need 100000000"). Direct
 // mode must kill it CLIENT-SIDE: human message, no transaction ever built.
-vi.mock("../lib/writes.js", () => ({ directStake: vi.fn(async () => "SIGDIRECT") }));
+vi.mock("../lib/writes.js", () => ({
+  directStake: vi.fn(async () => "SIGDIRECT"),
+  claimRound: vi.fn(async () => "SIGCLAIM"),
+}));
+const beef = vi.hoisted(() => ({ accountExists: vi.fn(async () => true) }));
+vi.mock("../lib/beef.js", () => ({ accountExists: beef.accountExists }));
 vi.mock("@solana/wallet-adapter-react", () => ({
   useConnection: () => ({ connection: { getBalance: async () => 59_102_330 } }),
 }));
@@ -40,19 +46,22 @@ const snap = (over: Partial<WireSnapshot> = {}): WireSnapshot => ({
   rolloverJackpot: "0", updatedAt: 1, leaderboard: [], recentEvents: [], ...over,
 });
 
-const renderControls = (selected: number[]) =>
+const renderControls = (selected: number[], beefLive?: boolean) =>
   render(
     <PlayControls
       l1={{} as Program<AnsemMiner>}
       wallet={{ publicKey: { toBase58: () => "Wallet1111" } } as unknown as WalletAdapter}
       snapshot={snap()}
       selectedSquares={selected}
+      beefLive={beefLive}
     />,
   );
 
 describe("PlayControls (direct mode) — wallet-balance stake gate", () => {
   beforeEach(() => {
     vi.mocked(directStake).mockClear();
+    beef.accountExists.mockClear();
+    beef.accountExists.mockResolvedValue(true);
     player.miner = null;
     player.config = null;
     player.loaded = true;
@@ -94,5 +103,40 @@ describe("PlayControls (direct mode) — wallet-balance stake gate", () => {
     renderControls([4]);
     await waitFor(() => expect(screen.getByText(/wallet balance/i)).toBeInTheDocument());
     expect(screen.getByText("0.005 SOL reserved for network fees")).toBeInTheDocument();
+  });
+
+  it("pre-BEEF (beefLive unset): the stake stays the exact single-tx bundle — no rollBeef requested, BEEF never probed", async () => {
+    renderControls([4]);
+    await waitFor(() => expect(screen.getByText(/wallet balance/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/amount per tile/i), { target: { value: "0.01" } });
+    fireEvent.click(screen.getByRole("button", { name: /place bet · one approval/i }));
+    await waitFor(() => expect(directStake).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(directStake).mock.calls[0][0].rollBeefRound).toBeNull();
+    expect(beef.accountExists).not.toHaveBeenCalled(); // the BEEF path is never touched pre-launch
+  });
+
+  it("BEEF-live: staking a new round prepends rollBeef(priorStampedRound) so the un-rolled share survives", async () => {
+    // prior round 6, already cleared (blockStake all zero) -> staking the new round is allowed
+    player.miner = { roundId: 6, blockStake: Array<bigint>(25).fill(0n) };
+    player.config = { multMaxBps: 0 };
+    renderControls([4, 17], true);
+    await waitFor(() => expect(screen.getByText(/wallet balance/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/amount per tile/i), { target: { value: "0.01" } });
+    fireEvent.click(screen.getByRole("button", { name: /place bet · one approval/i }));
+    await waitFor(() => expect(directStake).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(directStake).mock.calls[0][0].rollBeefRound).toBe(6); // roll the prior round FIRST
+    expect(vi.mocked(directStake).mock.calls[0][0].squares).toEqual([4, 17]);
+  });
+
+  it("BEEF-live but the prior round was never stamped: no roll — BEEF never blocks the stake", async () => {
+    beef.accountExists.mockResolvedValue(false); // BeefRound(prior) absent -> a roll would abort the tx
+    player.miner = { roundId: 6, blockStake: Array<bigint>(25).fill(0n) };
+    player.config = { multMaxBps: 0 };
+    renderControls([4], true);
+    await waitFor(() => expect(screen.getByText(/wallet balance/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/amount per tile/i), { target: { value: "0.01" } });
+    fireEvent.click(screen.getByRole("button", { name: /place bet · one approval/i }));
+    await waitFor(() => expect(directStake).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(directStake).mock.calls[0][0].rollBeefRound).toBeNull();
   });
 });
