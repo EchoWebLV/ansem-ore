@@ -1,4 +1,5 @@
 .superpowers/
+.worktrees/
 
 # Solana / Anchor
 target/
