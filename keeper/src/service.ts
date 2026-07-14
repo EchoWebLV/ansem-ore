@@ -105,8 +105,9 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
       return info ? fetchBeefConfig(chain.program, pda) : null;
     },
     detectTokenProgram: async (mint) => {
-      const info = await chain.conn.getAccountInfo(mint, "confirmed").catch(() => null);
-      return info && info.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+      const info = await chain.conn.getAccountInfo(mint, "confirmed");
+      if (!info) throw new Error(`BEEF mint account ${mint.toBase58()} not found`);
+      return info.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
     },
     sendStamp: (roundId, cfg, tokenProgram) =>
       l1Send(() => stampBeefIx(

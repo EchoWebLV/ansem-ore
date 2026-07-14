@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { PublicKey } from "@solana/web3.js";
-import { RoundState } from "@ansem/sdk";
+import { RoundState, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@ansem/sdk";
 import { CrankAction } from "../src/crank/decide.js";
 import { runTick, TickDeps } from "../src/crank/loop.js";
 import type { ActionCtx } from "../src/crank/actions.js";
@@ -146,7 +146,7 @@ const liveServiceConfig: any = {
   inventoryMinAnsem: 0, listingTs: null,
 };
 
-async function captureLiveBeefProbe(
+async function captureLiveBeefDeps(
   getAccountInfo: ReturnType<typeof vi.fn>,
   fetchBeefConfig: ReturnType<typeof vi.fn>,
 ) {
@@ -176,7 +176,7 @@ async function captureLiveBeefProbe(
   const { createService } = await import("../src/service.js");
   createService(liveServiceConfig, { info: vi.fn(), warn: vi.fn(), error: vi.fn() });
   if (!stampDeps) throw new Error("service did not construct its BEEF stamper");
-  return stampDeps.probeConfig;
+  return stampDeps;
 }
 
 describe("live BeefConfig probe", () => {
@@ -186,7 +186,7 @@ describe("live BeefConfig probe", () => {
       owner: PublicKey.unique(), rentEpoch: 0,
     }));
     const fetchBeefConfig = vi.fn(async () => { throw new Error("BEEF config RPC failed"); });
-    const probeConfig = await captureLiveBeefProbe(getAccountInfo, fetchBeefConfig);
+    const { probeConfig } = await captureLiveBeefDeps(getAccountInfo, fetchBeefConfig);
 
     await expect(probeConfig()).rejects.toThrow(/BEEF config RPC failed/);
 
@@ -197,11 +197,44 @@ describe("live BeefConfig probe", () => {
   it("returns null without decoding when the BeefConfig account is genuinely absent", async () => {
     const getAccountInfo = vi.fn(async () => null);
     const fetchBeefConfig = vi.fn(async () => { throw new Error("must not decode an absent account"); });
-    const probeConfig = await captureLiveBeefProbe(getAccountInfo, fetchBeefConfig);
+    const { probeConfig } = await captureLiveBeefDeps(getAccountInfo, fetchBeefConfig);
 
     await expect(probeConfig()).resolves.toBeNull();
 
     expect(getAccountInfo).toHaveBeenCalledTimes(1);
     expect(fetchBeefConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe("live BEEF mint token-program detection", () => {
+  const unusedConfigFetch = vi.fn(async () => { throw new Error("unused"); });
+  const mint = PublicKey.unique();
+
+  it("propagates a mint-account RPC failure", async () => {
+    const getAccountInfo = vi.fn(async () => { throw new Error("mint RPC failed"); });
+    const { detectTokenProgram } = await captureLiveBeefDeps(getAccountInfo, unusedConfigFetch);
+
+    await expect(detectTokenProgram(mint)).rejects.toThrow(/mint RPC failed/);
+  });
+
+  it("fails explicitly when the BEEF mint account is missing", async () => {
+    const getAccountInfo = vi.fn(async () => null);
+    const { detectTokenProgram } = await captureLiveBeefDeps(getAccountInfo, unusedConfigFetch);
+
+    await expect(detectTokenProgram(mint)).rejects.toThrow(new RegExp(`BEEF mint account ${mint.toBase58()}.*not found`, "i"));
+  });
+
+  it("selects classic SPL from the mint account owner", async () => {
+    const getAccountInfo = vi.fn(async () => ({ owner: TOKEN_PROGRAM_ID }));
+    const { detectTokenProgram } = await captureLiveBeefDeps(getAccountInfo, unusedConfigFetch);
+
+    await expect(detectTokenProgram(mint)).resolves.toEqual(TOKEN_PROGRAM_ID);
+  });
+
+  it("selects Token-2022 from the mint account owner", async () => {
+    const getAccountInfo = vi.fn(async () => ({ owner: TOKEN_2022_PROGRAM_ID }));
+    const { detectTokenProgram } = await captureLiveBeefDeps(getAccountInfo, unusedConfigFetch);
+
+    await expect(detectTokenProgram(mint)).resolves.toEqual(TOKEN_2022_PROGRAM_ID);
   });
 });
