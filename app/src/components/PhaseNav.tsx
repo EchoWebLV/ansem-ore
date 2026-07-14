@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 export function PhaseNav({ children }: { children?: ReactNode }) {
   return (
-    <nav data-testid="phase-nav" aria-label="BullStake phases" className="terminal-topbar">
+    <nav data-testid="phase-nav" aria-label="BullStake phases" className="terminal-topbar px-0">
       <div className="flex min-w-0 items-center gap-3">
         {/* eslint-disable-next-line @next/next/no-img-element -- static brand SVG; next/image is overkill for a 44px inline mark */}
         <img src="/bullstake-logo.svg" alt="" width={36} height={36} aria-hidden className="shrink-0" />

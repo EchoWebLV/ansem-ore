@@ -40,4 +40,9 @@ describe("PhaseNav", () => {
     const actions = screen.getByRole("button", { name: /select wallet/i }).parentElement;
     expect(actions).toHaveClass("shrink-0", "whitespace-nowrap");
   });
+
+  it("uses the page shell padding only once on mobile", () => {
+    render(<PhaseNav />);
+    expect(screen.getByTestId("phase-nav")).toHaveClass("px-0");
+  });
 });
