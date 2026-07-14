@@ -129,3 +129,6 @@ export const setClaimWindowIx = (p: Program<AnsemMiner>, admin: PublicKey, secs:
   p.methods.setClaimWindow(new BN(secs)).accountsPartial({ admin });
 export const setMinSwapRateIx = (p: Program<AnsemMiner>, admin: PublicKey, rate: BN) =>
   p.methods.setMinSwapRate(rate).accountsPartial({ admin });
+// Launch stake-cap tuner: cap max_stake at 1 SOL (and retune min) without a program upgrade.
+export const setStakeLimitsIx = (p: Program<AnsemMiner>, admin: PublicKey, minStake: BN, maxStakePerRound: BN) =>
+  p.methods.setStakeLimits(minStake, maxStakePerRound).accountsPartial({ admin });

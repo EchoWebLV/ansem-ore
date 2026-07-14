@@ -932,4 +932,77 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
       .rpc();
     assert.isAbove(Number(await balOf(eWinnerAta)), 0, "winner claimed on the post-close round");
   });
+
+  // ---- Task (mainnet-phase0): set_stake_limits (launch cap tuner) ----
+  // min_stake / max_stake_per_round are otherwise frozen at initialize (0.01 / 100
+  // SOL defaults). Launch policy caps max at 1 SOL and must be retunable WITHOUT a
+  // program upgrade — this admin ix (SetParams-gated on config.admin) is that knob.
+  // Proven on the real-mode config above: keeper_admin succeeds, the new cap actually
+  // bites a subsequent stake_direct, a stranger is rejected, and min > max is refused.
+  const LAUNCH_MIN = new anchor.BN(10_000_000); // 0.01 SOL
+  const LAUNCH_MAX = new anchor.BN(1_000_000_000); // 1 SOL
+  const slStaker = Keypair.generate();
+
+  it("set_stake_limits: keeper_admin sets min 0.01 / max 1 SOL — config reflects it", async () => {
+    await (program.methods as any)
+      .setStakeLimits(LAUNCH_MIN, LAUNCH_MAX)
+      .accounts({ admin: keeperAdmin.publicKey })
+      .signers([keeperAdmin])
+      .rpc();
+    const cfg: any = await program.account.config.fetch(configPda);
+    assert.equal(cfg.minStake.toString(), LAUNCH_MIN.toString(), "min_stake updated");
+    assert.equal(
+      cfg.maxStakePerRound.toString(),
+      LAUNCH_MAX.toString(),
+      "max_stake_per_round capped at 1 SOL"
+    );
+  });
+
+  it("set_stake_limits: a stake above the new 1 SOL cap fails StakeTooLarge", async () => {
+    await airdrop(slStaker.publicKey, 3);
+    // Comfortable deadline so the failure is unambiguously the cap, not RoundEnded.
+    await program.methods
+      .setRoundDuration(new anchor.BN(30))
+      .accounts({ admin: keeperAdmin.publicKey })
+      .signers([keeperAdmin])
+      .rpc();
+    const { id, pda } = await createFreshRound();
+    const over = new anchor.BN(1_500_000_000); // 1.5 SOL > the 1 SOL cap set above
+    try {
+      await program.methods
+        .stakeDirect(new anchor.BN(id), jsq, over)
+        .accounts(stakeRealAccounts(slStaker.publicKey, pda))
+        .signers([slStaker])
+        .rpc();
+      assert.fail("a stake above max_stake_per_round must be rejected");
+    } catch (e: any) {
+      assert.include(e.toString(), "StakeTooLarge");
+    }
+  });
+
+  it("set_stake_limits rejects a non-admin signer (Unauthorized)", async () => {
+    try {
+      await (program.methods as any)
+        .setStakeLimits(LAUNCH_MIN, LAUNCH_MAX)
+        .accounts({ admin: stranger.publicKey })
+        .signers([stranger])
+        .rpc();
+      assert.fail("a non-admin must not set stake limits");
+    } catch (e: any) {
+      assert.include(e.toString(), "Unauthorized");
+    }
+  });
+
+  it("set_stake_limits rejects min > max (BadStakeBounds)", async () => {
+    try {
+      await (program.methods as any)
+        .setStakeLimits(new anchor.BN(2_000_000_000), new anchor.BN(1_000_000_000))
+        .accounts({ admin: keeperAdmin.publicKey })
+        .signers([keeperAdmin])
+        .rpc();
+      assert.fail("min > max must be rejected");
+    } catch (e: any) {
+      assert.include(e.toString(), "BadStakeBounds");
+    }
+  });
 });

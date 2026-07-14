@@ -88,6 +88,17 @@ pub mod ansem_miner {
         instructions::admin::set_claim_window(ctx, secs)
     }
 
+    // Launch stake-cap tuner (see instructions/admin.rs::set_stake_limits). Ungated;
+    // admin-gated via SetParams. Lets the launch policy cap max_stake at 1 SOL and
+    // retune both bounds later without a program upgrade.
+    pub fn set_stake_limits(
+        ctx: Context<SetParams>,
+        min_stake: u64,
+        max_stake_per_round: u64,
+    ) -> Result<()> {
+        instructions::admin::set_stake_limits(ctx, min_stake, max_stake_per_round)
+    }
+
     // DEVNET/TEST-ONLY migration tool — see instructions/admin.rs::close_config.
     #[cfg(feature = "devnet")]
     pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {

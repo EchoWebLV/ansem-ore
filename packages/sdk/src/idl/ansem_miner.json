@@ -3668,6 +3668,54 @@
       ]
     },
     {
+      "name": "set_stake_limits",
+      "discriminator": [
+        10,
+        168,
+        57,
+        20,
+        114,
+        155,
+        250,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "min_stake",
+          "type": "u64"
+        },
+        {
+          "name": "max_stake_per_round",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "settle",
       "discriminator": [
         175,
@@ -4685,6 +4733,11 @@
       "code": 6029,
       "name": "RoundNotCloseable",
       "msg": "Round is not in a closeable state"
+    },
+    {
+      "code": 6030,
+      "name": "BadStakeBounds",
+      "msg": "Invalid stake bounds (require 0 < min <= max)"
     }
   ],
   "types": [

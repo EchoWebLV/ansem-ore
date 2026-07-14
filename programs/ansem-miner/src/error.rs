@@ -32,4 +32,5 @@ pub enum AnsemError {
     #[msg("Swap proceeds below the configured min_swap_rate floor")] SwapRateTooLow,
     #[msg("Claim window still open — round not yet closeable")] ClaimWindowOpen,
     #[msg("Round is not in a closeable state")] RoundNotCloseable,
+    #[msg("Invalid stake bounds (require 0 < min <= max)")] BadStakeBounds,
 }

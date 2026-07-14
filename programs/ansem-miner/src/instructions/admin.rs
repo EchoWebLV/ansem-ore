@@ -50,6 +50,27 @@ pub fn set_claim_window(ctx: Context<SetParams>, secs: i64) -> Result<()> {
     Ok(())
 }
 
+// Launch cap tuner. min_stake / max_stake_per_round are otherwise frozen at
+// initialize (0.01 / 100 SOL defaults); the launch policy caps max at 1 SOL and
+// must be retunable WITHOUT a program upgrade — this is that knob. Enforces the
+// invariant stake_direct depends on (0 < min <= max) so a bad bound can never
+// brick staking (min > max would reject every stake; max == 0 the same). Admin-
+// gated via SetParams.
+pub fn set_stake_limits(
+    ctx: Context<SetParams>,
+    min_stake: u64,
+    max_stake_per_round: u64,
+) -> Result<()> {
+    require!(
+        min_stake <= max_stake_per_round && max_stake_per_round > 0,
+        AnsemError::BadStakeBounds
+    );
+    let cfg = &mut ctx.accounts.config;
+    cfg.min_stake = min_stake;
+    cfg.max_stake_per_round = max_stake_per_round;
+    Ok(())
+}
+
 // Admin-only migration/dev tool: close the Config PDA (rent -> admin) so a fresh
 // `initialize` can run after a state-layout change (e.g. the M4b lottery redesign
 // made the old on-chain Config binary-incompatible on devnet). `bump` is

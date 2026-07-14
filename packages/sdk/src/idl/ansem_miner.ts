@@ -3674,6 +3674,54 @@ export type AnsemMiner = {
       ]
     },
     {
+      "name": "setStakeLimits",
+      "discriminator": [
+        10,
+        168,
+        57,
+        20,
+        114,
+        155,
+        250,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "minStake",
+          "type": "u64"
+        },
+        {
+          "name": "maxStakePerRound",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "settle",
       "discriminator": [
         175,
@@ -4691,6 +4739,11 @@ export type AnsemMiner = {
       "code": 6029,
       "name": "roundNotCloseable",
       "msg": "Round is not in a closeable state"
+    },
+    {
+      "code": 6030,
+      "name": "badStakeBounds",
+      "msg": "Invalid stake bounds (require 0 < min <= max)"
     }
   ],
   "types": [

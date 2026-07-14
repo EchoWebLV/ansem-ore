@@ -4,7 +4,8 @@ import { Wallet, BN } from "@coral-xyz/anchor";
 import { createProgram } from "../src/program.js";
 import { stakeIx, joinRoundIx, claimIx } from "../src/instructions/player.js";
 import { delegateRoundIx, executeSwapMockIx, initializeRealIx, executeSwapRealIx,
-  sweepTreasuryIx, sweepBeefExcessIx, closeRoundIx, setClaimWindowIx, setMinSwapRateIx } from "../src/instructions/keeper.js";
+  sweepTreasuryIx, sweepBeefExcessIx, closeRoundIx, setClaimWindowIx, setMinSwapRateIx,
+  setStakeLimitsIx } from "../src/instructions/keeper.js";
 import { configPda, roundPda, minerPda, escrowPda, payoutVault, treasuryPda, beefConfigPda,
   payoutVaultForMint, ataForMint, programDataPda } from "../src/pdas.js";
 
@@ -98,5 +99,10 @@ describe("mainnet-path builders resolve the right accounts", () => {
     expect(has(cw, configPda())).toBe(true);
     const msr = await setMinSwapRateIx(program(), admin, new BN(1_000)).instruction();
     expect(has(msr, configPda())).toBe(true);
+  });
+
+  it("setStakeLimits resolves the admin-gated config", async () => {
+    const ix = await setStakeLimitsIx(program(), admin, new BN(10_000_000), new BN(1_000_000_000)).instruction();
+    expect(has(ix, configPda())).toBe(true);
   });
 });
