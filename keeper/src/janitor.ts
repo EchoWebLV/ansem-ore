@@ -52,14 +52,26 @@ const asNum = (x: any): number => (typeof x?.toNumber === "function" ? x.toNumbe
 const asBig = (x: any): bigint => (typeof x?.toString === "function" ? BigInt(x.toString()) : BigInt(x));
 
 /**
- * One janitor pass: enumerate every Round account (anchor's `.all()` applies the Round
- * discriminator memcmp; we filter closeable ones client-side), then send up to
- * MAX_CLOSE_PER_PASS close_round txs, reclaiming rent to config.admin (the keeper).
- * Each send is best-effort — a failed close just retries next pass.
+ * One janitor pass: enumerate every current-layout Round account (anchor's `.all()`
+ * applies the Round discriminator memcmp; we additionally pin the exact current
+ * account size so it never tries to bulk-decode a foreign-length account), then send
+ * up to MAX_CLOSE_PER_PASS close_round txs, reclaiming rent to config.admin (the
+ * keeper). Each send is best-effort — a failed close just retries next pass.
+ *
+ * Why the `dataSize` filter is load-bearing: `getProgramAccounts` returns EVERY
+ * program-owned account carrying the Round discriminator, including rounds written by
+ * an earlier Round layout (a different byte length) — e.g. devnet still holds ~1600
+ * rounds from pre-`close_round` builds that can never be reaped. Anchor's `.all()`
+ * borsh-decodes each and THROWS on the first size mismatch, which would kill every
+ * janitor pass (and a discriminator-squatting account could do the same on any
+ * cluster). Pinning `dataSize` to the current `Round` size returns only decodable,
+ * current-layout rounds.
  */
 export async function runJanitor(ctx: JanitorCtx): Promise<void> {
   const claimWindowSecs = await ctx.getClaimWindowSecs();
-  const all = await ctx.program.account.round.all();
+  const all = await ctx.program.account.round.all([
+    { dataSize: ctx.program.account.round.size },
+  ]);
   const rounds: CloseableRound[] = all.map(({ account }: any) => ({
     roundId: asNum(account.roundId),
     state: account.state as RoundState,
