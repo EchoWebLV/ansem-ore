@@ -1,6 +1,6 @@
 import { PublicKey } from "@solana/web3.js";
 import {
-  ConfigState, RoundStateData, fetchConfig, fetchRound, fetchMiner,
+  ConfigState, RoundState, RoundStateData, fetchConfig, fetchRound, fetchMiner,
   configPda, roundPda, minerPda, sleep, DLP_PROGRAM_ID, l1Send,
   fetchBeefConfig, beefConfigPda, beefRoundPda, stampBeefIx,
   TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
@@ -25,6 +25,49 @@ import { startFloorRefresh, FloorRefresh } from "./floor.js";
 import type { FetchLike } from "./jupiter.js";
 
 export interface Service { start: () => Promise<void>; stop: () => Promise<void>; }
+
+export interface ServiceDispatchState {
+  config: ConfigState;
+  round: RoundStateData | null;
+}
+
+export interface ServiceDispatchDeps {
+  createAndDelegate: typeof createAndDelegate;
+}
+
+const liveServiceDispatchDeps: ServiceDispatchDeps = { createAndDelegate };
+
+export async function dispatchCrankAction(
+  action: CrankAction,
+  s: ServiceDispatchState,
+  ctx: ActionCtx,
+  deps: ServiceDispatchDeps = liveServiceDispatchDeps,
+): Promise<void> {
+  switch (action) {
+    case CrankAction.CreateRound: {
+      if (s.round?.state === RoundState.Claimable && ctx.beefStamper?.enabled()) {
+        await ctx.beefStamper.stamp(s.config.currentRoundId);
+      }
+      return deps.createAndDelegate(ctx, s.config.currentRoundId + 1);
+    }
+    case CrankAction.CommitToL1:
+      if (s.round) await commitToL1(s.round.roundId, liveCommitDeps(ctx, s.round.roundId));
+      return;
+    case CrankAction.Settle:
+      if (s.round) await requestSettle(ctx, s.round.roundId);
+      return;
+    case CrankAction.Finalize:
+      if (s.round) await finalizeSettled(s.round.roundId, liveFinalizeDeps(ctx, s.round.roundId, s.config, s.round));
+      return;
+    case CrankAction.Cancel:
+      if (s.round) await cancelRound(ctx, s.round.roundId);
+      return;
+    case CrankAction.AwaitOracle:
+    case CrankAction.Idle:
+    default:
+      return;
+  }
+}
 
 export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Service {
   const chain: Chain = buildChain(cfg);
@@ -84,28 +127,7 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
     };
   };
 
-  const dispatch = async (action: CrankAction, s: { config: ConfigState; round: RoundStateData | null }) => {
-    switch (action) {
-      case CrankAction.CreateRound:
-        return createAndDelegate(ctx, s.config.currentRoundId + 1);
-      case CrankAction.CommitToL1:
-        if (s.round) await commitToL1(s.round.roundId, liveCommitDeps(ctx, s.round.roundId));
-        return;
-      case CrankAction.Settle:
-        if (s.round) await requestSettle(ctx, s.round.roundId);
-        return;
-      case CrankAction.Finalize:
-        if (s.round) await finalizeSettled(s.round.roundId, liveFinalizeDeps(ctx, s.round.roundId, s.config, s.round));
-        return;
-      case CrankAction.Cancel:
-        if (s.round) await cancelRound(ctx, s.round.roundId);
-        return;
-      case CrankAction.AwaitOracle:
-      case CrankAction.Idle:
-      default:
-        return; // nothing to do this tick
-    }
-  };
+  const dispatch = (action: CrankAction, s: ServiceDispatchState) => dispatchCrankAction(action, s, ctx);
 
   // Read the current round by OWNERSHIP: while delegated the live copy is in the
   // ER (L1 anchor .fetch would fail the owner check), once committed it is on L1.

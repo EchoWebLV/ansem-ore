@@ -1,7 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { RoundState } from "@ansem/sdk";
 import { CrankAction } from "../src/crank/decide.js";
 import { runTick, TickDeps } from "../src/crank/loop.js";
+import type { ActionCtx } from "../src/crank/actions.js";
+import { dispatchCrankAction } from "../src/service.js";
 
 const grid = () => Array.from({ length: 25 }, () => 0n);
 const config: any = { currentRoundId: 100, currentRoundFinalized: false, rolloverJackpot: 0n, multMinBps: 5000, multMaxBps: 5000 };
@@ -63,5 +65,62 @@ describe("runTick", () => {
     const { deps } = makeDeps({ fetchRound: async () => ({ round: pending as any, delegated: false }), nowSec: () => 6000 });
     const next = await runTick(deps, { prevSnapshot: null, vrfPendingSinceSec: null });
     expect(next.vrfPendingSinceSec).toBe(6000);
+  });
+});
+
+function makeDispatchHarness(stamp: (roundId: number) => Promise<void>, enabled = true) {
+  const createAndDelegate = vi.fn(async (_ctx: ActionCtx, _roundId: number) => undefined);
+  const ctx = {
+    beefStamper: {
+      init: vi.fn(async () => undefined),
+      stamp,
+      enabled: () => enabled,
+    },
+  } as unknown as ActionCtx;
+  return {
+    createAndDelegate,
+    dispatch: (action: CrankAction, state: Parameters<typeof dispatchCrankAction>[1]) =>
+      dispatchCrankAction(action, state, ctx, { createAndDelegate }),
+  };
+}
+
+describe("CreateRound service dispatch", () => {
+  it("rejects and does not create when the current Claimable round's BEEF stamp fails", async () => {
+    const stamp = vi.fn(async () => { throw new Error("stamp failed"); });
+    const { dispatch, createAndDelegate } = makeDispatchHarness(stamp);
+
+    await expect(dispatch(CrankAction.CreateRound, {
+      config,
+      round: { ...openRound, state: RoundState.Claimable },
+    })).rejects.toThrow(/stamp failed/);
+
+    expect(stamp).toHaveBeenCalledWith(100);
+    expect(createAndDelegate).not.toHaveBeenCalled();
+  });
+
+  it("creates exactly once after stamping the current Claimable round", async () => {
+    const stamp = vi.fn(async () => undefined);
+    const { dispatch, createAndDelegate } = makeDispatchHarness(stamp);
+
+    await dispatch(CrankAction.CreateRound, {
+      config,
+      round: { ...openRound, state: RoundState.Claimable },
+    });
+
+    expect(stamp).toHaveBeenCalledWith(100);
+    expect(createAndDelegate).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates after an empty Closed round without attempting a BEEF stamp", async () => {
+    const stamp = vi.fn(async () => undefined);
+    const { dispatch, createAndDelegate } = makeDispatchHarness(stamp);
+
+    await dispatch(CrankAction.CreateRound, {
+      config,
+      round: { ...openRound, state: RoundState.Closed, pot: 0n },
+    });
+
+    expect(stamp).not.toHaveBeenCalled();
+    expect(createAndDelegate).toHaveBeenCalledTimes(1);
   });
 });
