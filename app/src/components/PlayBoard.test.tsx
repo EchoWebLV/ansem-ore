@@ -107,7 +107,7 @@ describe("PlayBoard", () => {
     render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" nowMs={900_000} clientFactory={factory} />);
     act(() => {
       captured!.onStatus?.("connected");
-      captured!.onSnapshot(wireSnap({ roundId: 77, state: RoundState.Settled, jackpotSquare: 3 }));
+      captured!.onSnapshot(wireSnap({ roundId: 77, state: RoundState.Claimable, jackpotSquare: 3 }));
     });
     // The next round opens — previously the button died right here.
     act(() => { captured!.onSnapshot(wireSnap({ roundId: 78, state: RoundState.Open })); });
@@ -207,5 +207,13 @@ describe("PlayBoard", () => {
     expect(globalCss).toMatch(/\.wallet-adapter-button[\s\S]*white-space: nowrap/);
     expect(globalCss).not.toMatch(/font-family:\s*Inter/);
     expect(globalCss).toMatch(/font-family:\s*ui-sans-serif/);
+  });
+
+  it("scopes narrow-screen wallet truncation to the header trigger, never modal wallet rows", () => {
+    const narrowWalletCss = globalCss.match(/@media \(max-width: 359px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+    expect(narrowWalletCss).toContain(".terminal-topbar .wallet-adapter-button-trigger");
+    expect(narrowWalletCss).not.toMatch(/^\s*\.wallet-adapter-button\s*[,\{]/m);
+    expect(narrowWalletCss).not.toMatch(/^\s*\.wallet-adapter-button-trigger\s*[,\{]/m);
+    expect(narrowWalletCss).not.toContain(".wallet-adapter-modal-list .wallet-adapter-button");
   });
 });

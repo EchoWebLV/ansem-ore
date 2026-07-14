@@ -47,9 +47,9 @@ describe("Board", () => {
     expect(screen.getByTestId("tile-3").querySelector(".glow-live")).toBeNull();
   });
 
-  it("flags the jackpot square gold only once settled", () => {
-    const settled = snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "100" });
-    render(<Board snapshot={settled} />);
+  it("flags the jackpot square gold only once accounting is Claimable", () => {
+    const claimable = snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "100" });
+    render(<Board snapshot={claimable} />);
     expect(screen.getByTestId("tile-7")).toHaveAttribute("data-jackpot", "true");
   });
 
@@ -63,8 +63,8 @@ describe("Board", () => {
     expect(container.querySelectorAll("[data-depth]")).toHaveLength(25);
   });
 
-  it("fires the gold shockwave ring on the jackpot square once settled", () => {
-    render(<Board snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "100" })} />);
+  it("fires the gold shockwave ring on the jackpot square once Claimable", () => {
+    render(<Board snapshot={snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "100" })} />);
     expect(screen.getByTestId("ring-7")).toBeInTheDocument();
     expect(screen.queryByTestId("ring-3")).toBeNull();
   });
@@ -81,10 +81,10 @@ describe("Board", () => {
     expect(container.querySelector('[data-square="0"]')?.getAttribute("data-selected")).toBe("false");
   });
 
-  it("finale rings the jackpot bell for settle/default reveals", () => {
+  it("finale rings the jackpot bell for finalized/default reveals", () => {
     render(
       <Board
-        snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "100" })}
+        snapshot={snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "100" })}
         revealed={Array.from({ length: 25 }, (_, i) => i)}
         jackpotShown
       />,
@@ -93,10 +93,10 @@ describe("Board", () => {
     expect(sound.playRollover).not.toHaveBeenCalled();
   });
 
-  it("keeps a zero-pool drawn square neutral and plays rollover audio", () => {
+  it("keeps a finalized zero-pool drawn square neutral and plays rollover audio", () => {
     render(
       <Board
-        snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "0" })}
+        snapshot={snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "0" })}
         revealed={Array.from({ length: 25 }, (_, i) => i)}
         jackpotShown
       />,
@@ -107,10 +107,24 @@ describe("Board", () => {
     expect(sound.playJackpot).not.toHaveBeenCalled();
   });
 
+  it("keeps the pre-accounting Settled frame neutral and silent", () => {
+    render(
+      <Board
+        snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "0" })}
+        revealed={Array.from({ length: 25 }, (_, i) => i)}
+        jackpotShown
+      />,
+    );
+    expect(screen.getByTestId("tile-7")).toHaveAttribute("data-jackpot", "false");
+    expect(screen.queryByTestId("ring-7")).toBeNull();
+    expect(sound.playRollover).not.toHaveBeenCalled();
+    expect(sound.playJackpot).not.toHaveBeenCalled();
+  });
+
   it("uses gold visuals and jackpot audio only for a proven nonzero pool", () => {
     render(
       <Board
-        snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "100" })}
+        snapshot={snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "100" })}
         revealed={Array.from({ length: 25 }, (_, i) => i)}
         jackpotShown
       />,

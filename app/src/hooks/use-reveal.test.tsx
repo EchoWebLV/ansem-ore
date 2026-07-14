@@ -13,13 +13,30 @@ describe("useReveal", () => {
   beforeEach(() => { vi.useFakeTimers(); window.localStorage.clear(); });
   afterEach(() => vi.useRealTimers());
 
-  it("plays the full reveal once a round settles: 25 cells then the gold jackpot finale", () => {
-    const settled = snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "27720000" });
-    const { result } = renderHook(() => useReveal(settled));
+  it("waits for finalized Claimable evidence, then plays the real winner exactly once", () => {
+    const settled = snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "0", rolloverJackpot: "1000000" });
+    const claimable = snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "27720000", rolloverJackpot: "2000000", updatedAt: 2 });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: settled } });
+    expect(result.current.revealed).toBeNull();
+    expect(result.current.mode).toBeNull();
+    expect(result.current.canReplay).toBe(false);
+    expect(window.localStorage.getItem("ansem.lastReveal.v1")).toBeNull();
+    act(() => { result.current.replay(); vi.advanceTimersByTime(10_000); });
+    expect(result.current.revealed).toBeNull();
+
+    rerender({ s: claimable });
     expect(result.current.revealed).toEqual([]);
+    expect(result.current.canReplay).toBe(true);
+    expect(JSON.parse(window.localStorage.getItem("ansem.lastReveal.v1")!)).toMatchObject({
+      state: RoundState.Claimable,
+      jackpotPool: "27720000",
+      rolloverJackpot: "2000000",
+    });
     act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 4 * 90); });
     expect(result.current.revealed).toHaveLength(25);
     expect(result.current.jackpotShown).toBe(false);
+    rerender({ s: { ...claimable, updatedAt: 3 } });
+    expect(result.current.revealed).toHaveLength(25);
     act(() => { vi.advanceTimersByTime(900 + 10); });
     expect(result.current.jackpotShown).toBe(true);
     expect(result.current.sub?.gold).toBe(true);
@@ -27,11 +44,11 @@ describe("useReveal", () => {
     expect(result.current.counter).toBe("27.72");
   });
 
-  it("no-winner settle: the finale is NOT gold and says the pot rolled into the jackpot", () => {
+  it("finalized no-winner reveal stays neutral and says the pot rolled into the jackpot", () => {
     // The square was drawn but nobody staked it -> jackpotPool 0, proceeds rolled into
     // the (now larger) rolloverJackpot. Honest theater: no gold, no fabricated win.
-    const settled = snap({ state: RoundState.Settled, jackpotSquare: 4, jackpotPool: "0", rolloverJackpot: "12500000" });
-    const { result } = renderHook(() => useReveal(settled));
+    const claimable = snap({ state: RoundState.Claimable, jackpotSquare: 4, jackpotPool: "0", rolloverJackpot: "12500000" });
+    const { result } = renderHook(() => useReveal(claimable));
     act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 4 * 90); });
     expect(result.current.jackpotShown).toBe(false);
     act(() => { vi.advanceTimersByTime(900 + 10); });
@@ -42,17 +59,17 @@ describe("useReveal", () => {
     expect(result.current.counter).toBe("12.50"); // the growing jackpot, ANSEM units
   });
 
-  it("labels the climbing settle counter as the POT being scanned, not winnings", () => {
-    const settled = snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "27720000" });
-    const { result } = renderHook(() => useReveal(settled));
+  it("labels the climbing finalized counter as the POT being scanned, not winnings", () => {
+    const claimable = snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "27720000" });
+    const { result } = renderHook(() => useReveal(claimable));
     act(() => { vi.advanceTimersByTime(320 + 3 * 105); }); // mid-cascade, a few cells in
     expect(result.current.sub?.gold).toBe(false);
     expect(result.current.sub?.text).toMatch(/pot \d+\.\d\d SOL/);
   });
 
   it("returns to the live board when the next round opens", () => {
-    const settled = snap({ state: RoundState.Settled, jackpotSquare: 3 });
-    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: settled } });
+    const claimable = snap({ state: RoundState.Claimable, jackpotSquare: 3 });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: claimable } });
     act(() => { vi.advanceTimersByTime(10_000); });
     expect(result.current.jackpotShown).toBe(true);
     rerender({ s: snap({ roundId: 10, state: RoundState.Open }) });
@@ -61,8 +78,8 @@ describe("useReveal", () => {
   });
 
   it("a mid-reveal round transition leaves NO straggler cells lit on the fresh round", () => {
-    const settled = snap({ state: RoundState.Settled, jackpotSquare: 3 });
-    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: settled } });
+    const claimable = snap({ state: RoundState.Claimable, jackpotSquare: 3 });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: claimable } });
     act(() => { vi.advanceTimersByTime(600); }); // reveal mid-flight (~3 cells in)
     expect(result.current.revealed!.length).toBeGreaterThan(0);
     rerender({ s: snap({ roundId: 10, state: RoundState.Open }) }); // next round opens NOW
@@ -72,12 +89,12 @@ describe("useReveal", () => {
     expect(result.current.jackpotShown).toBe(false);
   });
 
-  it("does not replay the same settled round twice, but replay() does", () => {
-    const settled = snap({ state: RoundState.Settled, jackpotSquare: 3 });
-    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: settled } });
+  it("does not replay the same finalized round twice, but replay() does", () => {
+    const claimable = snap({ state: RoundState.Claimable, jackpotSquare: 3 });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: claimable } });
     act(() => { vi.advanceTimersByTime(10_000); });
     expect(result.current.revealed).toHaveLength(25);
-    rerender({ s: { ...settled, updatedAt: 2 } });
+    rerender({ s: { ...claimable, updatedAt: 2 } });
     act(() => { vi.advanceTimersByTime(100); });
     expect(result.current.revealed).toHaveLength(25); // untouched — no restart
     act(() => { result.current.replay(); });
@@ -143,9 +160,9 @@ describe("useReveal", () => {
     expect(result.current.mode).toBeNull();
   });
 
-  it("settle theater reports mode 'settle' and persists until the next round (no self-dismiss)", () => {
-    const settled = snap({ state: RoundState.Settled, jackpotSquare: 3 });
-    const { result } = renderHook(() => useReveal(settled));
+  it("finalized theater reports mode 'settle' and persists until the next round (no self-dismiss)", () => {
+    const claimable = snap({ state: RoundState.Claimable, jackpotSquare: 3 });
+    const { result } = renderHook(() => useReveal(claimable));
     expect(result.current.mode).toBe("settle");
     act(() => { vi.advanceTimersByTime(30_000); });
     expect(result.current.jackpotShown).toBe(true);
@@ -153,16 +170,20 @@ describe("useReveal", () => {
     expect(result.current.revealed).toHaveLength(25);
   });
 
-  it("replays the last settled round during the next open round from its own snapshot, then self-dismisses", () => {
-    const settled = snap({ roundId: 9, state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "27720000" });
+  it("replays the finalized Claimable snapshot, never the earlier Settled frame", () => {
+    const settled = snap({ roundId: 9, state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "0", rolloverJackpot: "1000000" });
+    const claimable = snap({ roundId: 9, state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "27720000", rolloverJackpot: "2000000", updatedAt: 2 });
     const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: settled } });
-    expect(result.current.canReplay).toBe(true); // old condition: current round is settled
+    expect(result.current.canReplay).toBe(false);
+    rerender({ s: claimable });
+    expect(result.current.canReplay).toBe(true);
     act(() => { vi.advanceTimersByTime(10_000); });
     rerender({ s: snap({ roundId: 10, state: RoundState.Open }) });
     expect(result.current.revealed).toBeNull();
     expect(result.current.canReplay).toBe(true); // the state where the old button died
     act(() => { result.current.replay(); });
-    expect(result.current.snapshotOverride).toBe(settled); // Board must render the OLD round
+    expect(result.current.snapshotOverride).toBe(claimable); // Board must render the finalized old round
+    expect(result.current.snapshotOverride).toMatchObject({ state: RoundState.Claimable, jackpotPool: "27720000" });
     expect(result.current.mode).toBe("settle");
     expect(result.current.revealed).toEqual([]);
     act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 900 + 20); });
@@ -196,16 +217,16 @@ describe("useReveal", () => {
     expect(result.current.canReplay).toBe(false);
   });
 
-  it("persists the settled snapshot to localStorage for post-reload replay", () => {
-    const settled = snap({ roundId: 9, state: RoundState.Settled, jackpotSquare: 7 });
-    renderHook(() => useReveal(settled));
+  it("persists the finalized Claimable snapshot to localStorage for post-reload replay", () => {
+    const claimable = snap({ roundId: 9, state: RoundState.Claimable, jackpotSquare: 7 });
+    renderHook(() => useReveal(claimable));
     const raw = window.localStorage.getItem("ansem.lastReveal.v1");
     expect(raw).not.toBeNull();
-    expect(JSON.parse(raw!)).toMatchObject({ roundId: 9, jackpotSquare: 7 });
+    expect(JSON.parse(raw!)).toMatchObject({ roundId: 9, state: RoundState.Claimable, jackpotSquare: 7 });
   });
 
   it("hydrates replay from localStorage — Replay exists right after a reload", () => {
-    const stored = snap({ roundId: 8, state: RoundState.Settled, jackpotSquare: 4, jackpotPool: "5000000" });
+    const stored = snap({ roundId: 8, state: RoundState.Claimable, jackpotSquare: 4, jackpotPool: "5000000" });
     window.localStorage.setItem("ansem.lastReveal.v1", JSON.stringify(stored));
     const { result } = renderHook(() => useReveal(snap({ roundId: 9, state: RoundState.Open })));
     expect(result.current.canReplay).toBe(true);
@@ -215,6 +236,16 @@ describe("useReveal", () => {
     act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 900 + 20); });
     expect(result.current.jackpotShown).toBe(true);
     expect(result.current.sub?.text).toMatch(/bull #5/);
+  });
+
+  it("rejects a pre-accounting Settled snapshot during replay hydration", () => {
+    const stored = snap({ roundId: 8, state: RoundState.Settled, jackpotSquare: 4, jackpotPool: "0" });
+    window.localStorage.setItem("ansem.lastReveal.v1", JSON.stringify(stored));
+    const { result } = renderHook(() => useReveal(snap({ roundId: 9, state: RoundState.Open })));
+    expect(result.current.canReplay).toBe(false);
+    act(() => { result.current.replay(); });
+    expect(result.current.mode).toBeNull();
+    expect(result.current.snapshotOverride).toBeNull();
   });
 
   it("ignores garbage in the replay key — canReplay stays false, no throw", () => {
@@ -227,12 +258,12 @@ describe("useReveal", () => {
     expect(second.result.current.canReplay).toBe(false);
   });
 
-  it("a newer settle overwrites the remembered show — replay plays the newest round", () => {
-    const s9 = snap({ roundId: 9, state: RoundState.Settled, jackpotSquare: 3, jackpotPool: "1000000" });
+  it("a newer finalized round overwrites the remembered show — replay plays the newest round", () => {
+    const s9 = snap({ roundId: 9, state: RoundState.Claimable, jackpotSquare: 3, jackpotPool: "1000000" });
     const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: s9 } });
     act(() => { vi.advanceTimersByTime(10_000); });
     rerender({ s: snap({ roundId: 10, state: RoundState.Open }) });
-    rerender({ s: snap({ roundId: 10, state: RoundState.Settled, jackpotSquare: 6, jackpotPool: "42000000" }) });
+    rerender({ s: snap({ roundId: 10, state: RoundState.Claimable, jackpotSquare: 6, jackpotPool: "42000000" }) });
     act(() => { vi.advanceTimersByTime(10_000); });
     rerender({ s: snap({ roundId: 11, state: RoundState.Open }) });
     act(() => { result.current.replay(); });

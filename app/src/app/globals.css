@@ -185,8 +185,7 @@ button, a, [data-square] { touch-action: manipulation; }
 }
 
 @media (max-width: 359px) {
-  .wallet-adapter-button,
-  .wallet-adapter-button-trigger {
+  .terminal-topbar .wallet-adapter-button-trigger {
     max-width: 150px;
     overflow: hidden;
     padding: 0 8px !important;

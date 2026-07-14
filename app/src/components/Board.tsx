@@ -37,8 +37,8 @@ export interface BoardProps {
  * detonates a gold shockwave ring. All state/testid contracts unchanged.
  */
 export function Board({ snapshot, selectedSquares = [], onSelect, revealed = null, jackpotShown, revealMode }: BoardProps) {
-  const settled = snapshot.state >= RoundState.Settled;
-  const provenJackpot = settled && snapshot.jackpotSquare !== null && BigInt(snapshot.jackpotPool || "0") > 0n;
+  const finalized = snapshot.state === RoundState.Claimable;
+  const provenJackpot = finalized && snapshot.jackpotSquare !== null && BigInt(snapshot.jackpotPool || "0") > 0n;
   const revealSet = revealed === null ? null : new Set(revealed);
 
   // Reveal cascade audio: chime the next rising note each time a cell is unveiled,
@@ -54,12 +54,17 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
   const jackpotRung = useRef(false);
   useEffect(() => {
     if (jackpotShown && !jackpotRung.current) {
-      // A draw alone does not prove a winner. Only a nonzero paid pool gets the bell.
-      if (provenJackpot) playJackpot(); else playRollover();
-      jackpotRung.current = true;
+      if (revealMode === "sweep") {
+        playRollover();
+        jackpotRung.current = true;
+      } else if (finalized && snapshot.jackpotSquare !== null) {
+        // A draw alone does not prove a winner. Finalized accounting decides bell vs rollover.
+        if (provenJackpot) playJackpot(); else playRollover();
+        jackpotRung.current = true;
+      }
     }
     if (!jackpotShown) jackpotRung.current = false;
-  }, [jackpotShown, provenJackpot, revealMode]);
+  }, [jackpotShown, finalized, provenJackpot, revealMode, snapshot.jackpotSquare]);
   return (
     <svg
       viewBox="0 0 400 348"
@@ -96,7 +101,7 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
         const stake = BigInt(snapshot.blockSol[cell.id] ?? "0");
         // Live board lights real stakes; during the reveal, cells light as unveiled.
         const lit = revealSet === null ? stake > 0n : revealSet.has(cell.id);
-        // The jackpot flashes gold once settled — during the reveal only at the finale.
+        // The jackpot flashes gold once accounting is Claimable — during the reveal only at the finale.
         const jackpot = provenJackpot && snapshot.jackpotSquare === cell.id && (revealSet === null || jackpotShown === true);
         const selected = selectedSquares.includes(cell.id);
         const stroke = selected ? C.ink : jackpot ? C.gold : lit ? C.green : C.dim;
