@@ -30,7 +30,7 @@ function Row({ href, left, right }: { href: string; left: string; right: string 
 }
 
 /**
- * Every round, stake and payout is a public Solana transaction. This panel hands the
+ * Every round, stake and payout is a public on-chain transaction. This panel hands the
  * player the actual links: the program + current round accounts (live keeper txs), and
  * a receipt per action THEY fired (deposit / one-popup entry / claim), straight to the
  * explorer. Nothing here is testimony — it's all checkable.
@@ -62,7 +62,7 @@ export function VerifyPanel({ roundId, receipts }: { roundId: number; receipts: 
         )}
       </ul>
       <p className="text-[10px] text-bull-muted mt-2">
-        every round, stake and payout is a public Solana transaction — click through and check the math.
+        every round, stake and payout is a public on-chain transaction — click through and check the math.
       </p>
     </div>
   );
