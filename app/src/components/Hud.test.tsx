@@ -14,14 +14,20 @@ describe("Hud", () => {
     // Pin now so the countdown is deterministic: deadline 1000s, now 900s -> 100s left.
     render(<Hud snapshot={snap()} nowMs={900_000} />);
     expect(screen.getByLabelText("Round information")).toBeInTheDocument();
-    expect(screen.getByText("#12 · OPEN")).toBeInTheDocument();
+    const roundId = screen.getByText("#12");
+    const roundState = screen.getByText("OPEN");
+    expect(roundState.parentElement).toHaveTextContent(/^#12 · OPEN$/);
+    expect(roundId).toHaveClass("font-mono");
+    expect(roundState.closest(".font-mono")).toBeNull();
     expect(screen.getByText(/1 SOL/)).toBeInTheDocument();
     expect(screen.getByText("01:40")).toBeInTheDocument(); // 100s
   });
 
   it("labels the settled state as REVEALED", () => {
     render(<Hud snapshot={snap({ state: RoundState.Settled, jackpotSquare: 4 })} nowMs={900_000} />);
-    expect(screen.getByText("#12 · REVEALED")).toBeInTheDocument();
+    const roundState = screen.getByText("REVEALED");
+    expect(roundState.parentElement).toHaveTextContent(/^#12 · REVEALED$/);
+    expect(roundState.closest(".font-mono")).toBeNull();
   });
 
   it("shows the pool without duplicating the jackpot value", () => {

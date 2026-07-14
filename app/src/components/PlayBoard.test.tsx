@@ -57,11 +57,20 @@ describe("PlayBoard", () => {
     render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" nowMs={900_000} clientFactory={factory} />);
     // Pre-snapshot: the skeleton board paints instantly — full idle bull-head + connecting header.
     expect(screen.getByTestId("tile-24")).toBeInTheDocument();
-    expect(screen.getByText("— · CONNECTING")).toBeInTheDocument();
+    expect(screen.getByLabelText("Round board")).toBeInTheDocument();
+    const connecting = screen.getByText("CONNECTING");
+    expect(connecting.parentElement).toHaveTextContent(/^— · CONNECTING$/);
+    expect(connecting.closest(".font-mono")).toBeNull();
+    expect(connecting.previousElementSibling).toHaveClass("font-mono");
 
     act(() => { captured!.onStatus?.("connected"); captured!.onSnapshot(wireSnap()); });
 
-    await waitFor(() => expect(screen.getByText("#77 · OPEN")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("Round information")).toBeInTheDocument());
+    const roundId = screen.getByText("#77");
+    const roundState = screen.getByText("OPEN");
+    expect(roundState.parentElement).toHaveTextContent(/^#77 · OPEN$/);
+    expect(roundId).toHaveClass("font-mono");
+    expect(roundState.closest(".font-mono")).toBeNull();
     expect(screen.getByTestId("tile-5")).toBeInTheDocument();
     expect(screen.getByText("ZZZZ…ZZZZ")).toBeInTheDocument();
     // The verify panel ships with the read-only board too — program link always present.
@@ -114,5 +123,35 @@ describe("PlayBoard", () => {
     render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" clientFactory={factory} />);
     expect(screen.getByTestId("terminal-shell")).toBeInTheDocument();
     expect(screen.queryByTestId("abstract-bg")).toBeNull();
+  });
+
+  it("limits the skeleton loading pulse to motion-safe environments", () => {
+    const factory = (): KeeperClient => ({ start: () => {}, stop: () => {} });
+    render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" clientFactory={factory} />);
+    const countdown = screen.getByText("--:--");
+    expect(countdown).toHaveClass("motion-safe:animate-pulse");
+    expect(countdown).not.toHaveClass("animate-pulse");
+  });
+
+  it("limits the keeper loading pulse to motion-safe environments", () => {
+    let captured: KeeperClientOpts | null = null;
+    const factory = (opts: KeeperClientOpts): KeeperClient => { captured = opts; return { start: () => {}, stop: () => {} }; };
+    render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" clientFactory={factory} />);
+    act(() => { captured!.onSnapshot(wireSnap()); });
+    const dot = screen.getByText("LINKING…").previousElementSibling;
+    expect(dot).not.toBeNull();
+    expect(dot!).toHaveClass("motion-safe:animate-pulse");
+    expect(dot!).not.toHaveClass("animate-pulse");
+  });
+
+  it("uses a neutral dot while reconnecting", () => {
+    let captured: KeeperClientOpts | null = null;
+    const factory = (opts: KeeperClientOpts): KeeperClient => { captured = opts; return { start: () => {}, stop: () => {} }; };
+    render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" clientFactory={factory} />);
+    act(() => { captured!.onSnapshot(wireSnap()); captured!.onStatus?.("disconnected"); });
+    const dot = screen.getByText("RECONNECTING…").previousElementSibling;
+    expect(dot).not.toBeNull();
+    expect(dot!).toHaveClass("bg-bull-muted");
+    expect(dot!).not.toHaveClass("bg-bull-gold");
   });
 });

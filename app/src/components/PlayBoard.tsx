@@ -76,7 +76,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
       ? { dot: "bg-bull-green", label: "LIVE", pulse: false }
       : status === "connecting"
         ? { dot: "bg-bull-dim", label: "LINKING…", pulse: true }
-        : { dot: "bg-bull-gold", label: "RECONNECTING…", pulse: false };
+        : { dot: "bg-bull-muted", label: "RECONNECTING…", pulse: false };
 
   return (
     <main
@@ -93,7 +93,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
           <div className="terminal-status-strip flex items-center gap-3 border-b border-bull-edge py-2">
             <div className="flex shrink-0 items-center gap-2">
               <span
-                className={`h-1.5 w-1.5 rounded-full ${liveness.dot}${liveness.pulse ? " animate-pulse" : ""}`}
+                className={`h-1.5 w-1.5 rounded-full ${liveness.dot}${liveness.pulse ? " motion-safe:animate-pulse" : ""}`}
                 aria-hidden
               />
               <span className="terminal-label">{liveness.label}</span>
@@ -161,15 +161,19 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
               <header className="grid min-h-[78px] grid-cols-[1fr_auto_1fr] items-center border-b border-bull-edge px-4 py-3">
                 <div>
                   <span className="terminal-label">Round</span>
-                  <strong className="mt-1 block font-mono text-[14px]">— · CONNECTING</strong>
+                  <strong className="mt-1 block text-[14px]">
+                    <span className="font-mono">—</span>
+                    {" · "}
+                    <span>CONNECTING</span>
+                  </strong>
                 </div>
                 <div className="text-center">
                   <span className="terminal-label">Linking</span>
-                  <div className="mt-1 animate-pulse font-mono text-[28px]">--:--</div>
+                  <div className="mt-1 font-mono text-[28px] motion-safe:animate-pulse">--:--</div>
                 </div>
                 <div className="text-right">
                   <span className="terminal-label">Pool</span>
-                  <strong className="mt-1 block font-mono text-[14px]">—</strong>
+                  <strong className="mt-1 block text-[14px]">—</strong>
                 </div>
               </header>
               <Board snapshot={SKELETON_SNAP} />

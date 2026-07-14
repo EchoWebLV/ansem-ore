@@ -22,9 +22,11 @@ export function Hud({ snapshot, nowMs, reveal }: HudProps) {
     >
       <div>
         <span className="terminal-label">Round</span>
-        <strong className="mt-1 block font-mono text-[14px] font-semibold">
-          #{snapshot.roundId} · {stateLabel(snapshot.state)}
-        </strong>
+        <div className="mt-1 text-[14px] font-semibold">
+          <strong className="font-mono">#{snapshot.roundId}</strong>
+          {" · "}
+          <span>{stateLabel(snapshot.state)}</span>
+        </div>
       </div>
       <div className="text-center">
         <span className="terminal-label">{open ? "Closes in" : settling ? "Settling" : "Result"}</span>
