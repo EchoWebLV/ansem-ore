@@ -77,13 +77,6 @@ button, a, [data-square] { touch-action: manipulation; }
   }
 }
 
-/* Staked cells breathe on the live board. */
-.glow-live { animation: glow-live 2.4s ease-in-out infinite; }
-@keyframes glow-live {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.45; }
-}
-
 /* The bull's eyes never stop smoldering. */
 .bull-eye { animation: eye-glow 3.2s ease-in-out infinite; }
 @keyframes eye-glow {
@@ -123,7 +116,7 @@ button, a, [data-square] { touch-action: manipulation; }
 
 @media (prefers-reduced-motion: reduce) {
   .cell-face.pop, .cell-face.burst,
-  .glow-live, .bull-eye, .jackpot-ring, .stage-card,
+  .bull-eye, .jackpot-ring, .stage-card,
   .gold-flash,
   .odometer-pop, .ticker-marquee {
     animation: none !important;
@@ -165,7 +158,7 @@ button, a, [data-square] { touch-action: manipulation; }
   background: #0b0f0c !important;
   border: 1px solid #2c4034 !important;
   border-radius: 12px !important;
-  font-family: var(--font-geist-mono, ui-monospace, monospace) !important;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
 }
 .wallet-adapter-dropdown-list-item {
   color: #cfe8d8 !important;
@@ -184,7 +177,7 @@ button, a, [data-square] { touch-action: manipulation; }
   background: rgba(168, 240, 128, 0.12) !important;
 }
 .wallet-adapter-modal-title {
-  font-family: var(--font-geist-mono, ui-monospace, monospace) !important;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
   letter-spacing: 1px;
   color: #cfe8d8 !important;
 }
