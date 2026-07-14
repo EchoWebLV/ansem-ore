@@ -1,0 +1,7 @@
+{
+  "name": "Bull Stake",
+  "symbol": "BEEF",
+  "description": "BEEF is mined by playing Bull Stake, the ANSEM grid game. Every round mints BEEF to its stakers on a pot-scaled curve with a 21,000,000 hard cap enforced on-chain. Winners are paid in market-bought ANSEM. Open source, verified build.",
+  "image": "https://ansem-miner.vercel.app/beef.png",
+  "external_url": "https://ansem-miner.vercel.app"
+}
