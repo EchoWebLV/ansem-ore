@@ -51,8 +51,8 @@ pub const BEEF_SAT_LAMPORTS: u64 = 1_000_000_000; // half-max at 1 SOL pot
 pub const BEEF_HARD_CAP: u64 = 21_000_000_000_000; // 21,000,000 BEEF
 pub const BEEF_TREASURY_BPS: u16 = 2_000; // 20% continuous treasury cut
 
-pub const DEFAULT_BEEF_TICK_BPS: u16 = 3; // +0.03% per tick while held
-pub const DEFAULT_BEEF_BONUS_CAP_BPS: u16 = 30_000; // +300% -> 4x payout, ~7 days
+pub const DEFAULT_BEEF_TICK_BPS: u16 = 0; // base-only rewards; bonus is unfunded
+pub const DEFAULT_BEEF_BONUS_CAP_BPS: u16 = 0; // base-only rewards; bonus is unfunded
 pub const DEFAULT_BEEF_ACTIVITY_WINDOW_SECS: i64 = 86_400; // daily-streak gate
 pub const DEFAULT_BEEF_SECS_PER_TICK: i64 = 60; // one tick per round-length
 

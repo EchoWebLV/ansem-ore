@@ -28,8 +28,15 @@ use crate::state::{BeefConfig, BeefMiner, BeefRound, Config, MinerPosition, Roun
 // both must be > 0. treasury_bps and hard_cap are validated at init only — they
 // are init-PINNED (never tunable): raising the cap or the treasury split would
 // break the published trust page.
-fn validate_beef_params(sat_lamports: u64, secs_per_tick: i64) -> Result<()> {
+fn validate_beef_params(
+    sat_lamports: u64,
+    tick_bps: u16,
+    bonus_cap_bps: u16,
+    secs_per_tick: i64,
+) -> Result<()> {
     require!(sat_lamports > 0 && secs_per_tick > 0, AnsemError::BadBeefParams);
+    require!(tick_bps == 0, AnsemError::BadBeefParams);
+    require!(bonus_cap_bps == 0, AnsemError::BadBeefParams);
     Ok(())
 }
 
@@ -85,7 +92,7 @@ pub fn init_beef_handler(
     activity_window_secs: i64,
     secs_per_tick: i64,
 ) -> Result<()> {
-    validate_beef_params(sat_lamports, secs_per_tick)?;
+    validate_beef_params(sat_lamports, tick_bps, bonus_cap_bps, secs_per_tick)?;
     // Init-only pins: split capped at 50% and a positive cap. Never re-settable.
     require!(treasury_bps <= 5_000 && hard_cap > 0, AnsemError::BadBeefParams);
     let bc = &mut ctx.accounts.beef_config;
@@ -130,7 +137,7 @@ pub fn set_beef_params_handler(
     activity_window_secs: i64,
     secs_per_tick: i64,
 ) -> Result<()> {
-    validate_beef_params(sat_lamports, secs_per_tick)?;
+    validate_beef_params(sat_lamports, tick_bps, bonus_cap_bps, secs_per_tick)?;
     let bc = &mut ctx.accounts.beef_config;
     bc.max_round_mint = max_round_mint;
     bc.sat_lamports = sat_lamports;

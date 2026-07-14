@@ -35,8 +35,8 @@ export const BEEF_MAX_ROUND_MINT = 210_000_000;          // 210 BEEF/round nomin
 export const BEEF_SAT_LAMPORTS = 1_000_000_000;          // half-max at a 1 SOL pot
 export const BEEF_HARD_CAP = 21_000_000_000_000;         // 21,000,000 BEEF supply cap
 export const BEEF_TREASURY_BPS = 2_000;                  // 20% continuous treasury cut
-export const DEFAULT_BEEF_TICK_BPS = 3;                  // +0.03% hold-to-grow per tick
-export const DEFAULT_BEEF_BONUS_CAP_BPS = 30_000;        // +300% -> 4x payout cap (~7 days)
+export const DEFAULT_BEEF_TICK_BPS = 0;                  // base-only rewards; bonus is unfunded
+export const DEFAULT_BEEF_BONUS_CAP_BPS = 0;             // base-only rewards; bonus is unfunded
 export const DEFAULT_BEEF_ACTIVITY_WINDOW_SECS = 86_400; // daily-streak activity gate
 export const DEFAULT_BEEF_SECS_PER_TICK = 60;            // one tick per round-length
 /** @deprecated dormant vault-drip divisor (pre-2026-07-14); superseded by the
