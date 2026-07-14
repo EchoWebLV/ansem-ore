@@ -546,51 +546,143 @@ console.log(JSON.stringify({
 NODE
 
 read_beef_state "$EVIDENCE_DIR/beef-after-proof.json"
+export PROOF_END_SLOT="$(solana slot --url "$MAINNET_RPC" --commitment finalized)"
 ```
 
-Discover the program signatures at or after the recorded proof slot. The output maps Anchor
-instruction names to finalized public signatures, including keeper-owned swap and stamp writes.
+Discover successful program instructions inside the bounded proof slot window. This command
+aborts unless all five required names are present and bound to the controlled wallet and one
+round. It also requires a quiet BEEF accounting window: exactly one stamp, exactly one claim,
+and no BEEF vault sweep may occur between the before and after snapshots. If unrelated BEEF
+activity is found, do not use the broad balance-delta reconciliation. Wait for a quiet window and
+run a new controlled proof.
 
 ```bash
 RPC="$MAINNET_RPC" PROGRAM_ID="$PROGRAM_ID" PROOF_START_SLOT="$PROOF_START_SLOT" \
+PROOF_END_SLOT="$PROOF_END_SLOT" PROOF_WALLET_PUBKEY="$PROOF_WALLET_PUBKEY" \
+SEED_LAMPORTS_PER_ROUND="$SEED_LAMPORTS_PER_ROUND" EVIDENCE_DIR="$EVIDENCE_DIR" \
 node --input-type=module <<'NODE' | tee "$EVIDENCE_DIR/proof-program-signatures.json"
+import { readFileSync } from "node:fs";
 import { Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
+import { beefRoundPda, roundPda } from "@ansem/sdk";
 import idl from "./packages/sdk/src/idl/ansem_miner.json" with { type: "json" };
 const conn = new Connection(process.env.RPC, "finalized");
 const program = new PublicKey(process.env.PROGRAM_ID);
+const proofWallet = new PublicKey(process.env.PROOF_WALLET_PUBKEY).toBase58();
 const firstSlot = Number(process.env.PROOF_START_SLOT);
-const wanted = new Set(["stake_direct", "execute_swap_real", "stamp_beef", "roll_beef", "claim_beef"]);
+const lastSlot = Number(process.env.PROOF_END_SLOT);
+if (!Number.isSafeInteger(firstSlot) || !Number.isSafeInteger(lastSlot) || lastSlot < firstSlot) {
+  throw new Error(`invalid proof slot window ${firstSlot}..${lastSlot}`);
+}
+const wanted = new Set([
+  "stake_direct", "execute_swap_real", "stamp_beef", "roll_beef", "claim_beef",
+  "sweep_beef_excess",
+]);
 const byDiscriminator = new Map(
   idl.instructions
     .filter((ix) => wanted.has(ix.name))
-    .map((ix) => [Buffer.from(ix.discriminator).toString("hex"), ix.name]),
+    .map((ix) => [Buffer.from(ix.discriminator).toString("hex"), ix]),
 );
+if (byDiscriminator.size !== wanted.size) throw new Error("proof instruction missing from IDL");
 const rows = await conn.getSignaturesForAddress(program, { limit: 1000 }, "finalized");
+if (rows.length === 1000 && rows.at(-1).slot >= firstSlot) {
+  throw new Error("proof signature scan exceeded 1000 rows; use a narrower quiet window");
+}
 const evidence = [];
-for (const row of rows.filter((x) => x.slot >= firstSlot).reverse()) {
+for (const row of rows
+  .filter((x) => x.err === null && x.slot >= firstSlot && x.slot <= lastSlot)
+  .reverse()) {
   const tx = await conn.getParsedTransaction(row.signature, {
     commitment: "finalized", maxSupportedTransactionVersion: 0,
   });
-  if (!tx) continue;
+  if (!tx) throw new Error(`finalized transaction unavailable: ${row.signature}`);
   for (const ix of tx.transaction.message.instructions) {
     if (!("data" in ix) || !ix.programId.equals(program)) continue;
-    const name = byDiscriminator.get(Buffer.from(bs58.decode(ix.data)).subarray(0, 8).toString("hex"));
-    if (name) evidence.push({ instruction: name, signature: row.signature, slot: row.slot });
+    const data = Buffer.from(bs58.decode(ix.data));
+    const spec = byDiscriminator.get(data.subarray(0, 8).toString("hex"));
+    if (!spec) continue;
+    if (!("accounts" in ix) || ix.accounts.length < spec.accounts.length) {
+      throw new Error(`${spec.name} account list is incomplete in ${row.signature}`);
+    }
+    const accounts = Object.fromEntries(
+      spec.accounts.map((account, index) => [account.name, ix.accounts[index].toBase58()]),
+    );
+    const item = { instruction: spec.name, signature: row.signature, slot: row.slot, accounts };
+    if (["stake_direct", "stamp_beef", "roll_beef"].includes(spec.name)) {
+      if (data.length < 16) throw new Error(`${spec.name} arguments are truncated`);
+      item.roundId = Number(data.readBigUInt64LE(8));
+      if (!Number.isSafeInteger(item.roundId)) throw new Error(`${spec.name} round ID is unsafe`);
+    }
+    if (spec.name === "stake_direct") {
+      if (data.length < 25) throw new Error("stake_direct arguments are truncated");
+      item.amount = data.readBigUInt64LE(17).toString();
+    }
+    evidence.push(item);
   }
 }
-console.log(JSON.stringify(evidence, null, 2));
+const exactlyOne = (label, matches) => {
+  if (matches.length !== 1) throw new Error(`${label}: expected 1, observed ${matches.length}`);
+  return matches[0];
+};
+const atLeastOne = (label, matches) => {
+  if (matches.length === 0) throw new Error(`${label}: missing`);
+  return matches.at(-1);
+};
+const stake = exactlyOne("controlled stake_direct", evidence.filter(
+  (x) => x.instruction === "stake_direct" && x.accounts.authority === proofWallet,
+));
+if (stake.amount !== process.env.SEED_LAMPORTS_PER_ROUND) {
+  throw new Error(`stake amount mismatch: ${stake.amount}`);
+}
+const proofRoundId = stake.roundId;
+const proofRound = roundPda(proofRoundId).toBase58();
+const proofBeefRound = beefRoundPda(proofRoundId).toBase58();
+if (stake.accounts.round !== proofRound) throw new Error("stake round PDA mismatch");
+const swap = exactlyOne("proof execute_swap_real", evidence.filter(
+  (x) => x.instruction === "execute_swap_real" && x.accounts.round === proofRound,
+));
+const stamp = exactlyOne("proof stamp_beef", evidence.filter(
+  (x) => x.instruction === "stamp_beef" && x.roundId === proofRoundId &&
+    x.accounts.round === proofRound && x.accounts.beef_round === proofBeefRound,
+));
+const roll = atLeastOne("proof roll_beef", evidence.filter(
+  (x) => x.instruction === "roll_beef" && x.roundId === proofRoundId &&
+    x.accounts.authority === proofWallet && x.accounts.round === proofRound,
+));
+const claimOutput = JSON.parse(
+  readFileSync(`${process.env.EVIDENCE_DIR}/proof-claim.json`, "utf8"),
+);
+if (claimOutput.player !== proofWallet) throw new Error("claim output wallet mismatch");
+const claim = exactlyOne("controlled claim_beef", evidence.filter(
+  (x) => x.instruction === "claim_beef" && x.accounts.authority === proofWallet &&
+    x.signature === claimOutput.signature,
+));
+const stampsInWindow = evidence.filter((x) => x.instruction === "stamp_beef");
+const claimsInWindow = evidence.filter((x) => x.instruction === "claim_beef");
+const sweepsInWindow = evidence.filter((x) => x.instruction === "sweep_beef_excess");
+if (stampsInWindow.length !== 1 || claimsInWindow.length !== 1 || sweepsInWindow.length !== 0) {
+  throw new Error(
+    `BEEF window was not quiet: stamps=${stampsInWindow.length} ` +
+    `claims=${claimsInWindow.length} sweeps=${sweepsInWindow.length}`,
+  );
+}
+console.log(JSON.stringify({
+  proofStartSlot: firstSlot, proofEndSlot: lastSlot, quietBeefWindow: true,
+  proofWallet, proofRoundId, proofRoundPda: proofRound, proofBeefRoundPda: proofBeefRound,
+  stake, swap, stamp, roll, claim,
+}, null, 2));
 NODE
-```
 
-Set the five public signatures from the evidence output, then require finalized confirmation.
-
-```bash
-: "${STAKE_SIGNATURE:?STAKE_SIGNATURE must come from proof evidence}"
-: "${SWAP_SIGNATURE:?SWAP_SIGNATURE must come from proof evidence}"
-: "${STAMP_SIGNATURE:?STAMP_SIGNATURE must come from proof evidence}"
-: "${ROLL_SIGNATURE:?ROLL_SIGNATURE must come from proof evidence}"
-: "${CLAIM_SIGNATURE:?CLAIM_SIGNATURE must come from proof evidence}"
+read -r PROOF_ROUND_ID STAKE_SIGNATURE SWAP_SIGNATURE STAMP_SIGNATURE \
+  ROLL_SIGNATURE CLAIM_SIGNATURE < <(node -e '
+const { readFileSync } = require("node:fs");
+const x = JSON.parse(readFileSync(`${process.env.EVIDENCE_DIR}/proof-program-signatures.json`, "utf8"));
+const values = [x.proofRoundId, x.stake?.signature, x.swap?.signature,
+  x.stamp?.signature, x.roll?.signature, x.claim?.signature];
+if (values.some((value) => value === undefined || value === null || value === "")) process.exit(1);
+process.stdout.write(values.join(" "));
+')
+export PROOF_ROUND_ID STAKE_SIGNATURE SWAP_SIGNATURE STAMP_SIGNATURE ROLL_SIGNATURE CLAIM_SIGNATURE
 for signature in \
   "$STAKE_SIGNATURE" "$SWAP_SIGNATURE" "$STAMP_SIGNATURE" "$ROLL_SIGNATURE" "$CLAIM_SIGNATURE"
 do
@@ -599,11 +691,69 @@ done
 
 curl --fail --silent --show-error "$KEEPER_BASE_URL/snapshot" \
   | tee "$EVIDENCE_DIR/keeper-snapshot-after-proof.json"
+
+RPC="$MAINNET_RPC" PROGRAM_ID="$PROGRAM_ID" PROOF_ROUND_ID="$PROOF_ROUND_ID" \
+node --input-type=module <<'NODE' | tee "$EVIDENCE_DIR/round-duration-proof.json"
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Wallet } from "@coral-xyz/anchor";
+import bs58 from "bs58";
+import {
+  createProgram, configPda, fetchConfig, fetchRound, roundPda, RoundState,
+} from "@ansem/sdk";
+import idl from "./packages/sdk/src/idl/ansem_miner.json" with { type: "json" };
+const conn = new Connection(process.env.RPC, "finalized");
+const programId = new PublicKey(process.env.PROGRAM_ID);
+const program = createProgram(conn, new Wallet(Keypair.generate()));
+const config = await fetchConfig(program, configPda());
+if (config.roundDurationSecs !== 60) {
+  throw new Error(`on-chain roundDurationSecs is ${config.roundDurationSecs}, expected 60`);
+}
+if (config.currentRoundId <= Number(process.env.PROOF_ROUND_ID)) {
+  throw new Error("keeper has not created the next proof round");
+}
+const nextRoundPda = roundPda(config.currentRoundId);
+const round = await fetchRound(program, nextRoundPda);
+if (round.state !== RoundState.Open) throw new Error(`next round is not Open: ${round.state}`);
+const createSpec = idl.instructions.find((ix) => ix.name === "create_round");
+if (!createSpec) throw new Error("create_round is absent from the IDL");
+const discriminator = Buffer.from(createSpec.discriminator).toString("hex");
+const rows = await conn.getSignaturesForAddress(nextRoundPda, { limit: 50 }, "finalized");
+const creates = [];
+for (const row of rows.filter((x) => x.err === null)) {
+  const tx = await conn.getParsedTransaction(row.signature, {
+    commitment: "finalized", maxSupportedTransactionVersion: 0,
+  });
+  if (!tx) continue;
+  for (const ix of tx.transaction.message.instructions) {
+    if (!("data" in ix) || !ix.programId.equals(programId) || !("accounts" in ix)) continue;
+    const data = Buffer.from(bs58.decode(ix.data));
+    if (data.subarray(0, 8).toString("hex") !== discriminator) continue;
+    if (!ix.accounts[0]?.equals(new PublicKey(config.admin))) continue;
+    if (!ix.accounts[1]?.equals(configPda())) continue;
+    if (!ix.accounts[2]?.equals(nextRoundPda)) continue;
+    if (tx.blockTime === null) throw new Error(`create_round blockTime unavailable: ${row.signature}`);
+    creates.push({ signature: row.signature, slot: row.slot, blockTime: tx.blockTime });
+  }
+}
+if (creates.length !== 1) throw new Error(`expected one create_round, observed ${creates.length}`);
+const deltaSeconds = round.deadlineTs - creates[0].blockTime;
+if (deltaSeconds < 58 || deltaSeconds > 62) {
+  throw new Error(`round duration from chain evidence is ${deltaSeconds}s, expected 60s +/- 2s`);
+}
+console.log(JSON.stringify({
+  configRoundDurationSecs: config.roundDurationSecs,
+  roundId: round.roundId, roundState: "Open", roundPda: nextRoundPda.toBase58(),
+  createRoundSignature: creates[0].signature, createRoundSlot: creates[0].slot,
+  createRoundBlockTime: creates[0].blockTime, deadlineTs: round.deadlineTs,
+  deltaSeconds, toleranceSeconds: 2,
+}, null, 2));
+NODE
 ```
 
 Record:
 
 - Proof start slot:
+- Proof end slot:
 - Controlled wallet public key:
 - Proof round ID:
 - Stake amount, lamports:
@@ -617,7 +767,11 @@ Record:
 - BEEF claim signature:
 - Claimed BEEF base units:
 - Next open round ID:
-- New round duration, seconds:
+- Next-round `create_round` signature:
+- Next-round create block time:
+- Next-round deadline:
+- On-chain Config `roundDurationSecs`:
+- Deadline minus create block time, seconds:
 - Proof completed at UTC:
 
 ## 9. Post-proof accounting reconciliation
@@ -625,14 +779,21 @@ Record:
 Compare `beef-before-proof.json` with `beef-after-proof.json`. The final read already enforces
 bonus zero, `vault >= total_owed`, and an absolute vault balance of at least 47,481,502 base
 units. The controlled wallet has no unrelated pending entitlement, so its legitimate claim must
-leave the post-proof vault balance at or above the pre-proof balance.
+leave the post-proof vault balance at or above the pre-proof balance. The transaction scan must
+also prove the slot window had only the controlled stamp and claim and no vault sweep. Without
+that quiet-window evidence, the broad supply and balance equality below is not attributable to
+this proof and must not be used.
 
 ```bash
 node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 const before = JSON.parse(readFileSync(`${process.env.EVIDENCE_DIR}/beef-before-proof.json`, "utf8"));
 const after = JSON.parse(readFileSync(`${process.env.EVIDENCE_DIR}/beef-after-proof.json`, "utf8"));
+const proof = JSON.parse(
+  readFileSync(`${process.env.EVIDENCE_DIR}/proof-program-signatures.json`, "utf8"),
+);
 const b = (x) => BigInt(x);
+if (proof.quietBeefWindow !== true) throw new Error("quiet BEEF window was not proven");
 if (after.tickBps !== 0 || after.bonusCapBps !== 0) throw new Error("BEEF bonus is not zero");
 if (b(after.vault) < b(after.totalOwed)) throw new Error("BEEF vault is undercollateralized");
 if (b(after.vault) < 47481502n) throw new Error("protected vault floor was breached");
@@ -644,6 +805,9 @@ if (b(after.supply) - b(before.supply) !==
     (b(after.treasury) - b(before.treasury)) +
     (b(after.playerBalance) - b(before.playerBalance))) {
   throw new Error("mint supply delta does not reconcile to vault, treasury, and proof wallet");
+}
+if (b(after.mintedTotal) - b(before.mintedTotal) !== b(after.supply) - b(before.supply)) {
+  throw new Error("minted_total delta does not equal mint supply delta");
 }
 console.log(JSON.stringify({
   supplyBefore: before.supply, supplyAfter: after.supply,
@@ -670,6 +834,8 @@ Record:
 - `beef_vault.amount >= total_owed` confirmed:
 - Post-proof vault balance at or above 47.481502 BEEF protected floor:
 - Post-proof vault balance at or above pre-proof vault balance:
+- Quiet BEEF accounting window confirmed:
+- `minted_total` delta equals mint supply delta:
 - Supply reconciliation confirmed:
 
 ## 10. Rollback
@@ -682,6 +848,70 @@ Rollback is a fault-containment action, not a return to unsafe economics. Keep
 Use the recorded previous successful deployment ID. Railway rollback restores that deployment's
 image and variables as a new deployment, so immediately reassert `KEEPER_ROUND_SECS=60` and verify
 the read endpoints. `RAILWAY_API_TOKEN` is supplied only through the shell.
+
+The previous image is best-effort and does not contain the funded-round stamp gate. An unattended
+rollback is unsafe. The old image has no external approval hook that can guarantee a check before
+each `CreateRound`. The strict safe choice is to keep the keeper stopped. Run the old image only as
+a time-limited emergency measure with a human continuously supervising. Before it may advance a
+funded Claimable round, the current round's `BeefRound` must already be visible. If the supervisor
+cannot remain active or any check fails, stop the keeper immediately and leave it stopped.
+
+Start this read-only supervisor in a dedicated terminal before submitting the rollback mutation.
+It fails closed and removes the active deployment if a funded Claimable round lacks its stamp.
+This reduces response time but does not turn the old image into an atomic gate.
+
+```bash
+verify_funded_claimable_stamp() {
+  RPC="$MAINNET_RPC" node --input-type=module <<'NODE'
+import { Connection, Keypair } from "@solana/web3.js";
+import { Wallet } from "@coral-xyz/anchor";
+import {
+  createProgram, configPda, fetchConfig, fetchRound, roundPda,
+  beefRoundPda, RoundState,
+} from "@ansem/sdk";
+const conn = new Connection(process.env.RPC, "finalized");
+const program = createProgram(conn, new Wallet(Keypair.generate()));
+const config = await fetchConfig(program, configPda());
+if (config.currentRoundId === 0) {
+  console.log(JSON.stringify({ currentRoundId: 0, safeToObserve: true }));
+  process.exit(0);
+}
+const round = await fetchRound(program, roundPda(config.currentRoundId));
+let beefRound = null;
+if (round.state === RoundState.Claimable && round.pot > 0n) {
+  const pda = beefRoundPda(round.roundId);
+  const info = await conn.getAccountInfo(pda, "finalized");
+  if (!info) throw new Error(`STOP: funded Claimable round ${round.roundId} has no BeefRound`);
+  const account = await program.account.beefRound.fetch(pda);
+  beefRound = { address: pda.toBase58(), emission: account.emission.toString() };
+}
+console.log(JSON.stringify({
+  currentRoundId: round.roundId, state: round.state, pot: round.pot.toString(),
+  beefRound, safeToObserve: true,
+}));
+NODE
+}
+
+while true; do
+  if ! verify_funded_claimable_stamp \
+    | tee -a "$EVIDENCE_DIR/keeper-rollback-supervision.jsonl"
+  then
+    railway down --yes --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
+    exit 1
+  fi
+  sleep 2
+done
+```
+
+If the dedicated supervisor cannot be maintained, execute this instead and do not run the old
+image:
+
+```bash
+railway down --yes --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
+exit 1
+```
+
+With the supervisor already active in the other terminal, perform the rollback:
 
 ```bash
 : "${RAILWAY_API_TOKEN:?RAILWAY_API_TOKEN must be an account or workspace token}"
@@ -710,6 +940,13 @@ console.log(`rollback deployment ${x.data.deploymentRollback.id}`);
 
 railway variables --set "KEEPER_ROUND_SECS=60" \
   --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
+railway variables --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" \
+  | node -e '
+let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
+  const v = JSON.parse(s);
+  if (v.KEEPER_ROUND_SECS !== "60") throw new Error("KEEPER_ROUND_SECS is not 60");
+  console.log("KEEPER_ROUND_SECS=60");
+});'
 curl --fail --silent --show-error "$KEEPER_BASE_URL/health" | grep -Fx ok
 curl --fail --silent --show-error "$KEEPER_BASE_URL/snapshot" \
   | tee "$EVIDENCE_DIR/keeper-snapshot-after-rollback.json"
@@ -727,16 +964,58 @@ Record:
 - Snapshot after keeper rollback:
 - Bonus-zero readback after keeper rollback:
 - Protected vault floor and balance readback after keeper rollback:
+- Continuous stamp supervisor start and stop UTC:
+- Each funded Claimable round and observed `BeefRound`:
+- Keeper stop event, if any:
 
 ### Program binary rollback
 
 Redeploy only the exact binary dumped and hashed before the upgrade. This rollback does not alter
-BEEF configuration or token accounts.
+BEEF configuration or token accounts. The previous binary restores the pot-vault rent wedge, so
+stop the keeper before deployment. Before the old binary may process a swap, the pot vault must
+hold at least the zero-data rent minimum. Top up exactly the positive shortfall and keep a
+continuous post-swap floor monitor active. If monitoring cannot be maintained, keep the keeper
+stopped.
 
 ```bash
+railway down --yes --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
 test -s "$PREVIOUS_PROGRAM_SO"
 test "$(shasum -a 256 "$PREVIOUS_PROGRAM_SO" | awk '{print $1}')" = "$PREVIOUS_PROGRAM_HASH"
 test "$(solana address --keypair "$UPGRADE_KEYPAIR")" = "$EXPECTED_UPGRADE_AUTHORITY"
+: "${POT_TOPUP_KEYPAIR:?POT_TOPUP_KEYPAIR must be a funded local keypair path}"
+
+RPC="$MAINNET_RPC" POT_TOPUP_KEYPAIR="$POT_TOPUP_KEYPAIR" node --input-type=module <<'NODE' \
+  | tee "$EVIDENCE_DIR/pot-vault-rollback-topup.json"
+import { readFileSync } from "node:fs";
+import {
+  Connection, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction,
+} from "@solana/web3.js";
+import { potVaultPda } from "@ansem/sdk";
+const conn = new Connection(process.env.RPC, "finalized");
+const raw = JSON.parse(readFileSync(process.env.POT_TOPUP_KEYPAIR, "utf8"));
+const payer = Keypair.fromSecretKey(Uint8Array.from(raw));
+const potVault = potVaultPda();
+const rentMinimum = await conn.getMinimumBalanceForRentExemption(0, "finalized");
+const before = await conn.getBalance(potVault, "finalized");
+const shortfall = Math.max(0, rentMinimum - before);
+let signature = null;
+if (shortfall > 0) {
+  signature = await sendAndConfirmTransaction(
+    conn,
+    new Transaction().add(SystemProgram.transfer({
+      fromPubkey: payer.publicKey, toPubkey: potVault, lamports: shortfall,
+    })),
+    [payer],
+    { commitment: "finalized", preflightCommitment: "finalized" },
+  );
+}
+const after = await conn.getBalance(potVault, "finalized");
+if (after < rentMinimum) throw new Error(`pot vault remains below rent: ${after} < ${rentMinimum}`);
+console.log(JSON.stringify({
+  potVault: potVault.toBase58(), payer: payer.publicKey.toBase58(),
+  rentMinimum, before, shortfall, topupSignature: signature, after,
+}, null, 2));
+NODE
 
 solana program deploy "$PREVIOUS_PROGRAM_SO" \
   --program-id "$PROGRAM_ID" \
@@ -756,6 +1035,56 @@ test "$(shasum -a 256 "$EVIDENCE_DIR/ansem-miner-rollback-check.so" | awk '{prin
 read_beef_state "$EVIDENCE_DIR/beef-after-program-rollback.json"
 ```
 
+Before resuming the keeper, run this post-swap floor monitor in a dedicated terminal and leave it
+active. If the keeper image was also rolled back, the stamp supervisor above must remain active in
+parallel. Either monitor failure stops the keeper.
+
+```bash
+verify_pot_vault_rent_floor() {
+  RPC="$MAINNET_RPC" node --input-type=module <<'NODE'
+import { Connection } from "@solana/web3.js";
+import { potVaultPda } from "@ansem/sdk";
+const conn = new Connection(process.env.RPC, "finalized");
+const potVault = potVaultPda();
+const rentMinimum = await conn.getMinimumBalanceForRentExemption(0, "finalized");
+const balance = await conn.getBalance(potVault, "finalized");
+if (balance < rentMinimum) throw new Error(`STOP: pot vault below rent ${balance} < ${rentMinimum}`);
+console.log(JSON.stringify({
+  checkedAt: new Date().toISOString(), potVault: potVault.toBase58(), rentMinimum, balance,
+}));
+NODE
+}
+
+while true; do
+  if ! verify_pot_vault_rent_floor \
+    | tee -a "$EVIDENCE_DIR/pot-vault-rollback-monitor.jsonl"
+  then
+    railway down --yes --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
+    exit 1
+  fi
+  sleep 2
+done
+```
+
+Only after the monitor is active may the operator resume the linked production service in a
+separate terminal. Reassert the 60-second variable and verify health immediately:
+
+```bash
+railway variables --set "KEEPER_ROUND_SECS=60" \
+  --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
+railway variables --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" \
+  | node -e '
+let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
+  const v = JSON.parse(s);
+  if (v.KEEPER_ROUND_SECS !== "60") throw new Error("KEEPER_ROUND_SECS is not 60");
+  console.log("KEEPER_ROUND_SECS=60");
+});'
+railway redeploy --yes --service "$RAILWAY_SERVICE"
+curl --fail --silent --show-error "$KEEPER_BASE_URL/health" | grep -Fx ok
+curl --fail --silent --show-error "$KEEPER_BASE_URL/snapshot" \
+  | tee "$EVIDENCE_DIR/keeper-snapshot-after-program-rollback.json"
+```
+
 Record:
 
 - Program rollback reason:
@@ -766,6 +1095,14 @@ Record:
 - Upgrade authority after rollback:
 - Bonus-zero readback after program rollback:
 - Protected vault floor and balance readback after program rollback:
+- Pot vault address:
+- Zero-data rent minimum, lamports:
+- Pot vault balance before top-up, lamports:
+- Exact top-up shortfall, lamports:
+- Top-up signature, or `none` when the shortfall was zero:
+- Pot vault balance after top-up, lamports:
+- Post-swap rent-floor monitor start and stop UTC:
+- Keeper stop event, if any:
 
 ## 11. Final evidence summary
 
@@ -786,7 +1123,13 @@ operator evidence directory; commit only this public summary.
 - Keeper health URL:
 - Keeper snapshot URL:
 - `KEEPER_ROUND_SECS`: `60`
+- On-chain Config `roundDurationSecs`: `60`
+- Next-round `create_round` signature:
+- Next-round create block time:
+- Next-round deadline:
+- Deadline minus create block time, seconds:
 - Proof round ID:
+- Proof start and end slots:
 - Stake signature:
 - Swap signature:
 - Stamp signature:
@@ -796,6 +1139,9 @@ operator evidence directory; commit only this public summary.
 - Post-proof BEEF vault balance:
 - Post-proof BEEF treasury balance:
 - Post-proof `total_owed`:
+- Quiet BEEF accounting window confirmed:
 - 47.481502 BEEF protected vault floor maintained:
 - Post-proof vault balance at or above pre-proof vault balance:
+- Rollback keeper state: `not used`, `stopped`, or `manually supervised`:
+- Rollback program state: `not used`, `stopped`, or `rent-floor supervised`:
 - Final audit UTC:
