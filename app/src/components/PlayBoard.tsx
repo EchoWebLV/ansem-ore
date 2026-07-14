@@ -54,8 +54,9 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
       <div className="dust" aria-hidden />
       <div className="grid-floor hidden lg:block" aria-hidden />
       <div className="vignette hidden lg:block" aria-hidden />
-      <PhaseNav />
-      <WalletBar />
+      <PhaseNav>
+        <WalletBar />
+      </PhaseNav>
       <div className="text-[10px] tracking-widest text-bull-muted text-right">
         KEEPER: {status.toUpperCase()}
       </div>

@@ -21,4 +21,18 @@ describe("PhaseNav", () => {
     expect(screen.getByRole("button", { name: /phase ii$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /phase iii$/i })).toBeDisabled();
   });
+
+  it("shows the brand logo image", () => {
+    const { container } = render(<PhaseNav />);
+    expect(container.querySelector('img[src="/bullstake-logo.svg"]')).toBeInTheDocument();
+  });
+
+  it("renders children (the wallet slot) inside the nav", () => {
+    render(
+      <PhaseNav>
+        <button>WALLET</button>
+      </PhaseNav>,
+    );
+    expect(screen.getByRole("button", { name: /wallet/i })).toBeInTheDocument();
+  });
 });

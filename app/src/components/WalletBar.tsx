@@ -8,10 +8,5 @@ const WalletMultiButton = dynamic(
 );
 
 export function WalletBar() {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="font-mono text-bull-green tracking-widest text-sm">ANSEM · MINER</span>
-      <WalletMultiButton />
-    </div>
-  );
+  return <WalletMultiButton />;
 }
