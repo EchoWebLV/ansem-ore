@@ -9,6 +9,7 @@ import {
   type ConfigState, type RoundStateData,
 } from "@ansem/sdk";
 import type { Logger } from "../logger.js";
+import type { BeefStamper } from "../beef.js";
 import { fetchJoinedWallets } from "../participants.js";
 import { quoteSolToAnsem, FetchLike } from "../jupiter.js";
 
@@ -24,9 +25,10 @@ export interface ActionCtx {
   /** Direct-stake mode: rounds stay on L1 (never delegated) so players can
    *  stake_direct against them; the commit/reconcile stages never fire. */
   directMode?: boolean;
-  /** BEEF emission layer: set at startup if BeefConfig exists on-chain. */
-  beefEnabled?: boolean;
-  beefVault?: PublicKey;
+  /** Minted-BEEF stamp crank (plan Task 6). Created + boot-probed in service.ts; holds the
+   *  pinned mint/vault/treasury cache and pushes each stamp's emission to the snapshot holder.
+   *  Absent -> BEEF stamping is not wired (the game runs untouched). */
+  beefStamper?: BeefStamper;
   // ---- Real-payout swap (plan 2026-07-14, Task 7) ----
   /** "real" routes finalize through Jupiter + execute_swap_real; "mock" mints synthetic ANSEM. */
   swapMode: "mock" | "real";
@@ -237,15 +239,14 @@ export function liveFinalizeDeps(
     reconcileMiner: (w) =>
       l1Send(() => reconcileMinerIx(ctx.program, roundId, escrowPda(w), minerPda(w)).rpc()),
     executeSwap,
-    // ---- BEEF stamp crank seam (plan Task 6 Step 2 — DEFERRED) ----
-    // Left unwired: Task 5 landed the minted-model `stampBeefIx`, which now needs
-    // beefMint/vaultAuthority/beefTreasury/tokenProgram sourced from BeefConfig (not the old
-    // roundId+beefVault). Wiring the real per-round stamp — reading those accounts and pushing
-    // the stamped players' emission to service.ts `lastBeefEmission` for snapshot.beefPerRound —
-    // is Task 6 (keeper). Inert on mainnet regardless: `beefEnabled` is only true once a
-    // BeefConfig exists on-chain, which it does NOT today.
-    // INVARIANT (unchanged): a throw here must never block finalize — finalizeSettled swallows it.
-    stampBeef: undefined,
+    // ---- BEEF stamp crank (plan Task 6 Step 2) ----
+    // The just-settled round is now CLAIMABLE + still current (post-swap, pre-advance): the
+    // exact window stamp_beef requires. The stamper sources mint/vault/treasury/tokenProgram
+    // from the on-chain BeefConfig (never env), skips silently while BEEF is uninitialized
+    // (mainnet today), and pushes each stamp's players' emission to service.ts lastBeefEmission
+    // for snapshot.beefPerRound. INVARIANT: a throw here never blocks finalize — finalizeSettled
+    // swallows it (BEEF never blocks the game). Absent stamper (tests / no ctx) -> unwired.
+    stampBeef: ctx.beefStamper ? () => ctx.beefStamper!.stamp(roundId) : undefined,
   };
 }
 

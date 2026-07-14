@@ -1,8 +1,9 @@
 import { PublicKey } from "@solana/web3.js";
 import {
   ConfigState, RoundStateData, fetchConfig, fetchRound, fetchMiner,
-  configPda, roundPda, minerPda, sleep, DLP_PROGRAM_ID,
-  fetchBeefConfig, beefConfigPda, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
+  configPda, roundPda, minerPda, sleep, DLP_PROGRAM_ID, l1Send,
+  fetchBeefConfig, beefConfigPda, beefRoundPda, stampBeefIx,
+  TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
 } from "@ansem/sdk";
 import type { KeeperConfig } from "./env.js";
 import { buildChain, Chain } from "./chain.js";
@@ -17,6 +18,7 @@ import { fetchStakerWallets } from "./participants.js";
 import { startReadServer, ReadServer } from "./read/server.js";
 import type { FullSnapshot, SnapshotExtras } from "./read/snapshot.js";
 import { makeJackpotReader } from "./read/jackpot.js";
+import { makeBeefStamper } from "./beef.js";
 import { runBuyback, BuybackCtx, BUYBACK_TICK_CADENCE } from "./buyback.js";
 import { runJanitor, JanitorCtx, JANITOR_TICK_CADENCE } from "./janitor.js";
 import { startFloorRefresh, FloorRefresh } from "./floor.js";
@@ -41,13 +43,37 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
   let running = false;
 
   // Cached, null-safe read of the on-chain jackpot params (null until the JackpotConfig PDA
-  // exists — keeper runs against both the current and the upgraded program).
-  const readJackpot = makeJackpotReader(chain.conn);
-  // Last stamped BEEF emission (players' base units) surfaced as snapshot.beefPerRound.
-  // TODO(beef-stamp-crank): the deferred minted-BEEF stamp crank (plan Task 6 Step 2 —
-  // see the seam in crank/actions.ts liveFinalizeDeps.stampBeef) must set this after each
-  // successful stamp so the app's BEEF drip counter reads a live value. Stays null until then.
+  // exists — keeper runs against both the current and the upgraded program). Uses the SDK's
+  // typed fetchJackpotConfig now that the upgraded IDL carries the account.
+  const readJackpot = makeJackpotReader(chain.program);
+  // Last stamped BEEF emission (players' base units) surfaced as snapshot.beefPerRound. The
+  // stamp crank (below) pushes each successful stamp's players' share here so the app's BEEF
+  // drip counter reads a live value. Stays null until the first stamp lands.
   let lastBeefEmission: bigint | null = null;
+  // Minted-BEEF stamp crank (plan Task 6 Step 2). Sources mint/vault/treasury from the on-chain
+  // BeefConfig (never env) + the mint's owning token program; skips silently while BEEF is
+  // uninitialized (mainnet today) and re-probes each finalize so a mid-flight init_beef is
+  // picked up without a keeper restart. finalizeSettled swallows any stamp throw.
+  const beefStamper = makeBeefStamper({
+    probeConfig: () => fetchBeefConfig(chain.program, beefConfigPda()).catch(() => null),
+    detectTokenProgram: async (mint) => {
+      const info = await chain.conn.getAccountInfo(mint, "confirmed").catch(() => null);
+      return info && info.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+    },
+    sendStamp: (roundId, cfg, tokenProgram) =>
+      l1Send(() => stampBeefIx(
+        chain.program, ctx.keeper, roundId,
+        new PublicKey(cfg.beefMint), new PublicKey(cfg.beefVault), new PublicKey(cfg.beefTreasury),
+        tokenProgram,
+      ).rpc()),
+    readEmission: async (roundId) => {
+      const br: any = await chain.program.account.beefRound.fetch(beefRoundPda(roundId));
+      return BigInt(br.emission.toString()); // BeefRound.emission == the players' 80% share
+    },
+    pushEmission: (emission) => { lastBeefEmission = emission; },
+    log,
+  });
+  ctx.beefStamper = beefStamper;
   const getExtras = async (): Promise<SnapshotExtras> => {
     const jp = await readJackpot();
     return {
@@ -117,16 +143,10 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
         ctx.log.info("ANSEM mint token program detection failed — defaulting classic");
       }
 
-      // BEEF emission layer: enabled iff BeefConfig exists on-chain at startup.
-      try {
-        const bc = await fetchBeefConfig(ctx.program, beefConfigPda());
-        ctx.beefEnabled = true;
-        // fetchBeefConfig is now typed (base58 strings); ctx.beefVault stays a PublicKey.
-        ctx.beefVault = new PublicKey(bc.beefVault);
-        ctx.log.info("BEEF emission enabled", { vault: bc.beefVault });
-      } catch {
-        ctx.log.info("BEEF not initialized — emission stamping disabled");
-      }
+      // BEEF stamp crank: boot-probe BeefConfig once (warms the cache + logs enabled/dormant).
+      // Dormant on mainnet today; the crank lazily re-probes each finalize so a later init_beef
+      // is picked up with no restart.
+      await beefStamper.init();
 
       // Periodic maintenance cranks (own ctx so they can run off the main tick).
       const buybackCtx: BuybackCtx = {
