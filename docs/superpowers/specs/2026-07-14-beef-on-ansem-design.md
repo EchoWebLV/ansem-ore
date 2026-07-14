@@ -93,6 +93,7 @@ Remaining list-day verification: Jupiter new-pool indexing lag (day-one trades g
 ### D12 — Trust guardrails
 - Prize vault / player obligations are never deployed into yield. House never farms money it may owe.
 - Emission constants + verified-build links published. Player-facing copy never surfaces mint plumbing or session lifecycle.
+- **The UI never fabricates a win** (bug found live 2026-07-14: reveal celebrated "JACKPOT struck" on unstaked squares, ClaimPanel said "WON"/"Claim ANSEM" on zero-entitlement rounds — chain-verified claims of 0). Rule: no-winner rounds say the pot rolled to the jackpot; zero-entitlement claims read as "clear round", never "claim"; the reveal counter is labeled as the pot, not implied winnings. A player must never learn they lost from their wallet instead of the app.
 
 ## Program changes (single upgrade)
 
