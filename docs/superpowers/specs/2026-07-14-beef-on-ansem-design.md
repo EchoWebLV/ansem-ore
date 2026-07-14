@@ -66,15 +66,17 @@ Replaces "any winner drains the whole rollover every round" (current code), whic
 ### D9 — Keeper: stale-floor auto-refresh (live bug, pre-BEEF)
 `min_swap_rate` is a static floor set at init (182,446,494 ANSEM/SOL) while market moved (~285M measured 2026-07-14): players guaranteed only ~64% of market, and an ANSEM pump would force keeper overpayment or halt settlement. Fix: keeper loop quotes Jupiter periodically and calls `set_min_swap_rate` (keeper IS config.admin) when drift exceeds a threshold (e.g. floor kept at 90–95% of market, updated when off by >5%).
 
-### D10 — Listing: BEEF/ANSEM pool on Meteora DAMM v2 (LIST DAY, date = operator's call)
-Verified feasible 2026-07-14:
-- DAMM v2 supports custom quote mints (docs) and permissionless Token-2022 with metadata-pointer/transfer-fee extensions.
-- ANSEM's only extensions: `metadataPointer` + `tokenMetadata` (on-chain check) → inside permissionless support.
+### D10 — Listing: BEEF/ANSEM pool on Meteora DAMM v2 (pool created DAY 0, trading self-opens on LIST DAY)
+Verified feasible 2026-07-14 — all claims below checked against the deployed damm-v2 program source + installed `@meteora-ag/cp-amm-sdk@1.4.5` (dry-runs in `scripts/meteora-list.mjs`):
+- Custom-quote (ANSEM) customizable pools are permissionless; ANSEM's only Token-2022 extensions (`metadataPointer` + `tokenMetadata`) sit inside the program's extension allowlist.
+- Fee scheduler is a pool-creation param; single-sided base-only seed supported (`initSqrtPrice == sqrtMinPrice`); **permanent lock is irreversible on-chain and atomic with creation** (`isLockLiquidity: true` — zero unlock window). Fees on locked liquidity stay claimable forever (treasury revenue).
 - ANSEM depth: 20 SOL quote ≈ 0.02% price impact through 3 Meteora DLMM pools.
 
-Mechanics: single-sided **BEEF** seed from the treasury's mined share → fee scheduler armed (high start, decaying — anti-snipe) → **burn/permanently lock the LP position**. Net effect: every SOL↔BEEF trade routes through ANSEM; ANSEM accumulating in the burned pool is locked forever. Honest coupling note: buys route through ANSEM *and sells route back out* — fates chained both directions; accepted as thesis alignment.
+**Squat risk + fix (day-0 creation with future activation):** Meteora allows exactly ONE customizable pool per pair (PDA from sorted mints). Mine-first makes the BEEF mint public on day 0 while listing waits — that gap would let anyone squat the canonical BEEF/ANSEM pool. Fix, all verified in program source: create the pool **on day 0** with `activationPoint` = list-day timestamp — swaps are rejected on-chain until activation (we run no alpha vault, so no early window exists); positions CAN be created/added/permanently-locked pre-activation while nobody (including us) can remove liquidity pre-activation; the fee-scheduler decay clock anchors at ACTIVATION, so list day opens at the full anti-snipe cliff. Constraint: activation ≤ **31 days** after creation (program max) — the listing date must be fixed before day 0 (it was being announced day 0 anyway; the app countdown banner uses the same timestamp). Timing detail that makes us structurally first: the treasury receives its 20% BEEF directly at the first round's stamp — before any player can complete a claim — so the pool (dust seed, permanent-locked) is created minutes into launch, before anyone else can hold BEEF. Pre-list, the treasury's accumulated mined BEEF is added as a second permanently-locked single-sided position (`--add-locked-position`, refuses if any ANSEM would be required). LIST DAY needs no action: the pool self-activates.
 
-Build-time verifications: fee-scheduler on custom-quote pool configs, single-sided create parameters, Jupiter new-pool indexing lag (day-one trades go direct on Meteora).
+Mechanics recap: single-sided **BEEF** seed from the treasury's mined share → fee scheduler armed (default 50%→1% over 1h; do not raise start above 5000 bps without checking the live pool's `fee_version` cap) → permanently locked LP. Net effect: every SOL↔BEEF trade routes through ANSEM; ANSEM accumulating in the locked pool is locked forever. Honest coupling note: buys route through ANSEM *and sells route back out* — fates chained both directions; accepted as thesis alignment.
+
+Remaining list-day verification: Jupiter new-pool indexing lag (day-one trades go direct on Meteora).
 
 ### D11 — LATER menu (explicitly out of launch scope; each an independent ship)
 - **Referral system (top priority — ZINC-proven growth loop):** share-link codes; referrer earns a slice of the referee's BEEF mints, paid from the treasury's 20% cut (no new inflation, no program change — keeper-tracked ledger + periodic treasury payouts; on-chain memo tag on stakes for attribution).
@@ -114,9 +116,11 @@ Build-time verifications: fee-scheduler on custom-quote pool configs, single-sid
 3. Init BeefConfig; `set_fee_bps 500`; `setRoundDuration 60`; `set_jackpot_params (25, 100)`.
 4. Keeper redeploy (Railway) with new cranks; app redeploy (Vercel).
 5. Mainnet dust-round E2E: stake → settle → BEEF minted 80/20 → claim lands. (Jackpot trigger force-tested on devnet only.)
-6. Seed jackpot ~2 SOL via stake-and-roll.
-7. Announce: mining live + listing date; build-in-public thread.
-8. LIST DAY: pool script (create DAMM v2 BEEF/ANSEM custom-quote pool, single-sided treasury seed, fee scheduler, burn LP). Verify Jupiter routing after indexing.
+6. **Immediately after the first stamped round** (treasury holds BEEF before any player claim is possible): `meteora-list.mjs` with `ACTIVATION_TS` = list-day timestamp — dust-seed pool created + permanently locked, canonical BEEF/ANSEM address secured, trading dead until activation. Listing date must be fixed by now (≤ 31 days out).
+7. Seed jackpot ~2 SOL via stake-and-roll.
+8. Announce: mining live + listing date; build-in-public thread.
+9. Day before LIST DAY: `meteora-list.mjs --add-locked-position` — treasury's mined BEEF added single-sided + permanently locked (script refuses if any ANSEM would be pulled).
+10. LIST DAY: nothing to run — pool self-activates at `ACTIVATION_TS` with the full fee cliff. Verify Jupiter routing after indexing.
 
 ## Operator cost
 
@@ -126,5 +130,6 @@ Build-time verifications: fee-scheduler on custom-quote pool configs, single-sid
 
 - One-VRF-request-per-round invariant (verify in code; fairness claim depends on it).
 - Idle-round cost at 60s cadence (confirm empty rounds skip VRF).
-- Meteora custom-quote + fee-scheduler + single-sided exact config (script dry-run).
+- ~~Meteora custom-quote + fee-scheduler + single-sided exact config~~ — VERIFIED 2026-07-14 (see D10; scripts committed and dry-run tested).
 - BEEF name/symbol/logo asset from operator.
+- **Listing date from operator — now required BEFORE day 0** (baked into the pool's activation point; ≤ 31 days after creation).
