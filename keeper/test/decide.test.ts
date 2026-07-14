@@ -13,8 +13,12 @@ const base: CrankState = {
 };
 
 describe("decideAction", () => {
-  it("creates a round when finalized and none in flight", () => {
-    expect(decideAction(base)).toBe(CrankAction.CreateRound);
+  it("creates the initial round when currentRoundId is zero and none exists", () => {
+    expect(decideAction({ ...base, currentRoundId: 0 })).toBe(CrankAction.CreateRound);
+  });
+
+  it("stays idle when a nonzero current round is missing", () => {
+    expect(decideAction(base)).toBe(CrankAction.Idle);
   });
 
   it("creates a round when the current round is CLAIMABLE (finalized)", () => {
@@ -25,6 +29,18 @@ describe("decideAction", () => {
   it("creates a round when the current round is CLOSED", () => {
     expect(decideAction({ ...base, finalized: false, round: { state: RoundState.Closed, deadlineTs: 0, roundId: 100, pot: 0n } }))
       .toBe(CrankAction.CreateRound);
+  });
+
+  it("does not let a stale finalized flag override a decoded OPEN round", () => {
+    expect(decideAction({ ...base, roundDelegated: true,
+      round: { state: RoundState.Open, deadlineTs: 2000, roundId: 100, pot: 15n } }))
+      .toBe(CrankAction.Idle);
+  });
+
+  it("does not let a stale finalized flag override a decoded SETTLED round", () => {
+    expect(decideAction({ ...base,
+      round: { state: RoundState.Settled, deadlineTs: 0, roundId: 100, pot: 15n } }))
+      .toBe(CrankAction.Finalize);
   });
 
   it("is idle while OPEN before the deadline", () => {

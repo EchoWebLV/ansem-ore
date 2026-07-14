@@ -35,6 +35,24 @@ export interface ServiceDispatchDeps {
   createAndDelegate: typeof createAndDelegate;
 }
 
+export interface CurrentRoundReadDeps {
+  getAccountInfo: (address: PublicKey) => Promise<{ owner: PublicKey } | null>;
+  fetchDecodedRound: (delegated: boolean, address: PublicKey) => Promise<RoundStateData>;
+}
+
+export async function readCurrentRoundView(
+  currentRoundId: number,
+  deps: CurrentRoundReadDeps,
+): Promise<RoundView | null> {
+  if (currentRoundId === 0) return null;
+  const rpda = roundPda(currentRoundId);
+  const info = await deps.getAccountInfo(rpda);
+  if (!info) throw new Error(`current round ${currentRoundId} account is missing`);
+  const delegated = info.owner.equals(DLP_PROGRAM_ID);
+  const round = await deps.fetchDecodedRound(delegated, rpda);
+  return { round, delegated };
+}
+
 const liveServiceDispatchDeps: ServiceDispatchDeps = { createAndDelegate };
 
 export async function dispatchCrankAction(
@@ -45,10 +63,27 @@ export async function dispatchCrankAction(
 ): Promise<void> {
   switch (action) {
     case CrankAction.CreateRound: {
-      if (s.round?.state === RoundState.Claimable && ctx.beefStamper) {
-        await ctx.beefStamper.stamp(s.config.currentRoundId);
+      const currentRoundId = s.config.currentRoundId;
+      if (!s.round) {
+        if (currentRoundId !== 0) {
+          throw new Error(`current round ${currentRoundId} is missing; refusing to create the next round`);
+        }
+        return deps.createAndDelegate(ctx, 1);
       }
-      return deps.createAndDelegate(ctx, s.config.currentRoundId + 1);
+      if (s.round.roundId !== currentRoundId) {
+        throw new Error(`decoded round ID ${s.round.roundId} does not match current round ${currentRoundId}`);
+      }
+      if (s.round.state === RoundState.Claimable) {
+        if (!ctx.beefStamper) {
+          throw new Error(`current round ${currentRoundId} is Claimable but the BEEF stamper is unavailable`);
+        }
+        await ctx.beefStamper.stamp(currentRoundId);
+      } else if (s.round.state !== RoundState.Closed) {
+        throw new Error(`current round ${currentRoundId} is not terminal; refusing to create the next round`);
+      }
+      // Closed means the round was canceled before a successful swap. This includes funded
+      // oracle-timeout cancellations, which have no Claimable transition or BEEF emission.
+      return deps.createAndDelegate(ctx, currentRoundId + 1);
     }
     case CrankAction.CommitToL1:
       if (s.round) await commitToL1(s.round.roundId, liveCommitDeps(ctx, s.round.roundId));
@@ -141,15 +176,12 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
 
   // Read the current round by OWNERSHIP: while delegated the live copy is in the
   // ER (L1 anchor .fetch would fail the owner check), once committed it is on L1.
-  const fetchRoundView = async (currentRoundId: number): Promise<RoundView | null> => {
-    if (currentRoundId === 0) return null;
-    const rpda = roundPda(currentRoundId);
-    const info = await chain.conn.getAccountInfo(rpda, "confirmed"); // RPC error -> tick retry
-    if (!info) return null;
-    const delegated = info.owner.toBase58() === DLP_PROGRAM_ID.toBase58();
-    const round = await fetchRound(delegated ? chain.erProgram : chain.program, rpda).catch(() => null);
-    return round ? { round, delegated } : null;
-  };
+  const fetchRoundView = (currentRoundId: number): Promise<RoundView | null> =>
+    readCurrentRoundView(currentRoundId, {
+      getAccountInfo: (rpda) => chain.conn.getAccountInfo(rpda, "confirmed"),
+      fetchDecodedRound: (delegated, rpda) =>
+        fetchRound(delegated ? chain.erProgram : chain.program, rpda),
+    });
 
   return {
     async start() {

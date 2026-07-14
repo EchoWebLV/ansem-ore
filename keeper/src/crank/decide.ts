@@ -37,9 +37,14 @@ export interface CrankState {
  * `request_settle` runs on L1, THEN reconcile + swap. NOT settle-first.
  */
 export function decideAction(s: CrankState): CrankAction {
-  // No round in flight, or the current one is terminal -> open the next round.
-  if (s.finalized || s.round === null) return CrankAction.CreateRound;
+  // Only currentRoundId=0 can legitimately have no round. A missing nonzero round is an
+  // ambiguous read failure, so fail closed and let the next tick retry instead of advancing.
+  if (s.round === null) {
+    return s.currentRoundId === 0 ? CrankAction.CreateRound : CrankAction.Idle;
+  }
 
+  // The decoded round is authoritative for action selection. In particular, a finalized flag
+  // observed from a newer RPC slot must not override an older nonterminal round read.
   switch (s.round.state) {
     case RoundState.Claimable:
     case RoundState.Closed:
