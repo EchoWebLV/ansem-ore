@@ -62,4 +62,71 @@ describe("useReveal", () => {
     act(() => { vi.advanceTimersByTime(10_000); });
     expect(result.current.revealed).toHaveLength(25);
   });
+
+  it("plays the honest sweep when an empty round's cancel is sighted directly, then self-dismisses", () => {
+    const open = snap({ roundId: 9, pot: "0", blockSol: Array(25).fill("0"), rolloverJackpot: "5000000" });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: open } });
+    expect(result.current.revealed).toBeNull();
+    rerender({ s: { ...open, state: RoundState.Closed } });
+    expect(result.current.mode).toBe("sweep");
+    expect(result.current.revealed).toEqual([]);
+    act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 4 * 90); });
+    expect(result.current.revealed).toHaveLength(25);
+    expect(result.current.jackpotShown).toBe(false);
+    expect(result.current.counter).toBe("5.00"); // the rolling jackpot, ANSEM units
+    expect(result.current.sub?.text).toMatch(/scanned · 25 of 25/);
+    act(() => { vi.advanceTimersByTime(900 + 10); });
+    expect(result.current.jackpotShown).toBe(true);
+    expect(result.current.sub).toEqual({ text: "no miners — jackpot rolls to the next round", gold: false });
+    expect(result.current.mode).toBe("sweep");
+    // Unlike settle, the sweep hands the HUD back to the live round after a short dwell.
+    act(() => { vi.advanceTimersByTime(2600 + 10); });
+    expect(result.current.revealed).toBeNull();
+    expect(result.current.jackpotShown).toBe(false);
+    expect(result.current.counter).toBeNull();
+    expect(result.current.sub).toBeNull();
+    expect(result.current.mode).toBeNull();
+  });
+
+  it("plays NO theater when a round closes with a real pot (refund case)", () => {
+    const open = snap({ roundId: 9, pot: "2000000000" });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: open } });
+    rerender({ s: { ...open, state: RoundState.Closed } });
+    expect(result.current.revealed).toBeNull();
+    expect(result.current.mode).toBeNull();
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(result.current.revealed).toBeNull();
+    expect(result.current.jackpotShown).toBe(false);
+  });
+
+  it("sweeps when a new round opens over an unhandled empty previous round (missed Closed frame)", () => {
+    const prev = snap({ roundId: 9, pot: "0", blockSol: Array(25).fill("0") });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: prev } });
+    act(() => { vi.advanceTimersByTime(5_000); });
+    expect(result.current.revealed).toBeNull(); // merely-open rounds never sweep
+    rerender({ s: snap({ roundId: 10, state: RoundState.Open, pot: "0", blockSol: Array(25).fill("0") }) });
+    expect(result.current.mode).toBe("sweep");
+    act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 900 + 20); });
+    expect(result.current.revealed).toHaveLength(25);
+    expect(result.current.jackpotShown).toBe(true);
+  });
+
+  it("never sweeps on the very first snapshot (fresh page load into an open round)", () => {
+    const { result } = renderHook(() =>
+      useReveal(snap({ roundId: 42, pot: "0", blockSol: Array(25).fill("0") })),
+    );
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(result.current.revealed).toBeNull();
+    expect(result.current.mode).toBeNull();
+  });
+
+  it("settle theater reports mode 'settle' and persists until the next round (no self-dismiss)", () => {
+    const settled = snap({ state: RoundState.Settled, jackpotSquare: 3 });
+    const { result } = renderHook(() => useReveal(settled));
+    expect(result.current.mode).toBe("settle");
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(result.current.jackpotShown).toBe(true);
+    expect(result.current.mode).toBe("settle");
+    expect(result.current.revealed).toHaveLength(25);
+  });
 });

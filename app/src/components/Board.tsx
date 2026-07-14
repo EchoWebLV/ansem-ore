@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import { RoundState, type WireSnapshot } from "@ansem/sdk";
 import { svgCells } from "../lib/board-layout.js";
-import { playTap, playFill, playJackpot } from "../lib/sound.js";
+import { playTap, playFill, playJackpot, playRollover } from "../lib/sound.js";
 
 const CELLS = svgCells();
 
@@ -26,6 +26,8 @@ export interface BoardProps {
   revealed?: number[] | null;
   /** Finale flag: the jackpot square flashes gold. */
   jackpotShown?: boolean;
+  /** Which show is running — the sweep finale plays the rollover sound, not the bell. */
+  revealMode?: "settle" | "sweep" | null;
 }
 
 /**
@@ -33,7 +35,7 @@ export interface BoardProps {
  * layer + gradient face), lit cells breathe, revealed cells pop in, the jackpot
  * detonates a gold shockwave ring. All state/testid contracts unchanged.
  */
-export function Board({ snapshot, selectedSquares = [], onSelect, revealed = null, jackpotShown }: BoardProps) {
+export function Board({ snapshot, selectedSquares = [], onSelect, revealed = null, jackpotShown, revealMode }: BoardProps) {
   const settled = snapshot.state >= RoundState.Settled;
   const revealSet = revealed === null ? null : new Set(revealed);
 
@@ -49,9 +51,13 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
   }, [revealedCount]);
   const jackpotRung = useRef(false);
   useEffect(() => {
-    if (jackpotShown && !jackpotRung.current) { playJackpot(); jackpotRung.current = true; }
+    if (jackpotShown && !jackpotRung.current) {
+      // Sweep finales (empty round, no draw) get the soft rollover, not the bell.
+      if (revealMode === "sweep") playRollover(); else playJackpot();
+      jackpotRung.current = true;
+    }
     if (!jackpotShown) jackpotRung.current = false;
-  }, [jackpotShown]);
+  }, [jackpotShown, revealMode]);
   return (
     <svg
       viewBox="0 0 400 348"

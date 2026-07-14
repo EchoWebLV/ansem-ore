@@ -8,6 +8,11 @@ import { RoundState, ANSEM_DECIMALS, type WireSnapshot } from "@ansem/sdk";
  * with the prototype's pacing; the counter climbs with the cumulative revealed
  * stake; the finale flashes the REAL VRF jackpot square gold. Honest theater —
  * outcomes are fixed on-chain before the first frame.
+ *
+ * Empty (no-miner) rounds never settle — the keeper cancels them straight to
+ * Closed with no VRF draw. Those get the SWEEP: every cell lights in turn, the
+ * counter holds the rolling jackpot, and the finale says the pot rolls over.
+ * No fake gold square — there was no draw, and we don't pretend there was.
  */
 export interface RevealView {
   /** Cell ids revealed so far; null = no reveal in progress (live board shows stakes). */
@@ -18,10 +23,14 @@ export interface RevealView {
   counter: string | null;
   /** Sub-line override while playing. */
   sub: { text: string; gold: boolean } | null;
+  /** Which show is running: settle theater, the empty-round sweep, or none. */
+  mode: "settle" | "sweep" | null;
   replay: () => void;
 }
 
 const STEP_BASE = 320, STEP_MS = 105, END_CHOKE = 90, FINALE_MS = 900;
+/** How long the sweep finale lingers before handing the HUD back to the live round. */
+const SWEEP_DWELL_MS = 2600;
 
 function shuffle<T>(a: T[]): T[] {
   for (let i = a.length - 1; i > 0; i--) {
@@ -36,7 +45,13 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   const [jackpotShown, setJackpotShown] = useState(false);
   const [counter, setCounter] = useState<string | null>(null);
   const [sub, setSub] = useState<{ text: string; gold: boolean } | null>(null);
+  const [mode, setMode] = useState<"settle" | "sweep" | null>(null);
+  // The id of the round whose ENDING has been handled (settle theater, sweep, or refund).
   const playedRound = useRef<number>(0);
+  // Previous snapshot (any frame), null on first load — how we spot a missed cancel window.
+  const lastSnap = useRef<WireSnapshot | null>(null);
+  // True while a sweep is mid-flight, so the next round's open can't cut it short.
+  const sweeping = useRef(false);
   const timers = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   // Generation token: bumped on every play/reset so a straggler timer from a
   // previous round's reveal can never write state after the board moved on.
@@ -44,9 +59,21 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
 
   const clear = () => { gen.current++; timers.current.forEach(clearTimeout); timers.current = []; };
 
+  const resetToLive = () => {
+    clear();
+    sweeping.current = false;
+    setRevealed(null);
+    setJackpotShown(false);
+    setCounter(null);
+    setSub(null);
+    setMode(null);
+  };
+
   const play = (snap: WireSnapshot) => {
     clear();
+    sweeping.current = false;
     const g = gen.current;
+    setMode("settle");
     setRevealed([]);
     setJackpotShown(false);
     const n = 25;
@@ -73,28 +100,99 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
     }, STEP_BASE + n * STEP_MS + FINALE_MS));
   };
 
+  /**
+   * The empty-round show: same cascade pacing as the settle reveal, but honest —
+   * no gold square (no draw happened). The counter holds the CURRENT rolling
+   * jackpot; the finale announces the rollover; then, unlike settle, it hands
+   * the HUD back after a short dwell (the next round is usually already open).
+   */
+  const playSweep = (snap: WireSnapshot) => {
+    clear();
+    sweeping.current = true;
+    const g = gen.current;
+    setMode("sweep");
+    setRevealed([]);
+    setJackpotShown(false);
+    const n = 25;
+    const order = shuffle(Array.from({ length: n }, (_, i) => i));
+    // The jackpot people are watching roll: the stamped pool if any, else the
+    // config rollover still building — the same fallback the HUD's jackpot line uses.
+    const pool = BigInt(snap.jackpotPool || "0");
+    const rolling = (Number(pool > 0n ? pool : BigInt(snap.rolloverJackpot || "0")) / 10 ** ANSEM_DECIMALS).toFixed(2);
+    order.forEach((id, k) => {
+      const extra = k > n - 5 ? (k - (n - 5)) * END_CHOKE : 0;
+      timers.current.push(setTimeout(() => {
+        if (gen.current !== g) return;
+        setRevealed((r) => [...(r ?? []), id]);
+        setCounter(rolling);
+        setSub({ text: `bull #${id + 1} scanned · ${k + 1} of ${n}`, gold: false });
+      }, STEP_BASE + k * STEP_MS + extra));
+    });
+    timers.current.push(setTimeout(() => {
+      if (gen.current !== g) return;
+      setJackpotShown(true);
+      setSub({ text: "no miners — jackpot rolls to the next round", gold: false });
+    }, STEP_BASE + n * STEP_MS + FINALE_MS));
+    // Self-dismiss: the sweep must not squat on the (already open) next round's HUD.
+    timers.current.push(setTimeout(() => {
+      if (gen.current !== g) return;
+      sweeping.current = false;
+      setRevealed(null);
+      setJackpotShown(false);
+      setCounter(null);
+      setSub(null);
+      setMode(null);
+    }, STEP_BASE + n * STEP_MS + FINALE_MS + SWEEP_DWELL_MS));
+  };
+
   useEffect(() => {
     if (!snapshot) return;
+    const prev = lastSnap.current;
     if (snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed) {
       if (playedRound.current !== snapshot.roundId) {
         playedRound.current = snapshot.roundId;
         play(snapshot);
       }
+    } else if (snapshot.state === RoundState.Closed && playedRound.current !== snapshot.roundId) {
+      playedRound.current = snapshot.roundId;
+      if (BigInt(snapshot.pot || "0") === 0n) {
+        // Cancelled empty round, sighted directly — play the honest sweep.
+        playSweep(snapshot);
+      } else {
+        // Refund case (real pot, round scrapped) — celebration would be wrong.
+        resetToLive();
+      }
     } else if (snapshot.state === RoundState.Open && playedRound.current !== snapshot.roundId) {
-      // A fresh round opened — back to the live board (unconditional; kills stragglers).
-      clear();
-      setRevealed(null);
-      setJackpotShown(false);
-      setCounter(null);
-      setSub(null);
+      if (
+        prev !== null &&
+        prev.roundId !== snapshot.roundId &&
+        playedRound.current !== prev.roundId &&
+        BigInt(prev.pot || "0") === 0n
+      ) {
+        // The empty round's brief Closed window was missed entirely; the sweep
+        // decision comes FIRST so the reset below can't swallow it.
+        playedRound.current = prev.roundId;
+        playSweep(snapshot);
+      } else if (!sweeping.current) {
+        // A fresh round opened — back to the live board (kills stragglers).
+        // Skipped while a sweep is mid-flight: it self-dismisses on its own.
+        resetToLive();
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot?.roundId, snapshot?.state]);
 
+  // Record every frame AFTER the decision effect read the previous one (effects
+  // run in declaration order), so `lastSnap` always holds the true prior frame —
+  // including pot growth ticks that never re-fire the decision effect.
+  useEffect(() => { lastSnap.current = snapshot; });
+
   useEffect(() => clear, []);
 
   return {
-    revealed, jackpotShown, counter, sub,
-    replay: () => { if (snapshot && snapshot.state >= RoundState.Settled) play(snapshot); },
+    revealed, jackpotShown, counter, sub, mode,
+    replay: () => {
+      if (snapshot && snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed) play(snapshot);
+    },
   };
 }

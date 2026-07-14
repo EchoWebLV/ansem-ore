@@ -1,8 +1,16 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { RoundState } from "@ansem/sdk";
-import { Board } from "./Board.js";
 import type { WireSnapshot } from "@ansem/sdk";
+
+// Sound is a side effect of the finale; mock the module so the tests can assert
+// WHICH finale rang (bell vs rollover) without touching Web Audio.
+const sound = vi.hoisted(() => ({
+  playTap: vi.fn(), playFill: vi.fn(), playJackpot: vi.fn(), playRollover: vi.fn(),
+}));
+vi.mock("../lib/sound.js", () => sound);
+
+import { Board } from "./Board.js";
 
 const snap = (over: Partial<WireSnapshot> = {}): WireSnapshot => ({
   roundId: 1, state: RoundState.Open, deadlineTs: 0, pot: "100",
@@ -11,6 +19,8 @@ const snap = (over: Partial<WireSnapshot> = {}): WireSnapshot => ({
 });
 
 describe("Board", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
   it("renders 25 tiles keyed by on-chain square", () => {
     render(<Board snapshot={snap()} />);
     for (let i = 0; i < 25; i++) {
@@ -62,5 +72,30 @@ describe("Board", () => {
     expect(container.querySelector('[data-square="3"]')?.getAttribute("data-selected")).toBe("true");
     expect(container.querySelector('[data-square="7"]')?.getAttribute("data-selected")).toBe("true");
     expect(container.querySelector('[data-square="0"]')?.getAttribute("data-selected")).toBe("false");
+  });
+
+  it("finale rings the jackpot bell for settle/default reveals", () => {
+    render(
+      <Board
+        snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7 })}
+        revealed={Array.from({ length: 25 }, (_, i) => i)}
+        jackpotShown
+      />,
+    );
+    expect(sound.playJackpot).toHaveBeenCalledTimes(1);
+    expect(sound.playRollover).not.toHaveBeenCalled();
+  });
+
+  it("finale plays the rollover sound, not the bell, in sweep mode", () => {
+    render(
+      <Board
+        snapshot={snap()}
+        revealMode="sweep"
+        revealed={Array.from({ length: 25 }, (_, i) => i)}
+        jackpotShown
+      />,
+    );
+    expect(sound.playRollover).toHaveBeenCalledTimes(1);
+    expect(sound.playJackpot).not.toHaveBeenCalled();
   });
 });

@@ -7,8 +7,19 @@
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 let muted = false;
+let muteLoaded = false;
 
 const MUTE_KEY = "ansem.muted.v1";
+
+/**
+ * Load the persisted mute flag once, lazily — BEFORE any audio initializes, so
+ * isMuted()/toggleMute() are honest even if no sound has ever played.
+ */
+function ensureMuteLoaded(): void {
+  if (muteLoaded || typeof window === "undefined") return;
+  muteLoaded = true;
+  try { muted = window.localStorage?.getItem(MUTE_KEY) === "1"; } catch { /* ignore */ }
+}
 
 function audio(): AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -20,7 +31,6 @@ function audio(): AudioContext | null {
       master = ctx.createGain();
       master.gain.value = 0.5;
       master.connect(ctx.destination);
-      muted = window.localStorage?.getItem(MUTE_KEY) === "1";
     } catch {
       return null;
     }
@@ -30,12 +40,21 @@ function audio(): AudioContext | null {
   return ctx;
 }
 
+/**
+ * User-gesture unlock: create/resume the context inside a click so spectators
+ * (who never tap a tile) still hear the reveal when it comes.
+ */
+export function primeAudio(): void {
+  void audio();
+}
+
 /** One enveloped voice: oscillator -> gain -> master, with a quick pluck decay. */
 function voice(
   freq: number,
   { type = "triangle", dur = 0.18, gain = 0.16, delay = 0, attack = 0.006 }:
     { type?: OscillatorType; dur?: number; gain?: number; delay?: number; attack?: number } = {},
 ): void {
+  ensureMuteLoaded();
   const ac = audio();
   if (!ac || !master || muted) return;
   const t0 = ac.currentTime + delay;
@@ -79,12 +98,35 @@ export function playJackpot(): void {
   voice(1567.98, { type: "triangle", dur: 0.9, gain: 0.05, delay: 0.18 });
 }
 
+/** Empty-round finale: a soft downward glide + a low quiet thud — "nothing this round". */
+export function playRollover(): void {
+  ensureMuteLoaded();
+  const ac = audio();
+  if (!ac || !master || muted) return;
+  const t0 = ac.currentTime;
+  const osc = ac.createOscillator();
+  const g = ac.createGain();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(660, t0);
+  osc.frequency.exponentialRampToValueAtTime(440, t0 + 0.3);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(0.1, t0 + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.34);
+  osc.connect(g);
+  g.connect(master);
+  osc.start(t0);
+  osc.stop(t0 + 0.36);
+  voice(110, { type: "sine", dur: 0.3, gain: 0.08, attack: 0.01 });
+}
+
 export function isMuted(): boolean {
+  ensureMuteLoaded();
   return muted;
 }
 
 /** Toggle + persist mute; returns the new state. */
 export function toggleMute(): boolean {
+  ensureMuteLoaded();
   muted = !muted;
   try { window.localStorage?.setItem(MUTE_KEY, muted ? "1" : "0"); } catch { /* ignore */ }
   return muted;

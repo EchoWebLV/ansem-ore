@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
 import { RoundState } from "@ansem/sdk";
 import { useKeeperSnapshot } from "../hooks/use-keeper-snapshot.js";
@@ -13,6 +13,8 @@ import { Leaderboard } from "./Leaderboard.js";
 import { ActivityFeed } from "./ActivityFeed.js";
 import { WalletBar } from "./WalletBar.js";
 import { PhaseNav } from "./PhaseNav.js";
+import { SoundToggle } from "./SoundToggle.js";
+import { primeAudio } from "../lib/sound.js";
 import { PlayControls } from "./PlayControls.js";
 import { Stage } from "./Stage.js";
 import { VerifyPanel, type Receipt, type ReceiptInput } from "./VerifyPanel.js";
@@ -43,6 +45,15 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
     [],
   );
 
+  // One-time audio unlock: browsers keep the AudioContext suspended until a user
+  // gesture, so a spectator who never taps a tile would get a SILENT reveal. Any
+  // first pointer-down on the page primes it.
+  useEffect(() => {
+    const h = () => primeAudio();
+    window.addEventListener("pointerdown", h, { once: true });
+    return () => window.removeEventListener("pointerdown", h);
+  }, []);
+
   // Desktop (lg:) is a three-column command center: rails flank a bigger center
   // stage. Mobile keeps the exact single-column order — the grid placements below
   // only exist at lg and the DOM order IS the mobile order.
@@ -55,6 +66,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
       <div className="grid-floor hidden lg:block" aria-hidden />
       <div className="vignette hidden lg:block" aria-hidden />
       <PhaseNav>
+        <SoundToggle />
         <WalletBar />
       </PhaseNav>
       <div className="text-[10px] tracking-widest text-bull-muted text-right">
@@ -76,6 +88,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
                     onSelect={canPlay ? toggleSquare : undefined}
                     revealed={reveal.revealed}
                     jackpotShown={reveal.jackpotShown}
+                    revealMode={reveal.mode}
                   />
                 </div>
                 {snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed && (
