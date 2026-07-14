@@ -1,0 +1,4 @@
+# Railway: ANSEM Miner keeper — Docker build from repo root (workspace deps).
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "keeper/Dockerfile"
