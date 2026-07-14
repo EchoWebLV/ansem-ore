@@ -28,6 +28,7 @@ describe("Hud", () => {
     const roundState = screen.getByText("REVEALED");
     expect(roundState.parentElement).toHaveTextContent(/^#12 · REVEALED$/);
     expect(roundState.closest(".font-mono")).toBeNull();
+    expect(screen.getByText("--")).toBeInTheDocument();
   });
 
   it("shows the pool without duplicating the jackpot value", () => {

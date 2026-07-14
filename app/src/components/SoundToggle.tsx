@@ -16,7 +16,7 @@ export function SoundToggle() {
       aria-label="Toggle sound"
       aria-pressed={!muted}
       onClick={() => { primeAudio(); setMuted(toggleMute()); }}
-      className="flex h-9 w-9 items-center justify-center rounded-[9px] border border-bull-edge bg-bull-raised text-[14px] text-bull-muted hover:border-bull-green/60 hover:text-bull-ink"
+      className="flex h-11 w-11 items-center justify-center rounded-[9px] border border-bull-edge bg-bull-raised text-[14px] text-bull-muted hover:border-bull-green/60 hover:text-bull-ink"
     >
       {muted ? "🔇" : "🔊"}
     </button>

@@ -21,6 +21,7 @@ export interface PlayControlsProps {
   wallet: WalletAdapter;
   snapshot: AppSnapshot;
   selectedSquares: number[];
+  onRemoveSquare?: (square: number) => void;
   onStaked?: () => void;
   /** Fired with an explorer-linkable artifact after every landed action. */
   onReceipt?: (r: ReceiptInput) => void;
@@ -29,7 +30,7 @@ export interface PlayControlsProps {
 // Direct-stake engine (ORE model): pick squares -> ONE approval moves the SOL
 // wallet->pot in that tx. No escrow, no session key, no round entry. Winnings
 // are pull-claimed per round (claim_direct); cancelled rounds refund exactly.
-export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, onReceipt }: PlayControlsProps) {
+export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSquare, onStaked, onReceipt }: PlayControlsProps) {
   const { connection } = useConnection();
   const owner = wallet.publicKey;
   const { miner, config, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
@@ -142,10 +143,12 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
   // the neutral claim wording.
   const gateCopy =
     stakedRoundState === RoundState.Closed
-      ? `Refund round ${stakedRound} below first — staking now forfeits it.`
+      ? `Refund round ${stakedRound} below first. Staking now forfeits it.`
       : won === false
         ? `Clear round ${stakedRound} below first to stake again.`
-        : `Claim round ${stakedRound} below first — staking now forfeits it.`;
+        : won === true
+          ? `Claim round ${stakedRound} below first. Staking now forfeits it.`
+          : `Resolve round ${stakedRound} below first to stake again.`;
 
   // Claim-by deadline (unix secs) = staked round's deadline + the config claim
   // window carried on the snapshot. Undefined until both are known (or if the
@@ -164,7 +167,14 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
           <span className="font-mono">{lamportsToSolStr(walletLamports)} SOL</span>
         </div>
       )}
-      <StakeRail selectedSquares={selectedSquares} enabled={!stakeBlocked} busy={busy} onStake={doStake} />
+      <StakeRail
+        selectedSquares={selectedSquares}
+        enabled={!stakeBlocked}
+        busy={busy}
+        onStake={doStake}
+        onRemoveSquare={onRemoveSquare}
+        feeReserveSol={lamportsToSolStr(FEE_HEADROOM)}
+      />
       {!loaded ? (
         <p className="px-1 text-[10px] text-bull-muted">Checking your prior round…</p>
       ) : priorUnresolved ? (

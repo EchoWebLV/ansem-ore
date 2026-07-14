@@ -48,6 +48,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
   const toggleSquare = (id: number) =>
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   const canPlay = !!l1 && !!wallet;
+  const removeSquare = (id: number) => setSelected((s) => s.filter((square) => square !== id));
 
   // Receipts: every tx the player fires becomes a clickable explorer link below.
   const [receipts, setReceipts] = useState<Receipt[]>([]);
@@ -65,9 +66,9 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
     return () => window.removeEventListener("pointerdown", h);
   }, []);
 
-  // Desktop (lg:) is a three-column command center: rails flank a bigger center
+  // Wide desktop (xl:) is a three-column command center: rails flank a bigger center
   // stage. Mobile keeps the exact single-column order — the grid placements below
-  // only exist at lg and the DOM order IS the mobile order.
+  // only exist at xl and the DOM order IS the mobile order.
   const goldFinale = reveal.jackpotShown && reveal.sub?.gold === true;
 
   // ONE liveness surface: keeper status folds into the strip's dot + label.
@@ -81,7 +82,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
   return (
     <main
       data-testid="terminal-shell"
-      className="mx-auto flex min-h-screen max-w-[1430px] flex-col gap-3 px-4 pb-8 text-bull-ink lg:px-7"
+      className="terminal-shell-safe mx-auto flex min-h-screen max-w-[1430px] flex-col gap-3 px-3 text-bull-ink sm:px-4 lg:px-7"
     >
       <PhaseNav>
         <SoundToggle />
@@ -101,9 +102,9 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
             <div className="h-4 w-px shrink-0 bg-bull-edge" aria-hidden />
             <WinTicker events={events.length ? events : snapshot.recentEvents} />
           </div>
-          {goldFinale && <div key={snapshot.roundId} className="gold-flash hidden lg:block" aria-hidden />}
-          <div className="grid items-start gap-3 lg:grid-cols-[minmax(190px,232px)_minmax(520px,1fr)_minmax(284px,326px)]">
-            <section aria-label="Round board" className="lg:col-start-2 lg:row-start-1 lg:row-span-4">
+          {goldFinale && <div key={snapshot.roundId} className="gold-flash hidden xl:block" aria-hidden />}
+          <div data-testid="terminal-layout" className="grid items-start gap-3 xl:grid-cols-[minmax(190px,232px)_minmax(520px,1fr)_minmax(284px,326px)]">
+            <section aria-label="Round board" className="xl:col-start-2 xl:row-start-1 xl:row-span-4">
               <Stage className="w-full">
                 <div className="terminal-panel overflow-hidden">
                   <Hud snapshot={reveal.snapshotOverride ?? snapshot} nowMs={nowMs} reveal={reveal} />
@@ -115,41 +116,49 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
                     jackpotShown={reveal.jackpotShown}
                     revealMode={reveal.mode}
                   />
-                  {reveal.canReplay && reveal.revealed === null && (
-                    <div className="border-t border-bull-edge p-3 text-center">
+                  <div data-testid="board-footer" className="flex min-h-14 flex-wrap items-center justify-between gap-2 border-t border-bull-edge px-3 py-2">
+                    <div className="flex items-center gap-3 text-[11px] text-bull-muted" aria-label="Board selection legend">
+                      <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm border border-bull-ink" aria-hidden />Selected</span>
+                      <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-bull-green/40" aria-hidden />Staked</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <a href="#verify" className="inline-flex min-h-11 items-center px-2 text-[11px] font-semibold text-bull-muted hover:text-bull-green">Verify</a>
+                      {reveal.canReplay && reveal.revealed === null && (
                       <button
                         onClick={reveal.replay}
-                        className="rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-[12px] font-semibold text-bull-ink hover:border-bull-green"
+                        className="min-h-11 rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-[12px] font-semibold text-bull-ink hover:border-bull-green"
                       >
                         Replay reveal
                       </button>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
               </Stage>
             </section>
             {canPlay && (
-              <section aria-label="Betting and claims" className="lg:col-start-3 lg:row-start-1">
+              <section aria-label="Betting and claims" className="xl:col-start-3 xl:row-start-1">
                 <PlayControls
                   l1={l1!}
                   wallet={wallet as unknown as WalletAdapter}
                   snapshot={snapshot}
                   selectedSquares={selected}
+                  onRemoveSquare={removeSquare}
                   onStaked={() => setSelected([])}
                   onReceipt={addReceipt}
                 />
               </section>
             )}
-            <div className="lg:col-start-1 lg:row-start-1">
+            <div className="xl:col-start-1 xl:row-start-1">
               <JackpotMeter rolloverJackpot={snapshot.rolloverJackpot} triggerOdds={snapshot.jackpotTriggerOdds} />
             </div>
-            <div className="lg:col-start-1 lg:row-start-2">
+            <div className="xl:col-start-1 xl:row-start-2">
               <Leaderboard leaderboard={snapshot.leaderboard} />
             </div>
-            <div className={canPlay ? "lg:col-start-3 lg:row-start-2" : "lg:col-start-3 lg:row-start-1"}>
+            <div className={canPlay ? "xl:col-start-3 xl:row-start-2" : "xl:col-start-3 xl:row-start-1"}>
               <ActivityFeed events={events.length ? events : snapshot.recentEvents} />
             </div>
-            <div className="lg:col-start-1 lg:row-start-3">
+            <div id="verify" className="xl:col-start-1 xl:row-start-3 scroll-mt-4">
               <VerifyPanel roundId={snapshot.roundId} receipts={receipts} />
             </div>
           </div>
@@ -162,7 +171,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
                 <div>
                   <span className="terminal-label">Round</span>
                   <strong className="mt-1 block text-[14px]">
-                    <span className="font-mono">—</span>
+                    <span className="font-mono">--</span>
                     {" · "}
                     <span>CONNECTING</span>
                   </strong>
@@ -173,7 +182,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
                 </div>
                 <div className="text-right">
                   <span className="terminal-label">Pool</span>
-                  <strong className="mt-1 block text-[14px]">—</strong>
+                  <strong className="mt-1 block text-[14px]">--</strong>
                 </div>
               </header>
               <Board snapshot={SKELETON_SNAP} />

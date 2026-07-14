@@ -9,6 +9,9 @@ describe("ListingBanner", () => {
     expect(screen.getByText(/BEEF LISTING IN/i)).toBeInTheDocument();
     expect(screen.getByText("1h 40m")).toBeInTheDocument();
     expect(container).not.toHaveTextContent("🥩");
+    expect(container.querySelector(".border-l-bull-green")).toBeInTheDocument();
+    expect(container.querySelector(".text-bull-green")).toBeInTheDocument();
+    expect(container.querySelector(".border-l-bull-gold, .text-bull-gold")).toBeNull();
   });
 
   it("renders nothing when no listing time is configured", () => {

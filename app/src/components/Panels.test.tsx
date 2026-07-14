@@ -38,4 +38,14 @@ describe("ActivityFeed", () => {
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Round 5 claimable");
   });
+
+  it("presents a reveal event as a neutral draw update", () => {
+    const events: KeeperEvent[] = [
+      { type: "round.revealed", roundId: 8, jackpotSquare: 6 },
+    ];
+    const { container } = render(<ActivityFeed events={events} />);
+    expect(screen.getByText("Round 8 revealed Bull #7")).toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/jackpot|win|big pot/i);
+    expect(container.querySelector(".text-bull-gold")).toBeNull();
+  });
 });

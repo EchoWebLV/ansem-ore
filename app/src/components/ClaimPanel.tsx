@@ -27,7 +27,7 @@ export function ClaimPanel({ roundId, roundState, lastClaimedRound, busy, onClai
   const tag = refundable
     ? "· VOIDED"
     : won === true ? "· WON"
-    : won === false ? "· NO WIN — pot rolled to the jackpot"
+    : won === false ? "· NO WIN · pot rolled to the jackpot"
     : "· SETTLED";
   return (
     <section className={`terminal-panel flex flex-col gap-3 p-4 ${won === true && claimable ? "border-bull-gold/50" : ""}`}>
@@ -36,13 +36,15 @@ export function ClaimPanel({ roundId, roundState, lastClaimedRound, busy, onClai
         <div className="flex flex-wrap items-center justify-between gap-3">
           {claimByTs !== undefined && <ClaimCountdown deadlineTs={claimByTs} nowMs={nowMs} tone={won === true ? "gold" : "neutral"} />}
           {won === false ? (
-            <button disabled={busy} onClick={() => onClaim(roundId)} className="rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-sm disabled:opacity-40">Clear round</button>
+            <button disabled={busy} onClick={() => onClaim(roundId)} className="min-h-11 rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-sm disabled:opacity-40">Clear round</button>
+          ) : won === true ? (
+            <button disabled={busy} onClick={() => onClaim(roundId)} className="min-h-11 rounded-[9px] bg-bull-gold px-4 py-2 text-sm font-bold text-[#141109] disabled:opacity-40">Claim ANSEM</button>
           ) : (
-            <button disabled={busy} onClick={() => onClaim(roundId)} className={won === true ? "rounded-[9px] bg-bull-gold px-4 py-2 text-sm font-bold text-[#141109] disabled:opacity-40" : "rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-sm disabled:opacity-40"}>Claim ANSEM</button>
+            <button disabled={busy} onClick={() => onClaim(roundId)} className="min-h-11 rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-sm disabled:opacity-40">Resolve round</button>
           )}
         </div>
       ) : (
-        <button disabled={busy} onClick={() => onRefund(roundId)} className="self-start rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-sm disabled:opacity-40">Refund</button>
+        <button disabled={busy} onClick={() => onRefund(roundId)} className="min-h-11 self-start rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-sm disabled:opacity-40">Refund</button>
       )}
     </section>
   );

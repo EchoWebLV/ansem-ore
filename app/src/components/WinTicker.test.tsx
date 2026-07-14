@@ -13,13 +13,15 @@ describe("WinTicker", () => {
     ];
     const { container } = render(<WinTicker events={events} />);
     // duplicated for the seamless loop -> at least one copy of each highlight
-    expect(screen.getAllByText(/Bull #7 struck the big pot/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Round 8 revealed Bull #7/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Round 8 claimable/).length).toBeGreaterThan(0);
     // non-payoff lines never enter the wins ticker
     expect(screen.queryByText(/staked/)).toBeNull();
     expect(screen.queryByText(/Round 8 opened/)).toBeNull();
     expect(container.querySelector(".ticker-marquee")).toBeInTheDocument();
     expect(container.querySelector(".text-bull-gold")).toBeNull();
+    expect(screen.getByRole("marquee", { name: /recent round updates/i })).toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/jackpot|win|big pot/i);
   });
 
   it("shows a quiet idle line when there are no settle/claim events", () => {

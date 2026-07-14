@@ -24,7 +24,7 @@ describe("SoundToggle", () => {
     render(<SoundToggle />);
     const btn = screen.getByRole("button", { name: /toggle sound/i });
     expect(btn).toHaveAttribute("aria-pressed", "false"); // muted -> sound not on
-    expect(btn).toHaveClass("h-9", "w-9", "rounded-[9px]", "border");
+    expect(btn).toHaveClass("h-11", "w-11", "rounded-[9px]", "border");
   });
 
   it("click primes audio (the unlock gesture) and flips the state", () => {

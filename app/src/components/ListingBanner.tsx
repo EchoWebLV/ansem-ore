@@ -26,8 +26,8 @@ export function ListingBanner({ nowMs, listingTs }: { nowMs?: number; listingTs?
   if (left <= 0) return null; // listing time reached -> banner retires itself
 
   return (
-    <div className="terminal-panel border-l-2 border-l-bull-gold px-3 py-2 text-center">
-      <span className="terminal-label text-bull-gold">
+    <div className="terminal-panel border-l-2 border-l-bull-green px-3 py-2 text-center">
+      <span className="terminal-label text-bull-green">
         BEEF LISTING IN <span className="font-mono tabular-nums">{formatUntil(left)}</span>
       </span>
     </div>

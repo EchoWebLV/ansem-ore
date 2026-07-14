@@ -34,7 +34,7 @@ export function Hud({ snapshot, nowMs, reveal }: HudProps) {
           className="mt-1 font-mono text-[28px] font-medium tabular-nums"
           style={{ color: gold ? "#d6b75f" : "#f2f1e9" }}
         >
-          {reveal?.counter ?? (open ? <Countdown deadlineTs={snapshot.deadlineTs} nowMs={nowMs} /> : "—")}
+          {reveal?.counter ?? (open ? <Countdown deadlineTs={snapshot.deadlineTs} nowMs={nowMs} /> : "--")}
         </div>
         {reveal?.sub ? (
           <div className="mt-1 text-[10px] text-bull-muted">{reveal.sub.text}</div>

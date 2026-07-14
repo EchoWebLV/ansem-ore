@@ -27,7 +27,7 @@ export interface BoardProps {
   revealed?: number[] | null;
   /** Finale flag: the jackpot square flashes gold. */
   jackpotShown?: boolean;
-  /** Which show is running — the sweep finale plays the rollover sound, not the bell. */
+  /** Which reveal show is running. */
   revealMode?: "settle" | "sweep" | null;
 }
 
@@ -38,6 +38,7 @@ export interface BoardProps {
  */
 export function Board({ snapshot, selectedSquares = [], onSelect, revealed = null, jackpotShown, revealMode }: BoardProps) {
   const settled = snapshot.state >= RoundState.Settled;
+  const provenJackpot = settled && snapshot.jackpotSquare !== null && BigInt(snapshot.jackpotPool || "0") > 0n;
   const revealSet = revealed === null ? null : new Set(revealed);
 
   // Reveal cascade audio: chime the next rising note each time a cell is unveiled,
@@ -53,12 +54,12 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
   const jackpotRung = useRef(false);
   useEffect(() => {
     if (jackpotShown && !jackpotRung.current) {
-      // Sweep finales (empty round, no draw) get the soft rollover, not the bell.
-      if (revealMode === "sweep") playRollover(); else playJackpot();
+      // A draw alone does not prove a winner. Only a nonzero paid pool gets the bell.
+      if (provenJackpot) playJackpot(); else playRollover();
       jackpotRung.current = true;
     }
     if (!jackpotShown) jackpotRung.current = false;
-  }, [jackpotShown, revealMode]);
+  }, [jackpotShown, provenJackpot, revealMode]);
   return (
     <svg
       viewBox="0 0 400 348"
@@ -96,7 +97,7 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
         // Live board lights real stakes; during the reveal, cells light as unveiled.
         const lit = revealSet === null ? stake > 0n : revealSet.has(cell.id);
         // The jackpot flashes gold once settled — during the reveal only at the finale.
-        const jackpot = settled && snapshot.jackpotSquare === cell.id && (revealSet === null || jackpotShown === true);
+        const jackpot = provenJackpot && snapshot.jackpotSquare === cell.id && (revealSet === null || jackpotShown === true);
         const selected = selectedSquares.includes(cell.id);
         const stroke = selected ? C.ink : jackpot ? C.gold : lit ? C.green : C.dim;
         const fill = jackpot ? "url(#faceGold)" : lit ? "url(#faceLit)" : "url(#faceIdle)";
@@ -144,7 +145,6 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
                 stroke={stroke}
                 strokeWidth={jackpot ? 2.8 : selected ? 2.2 : 1.5}
                 strokeLinejoin="round"
-                style={{ transition: "all .18s" }}
               />
               {cell.eye && (
                 <circle

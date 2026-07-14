@@ -11,10 +11,15 @@ export interface StakeRailProps {
   enabled: boolean;
   busy: boolean;
   onStake: (squares: number[], amountPerSquare: BN) => void;
+  onRemoveSquare?: (square: number) => void;
+  /** Display-only reserve from PlayControls' existing affordability gate. */
+  feeReserveSol?: string;
 }
 
+const QUICK_AMOUNTS = ["0.01", "0.05", "0.1"] as const;
+
 // Direct-stake rail: ONE wallet approval moves the SOL into the pot.
-export function StakeRail({ selectedSquares, enabled, busy, onStake }: StakeRailProps) {
+export function StakeRail({ selectedSquares, enabled, busy, onStake, onRemoveSquare, feeReserveSol }: StakeRailProps) {
   const [amount, setAmount] = useState("");
   const parsed = solToLamports(amount);
   const n = selectedSquares.length;
@@ -28,14 +33,43 @@ export function StakeRail({ selectedSquares, enabled, busy, onStake }: StakeRail
       <div className="flex min-h-8 flex-wrap gap-1.5">
         {selectedSquares.length === 0
           ? <span className="text-[11px] text-bull-muted">Select tiles on the board</span>
-          : selectedSquares.map((square) => <span key={square} className="rounded-[7px] border border-bull-dim bg-bull-raised px-2 py-1 font-mono text-[11px] text-bull-green">#{String(square + 1).padStart(2, "0")}</span>)}
+          : selectedSquares.map((square) => {
+            const label = `#${String(square + 1).padStart(2, "0")}`;
+            return onRemoveSquare ? (
+              <button
+                key={square}
+                type="button"
+                aria-label={`Remove tile ${label}`}
+                onClick={() => onRemoveSquare(square)}
+                className="min-h-11 rounded-[7px] border border-bull-dim bg-bull-raised px-3 font-mono text-[11px] text-bull-green"
+              >
+                {label} <span aria-hidden>×</span>
+              </button>
+            ) : (
+              <span key={square} className="inline-flex min-h-11 items-center rounded-[7px] border border-bull-dim bg-bull-raised px-3 font-mono text-[11px] text-bull-green">{label}</span>
+            );
+          })}
       </div>
       <label htmlFor="stake-amount" className="mb-2 mt-4 block text-[11px] text-bull-muted">Amount per tile</label>
       <div className="flex items-center rounded-[10px] border border-bull-edge bg-bull-bg px-3 focus-within:border-bull-green">
         <input id="stake-amount" inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} className="min-w-0 flex-1 bg-transparent py-3 font-mono text-[18px] text-bull-ink outline-none" />
         <span className="text-[11px] font-semibold text-bull-muted">SOL</span>
       </div>
+      <div className="mt-2 grid grid-cols-3 gap-2" aria-label="Quick amounts">
+        {QUICK_AMOUNTS.map((quickAmount) => (
+          <button
+            key={quickAmount}
+            type="button"
+            aria-label={`Set amount to ${quickAmount} SOL`}
+            onClick={() => setAmount(quickAmount)}
+            className="min-h-11 rounded-[8px] border border-bull-edge bg-bull-raised px-2 font-mono text-[11px] text-bull-muted hover:border-bull-green/60 hover:text-bull-ink"
+          >
+            {quickAmount}
+          </button>
+        ))}
+      </div>
       {n > 0 && parsed && <p className="mt-3 flex justify-between text-[11px] text-bull-muted"><span>{n} × {amount} SOL</span><strong className="font-mono text-bull-ink">{formatSol(parsed.muln(n).toString())} total</strong></p>}
+      {feeReserveSol && <p className="mt-2 text-[11px] text-bull-muted">{feeReserveSol} SOL reserved for network fees</p>}
       <button disabled={!canStake} onClick={() => canStake && onStake(selectedSquares, parsed!)} className="terminal-primary mt-4 w-full">Place bet · one approval</button>
     </section>
   );

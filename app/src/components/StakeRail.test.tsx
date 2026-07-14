@@ -31,4 +31,28 @@ describe("StakeRail (direct-stake)", () => {
     fireEvent.change(screen.getByLabelText(/amount per tile/i), { target: { value: "0.02" } });
     expect(screen.getByRole("button", { name: /place bet · one approval/i })).toBeDisabled();
   });
+
+  it("renders selected tiles as 44px removable chips and removes exactly the chosen square", () => {
+    const onRemoveSquare = vi.fn();
+    render(<StakeRail selectedSquares={[4, 9]} enabled busy={false} onStake={vi.fn()} onRemoveSquare={onRemoveSquare} />);
+    const removeFive = screen.getByRole("button", { name: /remove tile #05/i });
+    expect(removeFive).toHaveClass("min-h-11");
+    fireEvent.click(removeFive);
+    expect(onRemoveSquare).toHaveBeenCalledTimes(1);
+    expect(onRemoveSquare).toHaveBeenCalledWith(4);
+  });
+
+  it("sets the existing amount input from 44px quick amount actions", () => {
+    render(<StakeRail selectedSquares={[4]} enabled busy={false} onStake={vi.fn()} />);
+    const quickAmount = screen.getByRole("button", { name: /set amount to 0\.05 sol/i });
+    expect(quickAmount).toHaveClass("min-h-11");
+    fireEvent.click(quickAmount);
+    expect(screen.getByLabelText(/amount per tile/i)).toHaveValue("0.05");
+    expect(screen.getByText(/0.05 SOL total/i)).toBeInTheDocument();
+  });
+
+  it("shows fee headroom passed from the existing stake gate", () => {
+    render(<StakeRail selectedSquares={[4]} enabled busy={false} onStake={vi.fn()} feeReserveSol="0.005" />);
+    expect(screen.getByText("0.005 SOL reserved for network fees")).toBeInTheDocument();
+  });
 });

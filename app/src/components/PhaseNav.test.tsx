@@ -9,9 +9,9 @@ describe("PhaseNav", () => {
     expect(t).toMatch(/bull\s*stake/i);
   });
 
-  it("preserves the phase navigation accessible name", () => {
+  it("uses a product-header navigation accessible name", () => {
     render(<PhaseNav />);
-    expect(screen.getByRole("navigation", { name: "BullStake phases" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "BullStake product navigation" })).toBeInTheDocument();
   });
 
   it("marks Play as the current product location without advertising unshipped phases", () => {
@@ -44,5 +44,12 @@ describe("PhaseNav", () => {
   it("uses the page shell padding only once on mobile", () => {
     render(<PhaseNav />);
     expect(screen.getByTestId("phase-nav")).toHaveClass("px-0");
+  });
+
+  it("keeps the wordmark visible and applies a narrow treatment below 360px", () => {
+    const { container } = render(<PhaseNav><button>SELECT WALLET</button></PhaseNav>);
+    expect(screen.getByText(/Bull/).parentElement).toHaveClass("whitespace-nowrap");
+    expect(container.querySelector('img[src="/bullstake-logo.svg"]')).toHaveClass("max-[359px]:hidden");
+    expect(screen.getByTestId("phase-nav")).toHaveClass("gap-2", "min-[360px]:gap-4");
   });
 });
