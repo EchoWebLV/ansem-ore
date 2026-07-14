@@ -83,4 +83,23 @@ describe("PlayBoard", () => {
     // Wallet balance surfaces so unaffordable stakes are self-explanatory.
     await waitFor(() => expect(screen.getByText(/wallet 0\.0591/i)).toBeInTheDocument());
   });
+
+  it("keeps the replay button available after the next round opens (persistent replay)", () => {
+    let captured: KeeperClientOpts | null = null;
+    const factory = (opts: KeeperClientOpts): KeeperClient => { captured = opts; return { start: () => {}, stop: () => {} }; };
+    render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" nowMs={900_000} clientFactory={factory} />);
+    act(() => {
+      captured!.onStatus?.("connected");
+      captured!.onSnapshot(wireSnap({ roundId: 77, state: RoundState.Settled, jackpotSquare: 3 }));
+    });
+    // The next round opens — previously the button died right here.
+    act(() => { captured!.onSnapshot(wireSnap({ roundId: 78, state: RoundState.Open })); });
+    expect(screen.getByRole("button", { name: /replay reveal/i })).toBeInTheDocument();
+  });
+
+  it("renders the abstract backdrop layer", () => {
+    const factory = (): KeeperClient => ({ start: () => {}, stop: () => {} });
+    render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" clientFactory={factory} />);
+    expect(screen.getByTestId("abstract-bg")).toBeInTheDocument();
+  });
 });

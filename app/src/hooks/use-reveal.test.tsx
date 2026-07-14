@@ -129,4 +129,59 @@ describe("useReveal", () => {
     expect(result.current.mode).toBe("settle");
     expect(result.current.revealed).toHaveLength(25);
   });
+
+  it("replays the last settled round during the next open round from its own snapshot, then self-dismisses", () => {
+    const settled = snap({ roundId: 9, state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "27720000" });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: settled } });
+    expect(result.current.canReplay).toBe(true); // old condition: current round is settled
+    act(() => { vi.advanceTimersByTime(10_000); });
+    rerender({ s: snap({ roundId: 10, state: RoundState.Open }) });
+    expect(result.current.revealed).toBeNull();
+    expect(result.current.canReplay).toBe(true); // the state where the old button died
+    act(() => { result.current.replay(); });
+    expect(result.current.snapshotOverride).toBe(settled); // Board must render the OLD round
+    expect(result.current.mode).toBe("settle");
+    expect(result.current.revealed).toEqual([]);
+    act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 900 + 20); });
+    expect(result.current.revealed).toHaveLength(25);
+    expect(result.current.jackpotShown).toBe(true);
+    expect(result.current.sub?.text).toMatch(/JACKPOT — bull #8/);
+    // Replays of past rounds self-dismiss after the dwell — back to the live board.
+    act(() => { vi.advanceTimersByTime(2600 + 20); });
+    expect(result.current.snapshotOverride).toBeNull();
+    expect(result.current.revealed).toBeNull();
+    expect(result.current.mode).toBeNull();
+    expect(result.current.canReplay).toBe(true); // still replayable again
+  });
+
+  it("sweeps are not replayable — canReplay stays false when only an empty round has run", () => {
+    const open = snap({ roundId: 9, pot: "0", blockSol: Array(25).fill("0") });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: open } });
+    rerender({ s: { ...open, state: RoundState.Closed } });
+    act(() => { vi.advanceTimersByTime(20_000); }); // sweep + dwell fully done
+    expect(result.current.canReplay).toBe(false);
+    rerender({ s: snap({ roundId: 10, state: RoundState.Open, pot: "0", blockSol: Array(25).fill("0") }) });
+    expect(result.current.canReplay).toBe(false);
+    act(() => { result.current.replay(); }); // must be a no-op
+    expect(result.current.revealed).toBeNull();
+  });
+
+  it("canReplay is false on a fresh mount into an open round", () => {
+    const { result } = renderHook(() => useReveal(snap({ roundId: 42 })));
+    expect(result.current.canReplay).toBe(false);
+  });
+
+  it("a newer settle overwrites the remembered show — replay plays the newest round", () => {
+    const s9 = snap({ roundId: 9, state: RoundState.Settled, jackpotSquare: 3, jackpotPool: "1000000" });
+    const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: s9 } });
+    act(() => { vi.advanceTimersByTime(10_000); });
+    rerender({ s: snap({ roundId: 10, state: RoundState.Open }) });
+    rerender({ s: snap({ roundId: 10, state: RoundState.Settled, jackpotSquare: 6, jackpotPool: "42000000" }) });
+    act(() => { vi.advanceTimersByTime(10_000); });
+    rerender({ s: snap({ roundId: 11, state: RoundState.Open }) });
+    act(() => { result.current.replay(); });
+    act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 900 + 20); });
+    expect(result.current.sub?.text).toMatch(/bull #7 struck/);
+    expect(result.current.counter).toBe("42.00");
+  });
 });

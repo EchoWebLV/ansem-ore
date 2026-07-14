@@ -9,6 +9,22 @@ button, a, [data-square] { touch-action: manipulation; }
 
 /* ---------- ambient stage (behind everything) ---------- */
 
+/* Abstract backdrop: faint flowing contour lines, deepest layer (behind .bg-aura's -2).
+   Static by design — no animation cost on Seeker-class mobile GPUs. */
+.abstract-bg {
+  position: fixed; inset: 0; z-index: -3; pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%201600%20900'%20preserveAspectRatio='xMidYMid%20slice'%3E%3Cg%20fill='none'%3E%3Cpath%20stroke='rgba(53,224,122,0.05)'%20stroke-width='1.2'%20d='M-80,760C280,640,560,780,900,620S1420,430,1720,300'/%3E%3Cpath%20stroke='rgba(53,224,122,0.05)'%20stroke-width='1.2'%20d='M-120,640C320,540,620,660,960,490S1460,310,1700,170'/%3E%3Cpath%20stroke='rgba(232,196,82,0.04)'%20stroke-width='1.5'%20d='M-60,860C360,750,700,840,1080,660S1520,530,1740,460'/%3E%3Cpath%20stroke='rgba(53,224,122,0.05)'%20stroke-width='1'%20d='M-100,520C300,460,640,560,980,400S1400,210,1680,70'/%3E%3Cpath%20stroke='rgba(53,224,122,0.05)'%20stroke-width='1.2'%20d='M-40,700C260,600,580,700,920,550S1440,380,1730,240'/%3E%3Cpath%20stroke='rgba(232,196,82,0.04)'%20stroke-width='1'%20d='M-90,420C310,350,630,440,970,290S1380,110,1660,-30'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: cover; background-position: center;
+}
+/* Ghosted brand watermark tucked into the corner — barely there. */
+.abstract-bg::after {
+  content: ""; position: absolute; right: -6%; bottom: -8%;
+  width: 55vmin; height: 55vmin;
+  background: url("/bullstake-logo.svg") no-repeat center / contain;
+  opacity: 0.025;
+  transform: rotate(-10deg);
+}
+
 .bg-aura {
   position: fixed; inset: 0; z-index: -2; pointer-events: none;
   background:

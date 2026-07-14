@@ -25,6 +25,14 @@ export interface RevealView {
   sub: { text: string; gold: boolean } | null;
   /** Which show is running: settle theater, the empty-round sweep, or none. */
   mode: "settle" | "sweep" | null;
+  /** True when there is a finished reveal to (re-)watch — drives the replay button. */
+  canReplay: boolean;
+  /**
+   * Non-null ONLY while a replay of a PAST round runs: the stored old snapshot.
+   * The Board/Hud must render from it so the gold square lands where it did
+   * on-chain (the live snapshot's jackpotSquare is null once a new round opens).
+   */
+  snapshotOverride: WireSnapshot | null;
   replay: () => void;
 }
 
@@ -46,8 +54,13 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   const [counter, setCounter] = useState<string | null>(null);
   const [sub, setSub] = useState<{ text: string; gold: boolean } | null>(null);
   const [mode, setMode] = useState<"settle" | "sweep" | null>(null);
+  const [snapshotOverride, setSnapshotOverride] = useState<WireSnapshot | null>(null);
   // The id of the round whose ENDING has been handled (settle theater, sweep, or refund).
   const playedRound = useRef<number>(0);
+  // The last REAL settle's snapshot (carries blockSol/jackpotSquare/jackpotPool),
+  // kept so the show can be re-watched anytime. Sweeps are not stored — replay
+  // is for actual jackpot reveals only.
+  const lastFinished = useRef<WireSnapshot | null>(null);
   // Previous snapshot (any frame), null on first load — how we spot a missed cancel window.
   const lastSnap = useRef<WireSnapshot | null>(null);
   // True while a sweep is mid-flight, so the next round's open can't cut it short.
@@ -62,6 +75,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   const resetToLive = () => {
     clear();
     sweeping.current = false;
+    setSnapshotOverride(null);
     setRevealed(null);
     setJackpotShown(false);
     setCounter(null);
@@ -69,10 +83,16 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
     setMode(null);
   };
 
-  const play = (snap: WireSnapshot) => {
+  const play = (
+    snap: WireSnapshot,
+    { selfDismiss = false, override = null }: { selfDismiss?: boolean; override?: WireSnapshot | null } = {},
+  ) => {
     clear();
     sweeping.current = false;
     const g = gen.current;
+    // Replays of past rounds hand their OWN snapshot to the board; natural
+    // settles clear any lingering ghost from an interrupted replay.
+    setSnapshotOverride(override);
     setMode("settle");
     setRevealed([]);
     setJackpotShown(false);
@@ -98,6 +118,14 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
         setSub({ text: `★ JACKPOT — bull #${snap.jackpotSquare + 1} struck the big pot`, gold: true });
       }
     }, STEP_BASE + n * STEP_MS + FINALE_MS));
+    if (selfDismiss) {
+      // Replay runs mid-Open-round must hand the board back, not squat on the
+      // live HUD — same dwell the sweep uses.
+      timers.current.push(setTimeout(() => {
+        if (gen.current !== g) return;
+        resetToLive();
+      }, STEP_BASE + n * STEP_MS + FINALE_MS + SWEEP_DWELL_MS));
+    }
   };
 
   /**
@@ -110,6 +138,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
     clear();
     sweeping.current = true;
     const g = gen.current;
+    setSnapshotOverride(null); // sweeps always narrate the live board
     setMode("sweep");
     setRevealed([]);
     setJackpotShown(false);
@@ -136,12 +165,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
     // Self-dismiss: the sweep must not squat on the (already open) next round's HUD.
     timers.current.push(setTimeout(() => {
       if (gen.current !== g) return;
-      sweeping.current = false;
-      setRevealed(null);
-      setJackpotShown(false);
-      setCounter(null);
-      setSub(null);
-      setMode(null);
+      resetToLive();
     }, STEP_BASE + n * STEP_MS + FINALE_MS + SWEEP_DWELL_MS));
   };
 
@@ -152,6 +176,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
       if (playedRound.current !== snapshot.roundId) {
         playedRound.current = snapshot.roundId;
         play(snapshot);
+        lastFinished.current = snapshot; // latest real reveal wins the replay slot
       }
     } else if (snapshot.state === RoundState.Closed && playedRound.current !== snapshot.roundId) {
       playedRound.current = snapshot.roundId;
@@ -190,9 +215,22 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   useEffect(() => clear, []);
 
   return {
-    revealed, jackpotShown, counter, sub, mode,
+    revealed, jackpotShown, counter, sub, mode, snapshotOverride,
+    canReplay:
+      lastFinished.current !== null ||
+      (snapshot !== null && snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed),
     replay: () => {
-      if (snapshot && snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed) play(snapshot);
+      if (snapshot && snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed) {
+        // The settled round is still on screen — replay it in place (persists
+        // until the next round opens, exactly the old behavior).
+        play(snapshot);
+        return;
+      }
+      const lf = lastFinished.current;
+      if (!lf) return;
+      // Replaying a PAST round: run its show from its own snapshot, then
+      // self-dismiss so the live round gets its board back.
+      play(lf, { selfDismiss: true, override: lf });
     },
   };
 }

@@ -66,6 +66,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
 
   return (
     <main className="min-h-screen text-white px-4 py-4 pb-[max(24px,env(safe-area-inset-bottom))] flex flex-col gap-4 max-w-[520px] lg:max-w-[1280px] lg:px-8 mx-auto">
+      <div className="abstract-bg" aria-hidden data-testid="abstract-bg" />
       <div className="bg-aura" aria-hidden />
       <div className="dust" aria-hidden />
       <div className="grid-floor hidden lg:block" aria-hidden />
@@ -103,18 +104,22 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
           <div className="lg:col-start-2 lg:row-start-1 lg:row-span-3">
             <Stage className="w-full mx-auto max-w-[460px] lg:max-w-[640px]">
               <div className="bg-[#0b0b0e] border border-[#23232a] rounded-[18px] p-[18px] lg:p-6 text-center shadow-[0_18px_60px_-24px_rgba(53,224,122,0.25)] lg:shadow-[0_30px_90px_-30px_rgba(53,224,122,0.35)]">
-                <Hud snapshot={snapshot} nowMs={nowMs} reveal={reveal} />
+                {/* During a replay of a PAST round, Hud+Board render the stored old
+                    snapshot (the gold square must land where it did on-chain); the
+                    write column below keeps the LIVE snapshot. Ghost rounds aren't
+                    clickable — the replay self-dismisses in seconds. */}
+                <Hud snapshot={reveal.snapshotOverride ?? snapshot} nowMs={nowMs} reveal={reveal} />
                 <div className="board-float">
                   <Board
-                    snapshot={snapshot}
+                    snapshot={reveal.snapshotOverride ?? snapshot}
                     selectedSquares={selected}
-                    onSelect={canPlay ? toggleSquare : undefined}
+                    onSelect={reveal.snapshotOverride ? undefined : canPlay ? toggleSquare : undefined}
                     revealed={reveal.revealed}
                     jackpotShown={reveal.jackpotShown}
                     revealMode={reveal.mode}
                   />
                 </div>
-                {snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed && (
+                {reveal.canReplay && reveal.revealed === null && (
                   <button
                     onClick={reveal.replay}
                     className="mt-2 rounded-full border border-[#35e07a] bg-transparent px-[18px] py-[8px] text-[13px] text-[#35e07a] hover:bg-[rgba(53,224,122,0.15)]"
