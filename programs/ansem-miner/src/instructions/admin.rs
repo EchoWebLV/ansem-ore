@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::constants::*;
 use crate::error::AnsemError;
-use crate::state::Config;
+use crate::state::{Config, JackpotConfig};
 
 #[derive(Accounts)]
 pub struct SetParams<'info> {
@@ -14,6 +14,59 @@ pub struct SetParams<'info> {
 
 pub fn set_round_duration(ctx: Context<SetParams>, secs: i64) -> Result<()> {
     ctx.accounts.config.round_duration_secs = secs;
+    Ok(())
+}
+
+// The fee dial promised in the design (spec D5): fee currently needs a program
+// upgrade to change (there was no setter). Launch sets 500 bps (5%). Hard-capped
+// at 2000 bps (20%) so a mis-set can never confiscate more than a fifth of a pot
+// (execute_swap's `pot - fee` also stays safely positive). Admin-gated via SetParams.
+pub fn set_fee_bps(ctx: Context<SetParams>, fee_bps: u16) -> Result<()> {
+    require!(fee_bps <= 2_000, AnsemError::BadFeeBps);
+    ctx.accounts.config.fee_bps = fee_bps;
+    Ok(())
+}
+
+// ---- Jackpot params PDA (spec D6): random-trigger + bet-scaled cap ----
+// A NEW PDA (not Config — the live mainnet Config must not change size). init_jackpot_config
+// must run in the SAME sitting as the program upgrade: swaps FAIL until it exists.
+#[derive(Accounts)]
+pub struct InitJackpotConfig<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.config_bump,
+        constraint = config.admin == admin.key() @ AnsemError::Unauthorized)]
+    pub config: Account<'info, Config>,
+    #[account(init, payer = admin, space = 8 + JackpotConfig::INIT_SPACE,
+        seeds = [JACKPOT_CONFIG_SEED], bump)]
+    pub jackpot_config: Account<'info, JackpotConfig>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn init_jackpot_config(ctx: Context<InitJackpotConfig>) -> Result<()> {
+    let jc = &mut ctx.accounts.jackpot_config;
+    jc.trigger_odds = DEFAULT_JACKPOT_TRIGGER_ODDS; // 1-in-25
+    jc.cap_mult = DEFAULT_JACKPOT_CAP_MULT; // 100x winning-square stake value
+    jc.bump = ctx.bumps.jackpot_config;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct SetJackpotParams<'info> {
+    pub admin: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.config_bump,
+        constraint = config.admin == admin.key() @ AnsemError::Unauthorized)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [JACKPOT_CONFIG_SEED], bump = jackpot_config.bump)]
+    pub jackpot_config: Account<'info, JackpotConfig>,
+}
+
+// Tune the trigger odds + bite cap with data. trigger_odds 0|1 restores the legacy
+// full-drain-every-winner behavior; cap_mult 0 = uncapped bite. Admin-gated.
+pub fn set_jackpot_params(ctx: Context<SetJackpotParams>, trigger_odds: u16, cap_mult: u16) -> Result<()> {
+    let jc = &mut ctx.accounts.jackpot_config;
+    jc.trigger_odds = trigger_odds;
+    jc.cap_mult = cap_mult;
     Ok(())
 }
 

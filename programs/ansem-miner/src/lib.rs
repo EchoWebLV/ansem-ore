@@ -99,6 +99,27 @@ pub mod ansem_miner {
         instructions::admin::set_stake_limits(ctx, min_stake, max_stake_per_round)
     }
 
+    // Fee dial (spec D5): set the pot fee in bps (launch 500 = 5%; hard cap 2000).
+    // Ungated; admin-gated via SetParams.
+    pub fn set_fee_bps(ctx: Context<SetParams>, fee_bps: u16) -> Result<()> {
+        instructions::admin::set_fee_bps(ctx, fee_bps)
+    }
+
+    // Jackpot params PDA (spec D6). init_jackpot_config seeds the trigger/cap PDA
+    // (must run in the same sitting as the program upgrade — swaps fail until it
+    // exists); set_jackpot_params tunes it. Both admin-gated.
+    pub fn init_jackpot_config(ctx: Context<InitJackpotConfig>) -> Result<()> {
+        instructions::admin::init_jackpot_config(ctx)
+    }
+
+    pub fn set_jackpot_params(
+        ctx: Context<SetJackpotParams>,
+        trigger_odds: u16,
+        cap_mult: u16,
+    ) -> Result<()> {
+        instructions::admin::set_jackpot_params(ctx, trigger_odds, cap_mult)
+    }
+
     // DEVNET/TEST-ONLY migration tool — see instructions/admin.rs::close_config.
     #[cfg(feature = "devnet")]
     pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {

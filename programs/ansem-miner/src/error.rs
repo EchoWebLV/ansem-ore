@@ -33,4 +33,5 @@ pub enum AnsemError {
     #[msg("Claim window still open — round not yet closeable")] ClaimWindowOpen,
     #[msg("Round is not in a closeable state")] RoundNotCloseable,
     #[msg("Invalid stake bounds (require 0 < min <= max)")] BadStakeBounds,
+    #[msg("Fee bps exceeds the 2000 (20%) ceiling")] BadFeeBps,
 }

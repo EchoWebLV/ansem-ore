@@ -11,7 +11,7 @@ use anchor_spl::token_interface::{
 use crate::constants::*;
 use crate::error::AnsemError;
 use crate::math;
-use crate::state::{Config, Round, STATE_CLAIMABLE, STATE_SETTLED};
+use crate::state::{Config, JackpotConfig, Round, STATE_CLAIMABLE, STATE_SETTLED};
 
 // Everything after the ANSEM proceeds (`ansem_out`) are known — identical for the mock
 // (PDA-mint) and the real (keeper-inventory) swap: split losers' returns from the
@@ -26,6 +26,8 @@ pub(crate) fn finalize_swap_accounting(
     mult_min_bps: u16,
     mult_max_bps: u16,
     rollover_in: u64,
+    trigger_odds: u16,
+    cap_mult: u16,
 ) -> Result<()> {
     round.swap_proceeds = ansem_out;
 
@@ -42,13 +44,30 @@ pub(crate) fn finalize_swap_accounting(
     );
     let nj_total = math::nonjackpot_payout(nj_weight, round.pot, ansem_out);
     let round_leftover = ansem_out.checked_sub(nj_total).ok_or(AnsemError::Overflow)?;
+    // Jackpot: random-trigger + bet-scaled cap (spec D6). The winning-square stakers
+    // ALWAYS split this round's own leftover; only the accumulated ROLLOVER is gated —
+    // it pays out (the "bite") only on a triggered round, capped to cap_mult x the
+    // winning-square stake's ANSEM value. The remainder keeps rolling. This kills the
+    // blanket-every-square farm: the trigger is unknowable pre-close, so guaranteeing
+    // the pot means blanketing every round at full size (unprofitable at 1-in-N + fee).
     let new_rollover: u64 = if round.block_sol[jsq] > 0 {
-        // A winner staked the jackpot square: they split this round's leftover PLUS the
-        // accumulated rollover; consume the rollover.
-        round.jackpot_pool = round_leftover
-            .checked_add(rollover_in)
-            .ok_or(AnsemError::Overflow)?;
-        0
+        let triggered = math::jackpot_triggered(&round.randomness, trigger_odds);
+        // UNIT BRIDGE: rollover/jackpot_pool are ANSEM base units; block_sol stakes are
+        // LAMPORTS. Convert the winning-square stake to ANSEM at THIS round's realized
+        // rate (ansem_out / pot) before applying the multiplier. round.pot.max(1) guards
+        // a 0-pot divide (a jackpot-square stake implies pot>0, so this only matters
+        // defensively).
+        let bite = if !triggered {
+            0
+        } else if cap_mult == 0 {
+            rollover_in
+        } else {
+            let stake_value_ansem =
+                (round.block_sol[jsq] as u128 * ansem_out as u128) / round.pot.max(1) as u128;
+            (cap_mult as u128 * stake_value_ansem).min(rollover_in as u128) as u64
+        };
+        round.jackpot_pool = round_leftover.checked_add(bite).ok_or(AnsemError::Overflow)?;
+        rollover_in - bite
     } else {
         // No winner: carry this round's leftover forward. It stays as unclaimed ANSEM in
         // payout_vault and grows the next round's jackpot.
@@ -90,6 +109,11 @@ pub struct ExecuteSwapMock<'info> {
 
     #[account(mut, seeds = [ROUND_SEED, round.round_id.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Box<Account<'info, Round>>,
+
+    // Jackpot trigger/cap params (spec D6). Read-only here; swaps FAIL until
+    // init_jackpot_config has run (deploy must upgrade + init in one sitting).
+    #[account(seeds = [JACKPOT_CONFIG_SEED], bump = jackpot_config.bump)]
+    pub jackpot_config: Box<Account<'info, JackpotConfig>>,
 
     #[account(mut, address = config.ansem_mint)]
     pub ansem_mint: Box<InterfaceAccount<'info, Mint>>,
@@ -135,6 +159,8 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
     let mult_min_bps = ctx.accounts.config.mult_min_bps;
     let mult_max_bps = ctx.accounts.config.mult_max_bps;
     let rollover_in = ctx.accounts.config.rollover_jackpot;
+    let trigger_odds = ctx.accounts.jackpot_config.trigger_odds;
+    let cap_mult = ctx.accounts.jackpot_config.cap_mult;
 
     require!(swap_mode == SWAP_MODE_MOCK, AnsemError::WrongSwapMode);
     require!(ctx.accounts.round.state == STATE_SETTLED, AnsemError::BadRoundState);
@@ -196,6 +222,8 @@ pub fn execute_swap_mock_handler(ctx: Context<ExecuteSwapMock>) -> Result<()> {
         mult_min_bps,
         mult_max_bps,
         rollover_in,
+        trigger_odds,
+        cap_mult,
     )
 }
 
@@ -216,6 +244,11 @@ pub struct ExecuteSwapReal<'info> {
 
     #[account(mut, seeds = [ROUND_SEED, round.round_id.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Box<Account<'info, Round>>,
+
+    // Jackpot trigger/cap params (spec D6). Read-only here; swaps FAIL until
+    // init_jackpot_config has run (deploy must upgrade + init in one sitting).
+    #[account(seeds = [JACKPOT_CONFIG_SEED], bump = jackpot_config.bump)]
+    pub jackpot_config: Box<Account<'info, JackpotConfig>>,
 
     #[account(address = config.ansem_mint)]
     pub ansem_mint: Box<InterfaceAccount<'info, Mint>>,
@@ -261,6 +294,8 @@ pub fn execute_swap_real_handler(ctx: Context<ExecuteSwapReal>, ansem_out: u64) 
     let rollover_in = ctx.accounts.config.rollover_jackpot;
     let min_swap_rate = ctx.accounts.config.min_swap_rate;
     let obligations_before = ctx.accounts.config.ansem_obligations;
+    let trigger_odds = ctx.accounts.jackpot_config.trigger_odds;
+    let cap_mult = ctx.accounts.jackpot_config.cap_mult;
     // transfer_checked needs the mint's decimals (Token-2022 requirement). Read it as a
     // scalar copy up front so the mint InterfaceAccount isn't borrowed across the CPI.
     let ansem_decimals = ctx.accounts.ansem_mint.decimals;
@@ -336,5 +371,7 @@ pub fn execute_swap_real_handler(ctx: Context<ExecuteSwapReal>, ansem_out: u64) 
         mult_min_bps,
         mult_max_bps,
         rollover_in,
+        trigger_odds,
+        cap_mult,
     )
 }
