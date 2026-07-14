@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey, Keypair } from "@solana/web3.js";
-import { assert } from "chai";
+import { assert, expect } from "chai";
 import {
   createMint,
   mintTo,
@@ -415,18 +415,30 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(r.state, 2, "round still SETTLED (SPL transfer failure reverted)");
   });
 
-  it("execute_swap_real: pot -> treasury, ansem_out pulled FROM the keeper ATA (no mint), state CLAIMABLE", async () => {
+  it("rent reserve: execute_swap_real keeps the pot vault alive while moving the exact pot", async () => {
     const cfg0: any = await program.account.config.fetch(configPda);
     const r0: any = await program.account.round.fetch(roundPda);
     const pot = BigInt(r0.pot.toString());
 
-    const potVaultBefore = BigInt(await provider.connection.getBalance(potVault));
-    const treasuryBefore = BigInt(await provider.connection.getBalance(treasury));
+    const potVaultBefore = await provider.connection.getBalance(potVault);
+    const treasuryBefore = await provider.connection.getBalance(treasury);
     const sourceBefore = await balOf(keeperAta);
     const payoutBefore = await balOf(payoutVault);
     const supplyBefore = (await getMint(provider.connection, ansemMint!, undefined, TOKEN_2022_PROGRAM_ID)).supply;
     assert.equal(cfg0.ansemObligations.toString(), "0", "no obligations before the first swap");
     assert.equal(cfg0.rolloverJackpot.toString(), "0", "no rollover before the first swap");
+    assert.equal(potVaultBefore, Number(pot), "the pot vault has no residual balance");
+
+    await provider.sendAndConfirm(
+      new anchor.web3.Transaction().add(
+        anchor.web3.SystemProgram.transfer({
+          fromPubkey: deployer.publicKey,
+          toPubkey: potVault,
+          lamports: 1_000,
+        })
+      )
+    );
+    expect(await provider.connection.getBalance(potVault)).to.equal(Number(pot) + 1_000);
 
     await (program.methods as any)
       .executeSwapReal(ANSEM_OUT)
@@ -434,11 +446,13 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
       .signers([keeperAdmin])
       .rpc();
 
-    // SOL pot moved out of pot_vault into treasury, exactly `pot`.
-    const potVaultAfter = BigInt(await provider.connection.getBalance(potVault));
-    const treasuryAfter = BigInt(await provider.connection.getBalance(treasury));
-    assert.equal((potVaultBefore - potVaultAfter).toString(), pot.toString(), "pot left pot_vault");
-    assert.equal((treasuryAfter - treasuryBefore).toString(), pot.toString(), "pot landed in treasury");
+    // SOL pot moved out exactly, while the pot_vault remains rent-exempt.
+    const postSwapPotVaultLamports = await provider.connection.getBalance(potVault);
+    const postSwapTreasuryLamports = await provider.connection.getBalance(treasury);
+    expect(postSwapPotVaultLamports).to.be.gte(
+      await provider.connection.getMinimumBalanceForRentExemption(0)
+    );
+    expect(postSwapTreasuryLamports - treasuryBefore).to.equal(Number(pot));
 
     // ANSEM proceeds came FROM the keeper ATA (no minting): source -ansem_out,
     // payout +ansem_out, and the mint's total supply is UNCHANGED.
