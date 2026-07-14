@@ -8,10 +8,14 @@ export interface ConfigState {
   roundDurationSecs: number; feeBps: number; multMinBps: number; multMaxBps: number;
   minStake: bigint; maxStakePerRound: bigint; mockRate: bigint; totalEscrowBalance: bigint;
   rolloverJackpot: bigint; currentRoundFinalized: boolean;
+  // Mainnet real-payout layer (plan 2026-07-14): ANSEM solvency ledger, claim window, swap floor.
+  ansemObligations: bigint; claimWindowSecs: number; minSwapRate: bigint;
 }
 export interface RoundStateData {
   roundId: number; deadlineTs: number; blockSol: bigint[]; pot: bigint; state: RoundState;
   randomness: number[]; jackpotSquare: number; jackpotPool: bigint; swapProceeds: bigint;
+  // Mainnet real-payout layer: entitlement ceiling frozen at swap + running claimed total.
+  entitlementTotal: bigint; claimedProceeds: bigint;
 }
 export interface MinerState { authority: string; roundId: number; blockStake: bigint[]; }
 export interface EscrowState {
@@ -38,6 +42,8 @@ export async function fetchConfig(program: Program<AnsemMiner>, config: PublicKe
     maxStakePerRound: big(c.maxStakePerRound), mockRate: big(c.mockRate),
     totalEscrowBalance: big(c.totalEscrowBalance), rolloverJackpot: big(c.rolloverJackpot),
     currentRoundFinalized: c.currentRoundFinalized,
+    ansemObligations: big(c.ansemObligations), claimWindowSecs: n(c.claimWindowSecs),
+    minSwapRate: big(c.minSwapRate),
   };
 }
 export async function fetchRound(program: Program<AnsemMiner>, round: PublicKey): Promise<RoundStateData> {
@@ -46,6 +52,7 @@ export async function fetchRound(program: Program<AnsemMiner>, round: PublicKey)
     roundId: n(r.roundId), deadlineTs: n(r.deadlineTs), blockSol: r.blockSol.map(big), pot: big(r.pot),
     state: r.state as RoundState, randomness: r.randomness, jackpotSquare: r.jackpotSquare,
     jackpotPool: big(r.jackpotPool), swapProceeds: big(r.swapProceeds),
+    entitlementTotal: big(r.entitlementTotal), claimedProceeds: big(r.claimedProceeds),
   };
 }
 export async function fetchMiner(program: Program<AnsemMiner>, miner: PublicKey): Promise<MinerState | null> {

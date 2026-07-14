@@ -44,6 +44,10 @@ export enum RoundState {
   Closed = 5,
 }
 
+// Upgradeable BPF loader — its [programId] PDA is the ProgramData account that
+// gates initialize_real to the program's upgrade authority (see programDataPda).
+export const BPF_LOADER_UPGRADEABLE_ID = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
+
 // Known devnet infra
 export const DLP_PROGRAM_ID = new PublicKey("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
 export const GUM_PROGRAM_ID = new PublicKey("KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5");

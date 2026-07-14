@@ -3,8 +3,8 @@ import { BN } from "../bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { AnsemMiner } from "../idl/ansem_miner.js";
 import { configPda, roundPda, payoutVault, vaultAuthPda, mintAuthPda, potVaultPda, treasuryPda, ansemMintPda,
-  beefConfigPda, beefRoundPda } from "../pdas.js";
-import { VRF_BASE_QUEUE } from "../constants.js";
+  beefConfigPda, beefRoundPda, payoutVaultForMint, ataForMint, programDataPda } from "../pdas.js";
+import { VRF_BASE_QUEUE, PROGRAM_ID } from "../constants.js";
 
 const validatorMeta = (v: PublicKey) => [{ pubkey: v, isSigner: false, isWritable: false }];
 
@@ -65,3 +65,67 @@ export const stampBeefIx = (p: Program<AnsemMiner>, payer: PublicKey, roundId: n
     payer, config: configPda(), round: roundPda(roundId),
     beefConfig: beefConfigPda(), beefVault, beefRound: beefRoundPda(roundId),
   });
+
+// ---- Mainnet real-payout layer (plan 2026-07-14, Task 6) ----
+// initialize_real / execute_swap_real / sweep_* / close_round / set_* live in the
+// no-feature (mainnet) binary; the mock initialize + execute_swap_mock above are the
+// devnet-feature counterparts. In real mode `ansemMint` is the EXTERNAL ANSEM mint
+// (config.ansem_mint), so payout/source token accounts derive against it, not the PDA mint.
+
+/**
+ * initialize_real — the mainnet init path. SIGNER is the program's UPGRADE AUTHORITY
+ * (the deploy wallet, gated by the program_data.upgrade_authority constraint), which
+ * kills init-squatting; `keeperAdmin` becomes config.admin (the Railway hot key that
+ * cranks the admin-gated ixs). Binds the pre-existing external `ansemMint`.
+ */
+export const initializeRealIx = (
+  p: Program<AnsemMiner>, upgradeAuthority: PublicKey, keeperAdmin: PublicKey, ansemMint: PublicKey,
+) => p.methods.initializeReal(keeperAdmin).accountsPartial({
+  admin: upgradeAuthority, ansemMint, program: PROGRAM_ID, programData: programDataPda(),
+});
+
+/**
+ * execute_swap_real — mainnet payout: pull `ansemOut` of the real external mint out of
+ * the keeper's own ATA (`sourceAta`) into the payout vault (no minting), pot -> treasury.
+ * Admin-gated on config.admin == payer inside the accounts.
+ */
+export const executeSwapRealIx = (
+  p: Program<AnsemMiner>, keeper: PublicKey, roundId: number, ansemOut: BN, ansemMint: PublicKey,
+) => p.methods.executeSwapReal(ansemOut).accountsPartial({
+  payer: keeper, round: roundPda(roundId), ansemMint,
+  vaultAuthority: vaultAuthPda(),
+  payoutVault: payoutVaultForMint(ansemMint),
+  sourceAta: ataForMint(ansemMint, keeper),
+  potVault: potVaultPda(), treasury: treasuryPda(),
+});
+
+/** sweep_treasury — admin exit: move `amount` treasury lamports to any `destination`. */
+export const sweepTreasuryIx = (p: Program<AnsemMiner>, admin: PublicKey, amount: BN, destination: PublicKey) =>
+  p.methods.sweepTreasury(amount).accountsPartial({ admin, treasury: treasuryPda(), destination });
+
+/**
+ * sweep_beef_excess — admin exit for BEEF above the total_owed solvency floor. `beefVault`
+ * is passed explicitly (its address is a runtime beef_config field, not a static PDA — same
+ * convention as the other beef builders); `destinationAta` is the admin-named BEEF ATA.
+ */
+export const sweepBeefExcessIx = (
+  p: Program<AnsemMiner>, admin: PublicKey, amount: BN, beefVault: PublicKey, destinationAta: PublicKey,
+) => p.methods.sweepBeefExcess(amount).accountsPartial({
+  admin, config: configPda(), beefConfig: beefConfigPda(), vaultAuthority: vaultAuthPda(),
+  beefVault, destinationAta,
+});
+
+/**
+ * close_round — permissionless rent-recycler (gates are time + state, not identity). `roundId`
+ * is used CLIENT-SIDE only to seed the Round PDA; the on-chain ix takes no args. `adminDest`
+ * must equal config.admin (the close rent sink); passed explicitly to keep the builder
+ * synchronous like the rest — the keeper crank fetches config.admin once and threads it in.
+ */
+export const closeRoundIx = (p: Program<AnsemMiner>, caller: PublicKey, roundId: number, adminDest: PublicKey) =>
+  p.methods.closeRound().accountsPartial({ caller, round: roundPda(roundId), adminDest });
+
+// Admin setters (SetParams) — mainnet claim-window + swap-rate floor tuners.
+export const setClaimWindowIx = (p: Program<AnsemMiner>, admin: PublicKey, secs: number) =>
+  p.methods.setClaimWindow(new BN(secs)).accountsPartial({ admin });
+export const setMinSwapRateIx = (p: Program<AnsemMiner>, admin: PublicKey, rate: BN) =>
+  p.methods.setMinSwapRate(rate).accountsPartial({ admin });

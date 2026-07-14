@@ -1,7 +1,7 @@
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { BN } from "./bn.js";
-import { PROGRAM_ID, GUM_PROGRAM_ID, SEED } from "./constants.js";
+import { PROGRAM_ID, GUM_PROGRAM_ID, BPF_LOADER_UPGRADEABLE_ID, SEED } from "./constants.js";
 
 const enc = (s: string) => Buffer.from(s);
 const u64le = (id: number | bigint) => new BN(id.toString()).toArrayLike(Buffer, "le", 8);
@@ -22,6 +22,23 @@ export const escrowPda = (wallet: PublicKey) => pda([enc(SEED.escrow), wallet.to
 /** Single lottery payout vault = the vault-authority ATA of the ANSEM mint. */
 export const payoutVault = () => getAssociatedTokenAddressSync(ansemMintPda(), vaultAuthPda(), true);
 export const playerAta = (wallet: PublicKey) => getAssociatedTokenAddressSync(ansemMintPda(), wallet);
+
+// ---- Mainnet real-payout layer (external ANSEM mint) ----
+// In real mode config.ansem_mint is a pre-existing EXTERNAL mint (not the PDA mint),
+// so payout/source token accounts must be derived against that mint, not ansemMintPda.
+
+/** Payout vault (vault-authority ATA) for an arbitrary mint — the real-ANSEM payout vault. */
+export const payoutVaultForMint = (mint: PublicKey) => getAssociatedTokenAddressSync(mint, vaultAuthPda(), true);
+/** A wallet's ATA for an arbitrary mint (e.g. the keeper's real-ANSEM inventory ATA). */
+export const ataForMint = (mint: PublicKey, owner: PublicKey) => getAssociatedTokenAddressSync(mint, owner);
+
+/**
+ * ProgramData PDA = [programId] under the upgradeable BPF loader. This is the account
+ * whose `upgrade_authority_address` gates initialize_real, so the builder derives it and
+ * the deploy/upgrade-authority wallet signs.
+ */
+export const programDataPda = (programId = PROGRAM_ID) =>
+  pda([programId.toBuffer()], BPF_LOADER_UPGRADEABLE_ID);
 
 /** Gum SessionTokenV2 PDA: ["session_token_v2", targetProgram, sessionSigner, authorityWallet]. */
 export const sessionTokenPda = (sessionSigner: PublicKey, authorityWallet: PublicKey, target = PROGRAM_ID) =>
