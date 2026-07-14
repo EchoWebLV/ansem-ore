@@ -39,4 +39,23 @@ describe("Hud", () => {
     expect(screen.getByText("1 SOL")).toBeInTheDocument();
     expect(screen.queryByText(/jackpot/i)).toBeNull();
   });
+
+  it("mounts an optional chip after the pool in the responsive HUD grid", () => {
+    render(<Hud snapshot={snap()} nowMs={900_000} chipSlot={<button type="button">BEEF claim</button>} />);
+
+    const header = screen.getByLabelText("Round information");
+    const pool = screen.getByText("Pool").parentElement;
+    const chipSlot = screen.getByTestId("hud-chip-slot");
+
+    expect(header).toHaveClass("sm:grid-cols-[1fr_auto_1fr_auto]");
+    expect(chipSlot).toHaveTextContent("BEEF claim");
+    expect(chipSlot).toHaveClass("col-span-3", "sm:col-span-1", "sm:ml-3");
+    expect(pool?.nextElementSibling).toBe(chipSlot);
+  });
+
+  it("omits the chip mount when no chip is supplied", () => {
+    render(<Hud snapshot={snap()} nowMs={900_000} />);
+
+    expect(screen.queryByTestId("hud-chip-slot")).toBeNull();
+  });
 });
