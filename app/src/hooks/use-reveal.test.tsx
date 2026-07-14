@@ -10,7 +10,7 @@ const snap = (over: Partial<WireSnapshot> = {}): WireSnapshot => ({
 });
 
 describe("useReveal", () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => { vi.useFakeTimers(); window.localStorage.clear(); });
   afterEach(() => vi.useRealTimers());
 
   it("plays the full reveal once a round settles: 25 cells then the gold jackpot finale", () => {
@@ -164,11 +164,44 @@ describe("useReveal", () => {
     expect(result.current.canReplay).toBe(false);
     act(() => { result.current.replay(); }); // must be a no-op
     expect(result.current.revealed).toBeNull();
+    // Sweeps are never persisted either — nothing to hydrate after a reload.
+    expect(window.localStorage.getItem("ansem.lastReveal.v1")).toBeNull();
   });
 
   it("canReplay is false on a fresh mount into an open round", () => {
     const { result } = renderHook(() => useReveal(snap({ roundId: 42 })));
     expect(result.current.canReplay).toBe(false);
+  });
+
+  it("persists the settled snapshot to localStorage for post-reload replay", () => {
+    const settled = snap({ roundId: 9, state: RoundState.Settled, jackpotSquare: 7 });
+    renderHook(() => useReveal(settled));
+    const raw = window.localStorage.getItem("ansem.lastReveal.v1");
+    expect(raw).not.toBeNull();
+    expect(JSON.parse(raw!)).toMatchObject({ roundId: 9, jackpotSquare: 7 });
+  });
+
+  it("hydrates replay from localStorage — Replay exists right after a reload", () => {
+    const stored = snap({ roundId: 8, state: RoundState.Settled, jackpotSquare: 4, jackpotPool: "5000000" });
+    window.localStorage.setItem("ansem.lastReveal.v1", JSON.stringify(stored));
+    const { result } = renderHook(() => useReveal(snap({ roundId: 9, state: RoundState.Open })));
+    expect(result.current.canReplay).toBe(true);
+    act(() => { result.current.replay(); });
+    expect(result.current.snapshotOverride).toMatchObject({ roundId: 8, jackpotSquare: 4 });
+    expect(result.current.mode).toBe("settle");
+    act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 900 + 20); });
+    expect(result.current.jackpotShown).toBe(true);
+    expect(result.current.sub?.text).toMatch(/bull #5/);
+  });
+
+  it("ignores garbage in the replay key — canReplay stays false, no throw", () => {
+    window.localStorage.setItem("ansem.lastReveal.v1", "{not json");
+    const { result } = renderHook(() => useReveal(snap({ roundId: 9 })));
+    expect(result.current.canReplay).toBe(false);
+    // Valid JSON with the wrong shape is discarded too (no jackpot square = no show).
+    window.localStorage.setItem("ansem.lastReveal.v1", JSON.stringify({ blockSol: [], jackpotSquare: null }));
+    const second = renderHook(() => useReveal(snap({ roundId: 9 })));
+    expect(second.result.current.canReplay).toBe(false);
   });
 
   it("a newer settle overwrites the remembered show — replay plays the newest round", () => {

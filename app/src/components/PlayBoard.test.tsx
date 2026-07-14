@@ -99,6 +99,15 @@ describe("PlayBoard", () => {
     expect(screen.getByRole("button", { name: /replay reveal/i })).toBeInTheDocument();
   });
 
+  it("shows exactly ONE countdown and ONE liveness surface — no duplicated facts", () => {
+    renderWithSnapshot(); // open round 77: deadline 1000s, now 900s -> 01:40
+    // The HUD owns the timer; the strip must not render a second one.
+    expect(screen.getAllByText("01:40")).toHaveLength(1);
+    // The strip dot+label is the only keeper-status surface (old KEEPER: line gone).
+    expect(screen.getByText("LIVE")).toBeInTheDocument();
+    expect(screen.queryByText(/^KEEPER:/)).toBeNull();
+  });
+
   it("renders the abstract backdrop layer", () => {
     const factory = (): KeeperClient => ({ start: () => {}, stop: () => {} });
     render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" clientFactory={factory} />);

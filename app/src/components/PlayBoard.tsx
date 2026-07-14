@@ -18,11 +18,9 @@ import { primeAudio } from "../lib/sound.js";
 import { PlayControls } from "./PlayControls.js";
 import { Stage } from "./Stage.js";
 import { VerifyPanel, type Receipt, type ReceiptInput } from "./VerifyPanel.js";
-import { Countdown } from "./Countdown.js";
 import { JackpotMeter } from "./JackpotMeter.js";
 import { WinTicker } from "./WinTicker.js";
 import { ListingBanner } from "./ListingBanner.js";
-import { stateLabel } from "../lib/format.js";
 
 // Instant-boot placeholder: the real board geometry with zeroed data, so the
 // page looks loaded the moment it paints while the keeper link comes up.
@@ -72,6 +70,14 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
   // only exist at lg and the DOM order IS the mobile order.
   const goldFinale = reveal.jackpotShown && reveal.sub?.gold === true;
 
+  // ONE liveness surface: keeper status folds into the strip's dot + label.
+  const liveness =
+    status === "connected"
+      ? { dot: "bg-bull-green", label: "LIVE", pulse: false }
+      : status === "connecting"
+        ? { dot: "bg-bull-dim", label: "LINKING…", pulse: true }
+        : { dot: "bg-bull-gold", label: "RECONNECTING…", pulse: false };
+
   return (
     <main className="min-h-screen text-white px-4 py-4 pb-[max(24px,env(safe-area-inset-bottom))] flex flex-col gap-4 max-w-[520px] lg:max-w-[1280px] lg:px-8 mx-auto">
       <div className="abstract-bg" aria-hidden data-testid="abstract-bg" />
@@ -83,24 +89,18 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
         <SoundToggle />
         <WalletBar />
       </PhaseNav>
-      <div className="text-[10px] tracking-widest text-bull-muted text-right">
-        KEEPER: {status.toUpperCase()}
-      </div>
       <ListingBanner />
       {snapshot ? (
         <>
-          {/* Liveness strip: a persistent live clock/status + recent-wins marquee. */}
+          {/* Liveness strip: status dot + recent-wins marquee. The HUD owns the
+              countdown; the meter card owns the jackpot — no duplicated facts. */}
           <div className="flex items-center gap-3 rounded-xl border border-bull-edge bg-bull-bg px-3 py-2">
             <div className="flex items-center gap-2 shrink-0">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-bull-green animate-pulse" aria-hidden />
-              <span className="text-[10px] tracking-widest text-bull-muted">LIVE</span>
-              <span className="font-mono tabular-nums text-sm text-bull-green">
-                {snapshot.state === RoundState.Open ? (
-                  <Countdown deadlineTs={snapshot.deadlineTs} nowMs={nowMs} />
-                ) : (
-                  stateLabel(snapshot.state)
-                )}
-              </span>
+              <span
+                className={`inline-block h-1.5 w-1.5 rounded-full ${liveness.dot}${liveness.pulse ? " animate-pulse" : ""}`}
+                aria-hidden
+              />
+              <span className="text-[10px] tracking-widest text-bull-muted">{liveness.label}</span>
             </div>
             <div className="h-4 w-px bg-bull-edge shrink-0" aria-hidden />
             <WinTicker events={events.length ? events : snapshot.recentEvents} />

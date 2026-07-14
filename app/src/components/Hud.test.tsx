@@ -24,15 +24,11 @@ describe("Hud", () => {
     expect(screen.getByText("REVEALED")).toBeInTheDocument();
   });
 
-  it("shows the ROLLING rollover jackpot in ANSEM while the round pool is unstamped (open)", () => {
-    // The exact confusion from live play: open round, round.jackpotPool still 0 on-chain,
-    // 3_044.9034 ANSEM waiting in config.rolloverJackpot — the HUD must surface it.
-    render(<Hud snapshot={snap({ jackpotPool: "0", rolloverJackpot: "3044903400" })} nowMs={900_000} />);
-    expect(screen.getByText(/jackpot 3044\.9 ANSEM rolling/)).toBeInTheDocument();
-  });
-
-  it("shows the stamped round pool in ANSEM (never SOL units) once swap funds it", () => {
-    render(<Hud snapshot={snap({ jackpotPool: "27720000", rolloverJackpot: "0" })} nowMs={900_000} />);
-    expect(screen.getByText(/jackpot 27\.72 ANSEM/)).toBeInTheDocument();
+  it("open-state sub shows the pot ONLY — the jackpot lives exclusively in the meter card", () => {
+    // ONE FACT, ONE PLACE: even with a stamped pool AND a rollover present, the
+    // HUD sub line must not duplicate the JackpotMeter's number.
+    render(<Hud snapshot={snap({ jackpotPool: "27720000", rolloverJackpot: "3044903400" })} nowMs={900_000} />);
+    expect(screen.getByText(/pot 1 SOL/)).toBeInTheDocument();
+    expect(screen.queryByText(/jackpot/i)).toBeNull();
   });
 });

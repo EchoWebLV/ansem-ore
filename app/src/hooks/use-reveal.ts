@@ -39,6 +39,8 @@ export interface RevealView {
 const STEP_BASE = 320, STEP_MS = 105, END_CHOKE = 90, FINALE_MS = 900;
 /** How long the sweep finale lingers before handing the HUD back to the live round. */
 const SWEEP_DWELL_MS = 2600;
+/** Where the last real reveal is parked so ▶ Replay survives a page reload. */
+const LAST_REVEAL_KEY = "ansem.lastReveal.v1";
 
 function shuffle<T>(a: T[]): T[] {
   for (let i = a.length - 1; i > 0; i--) {
@@ -55,6 +57,9 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   const [sub, setSub] = useState<{ text: string; gold: boolean } | null>(null);
   const [mode, setMode] = useState<"settle" | "sweep" | null>(null);
   const [snapshotOverride, setSnapshotOverride] = useState<WireSnapshot | null>(null);
+  // Bumped once when hydration restores a stored reveal, so canReplay (computed
+  // from a ref at render time) surfaces without waiting for the next snapshot.
+  const [, forceRender] = useState(0);
   // The id of the round whose ENDING has been handled (settle theater, sweep, or refund).
   const playedRound = useRef<number>(0);
   // The last REAL settle's snapshot (carries blockSol/jackpotSquare/jackpotPool),
@@ -177,6 +182,8 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
         playedRound.current = snapshot.roundId;
         play(snapshot);
         lastFinished.current = snapshot; // latest real reveal wins the replay slot
+        // Best-effort persistence: replay should survive a reload (quota/SSR misses are fine).
+        try { window.localStorage?.setItem(LAST_REVEAL_KEY, JSON.stringify(snapshot)); } catch { /* ignore */ }
       }
     } else if (snapshot.state === RoundState.Closed && playedRound.current !== snapshot.roundId) {
       playedRound.current = snapshot.roundId;
@@ -211,6 +218,22 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   // run in declaration order), so `lastSnap` always holds the true prior frame —
   // including pot growth ticks that never re-fire the decision effect.
   useEffect(() => { lastSnap.current = snapshot; });
+
+  // One-time hydration: restore the last real reveal after a reload. Runs in an
+  // effect (not render) so SSR markup stays canReplay-false and hydration matches.
+  useEffect(() => {
+    if (lastFinished.current !== null || typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage?.getItem(LAST_REVEAL_KEY);
+      if (!raw) return;
+      const stored = JSON.parse(raw) as WireSnapshot;
+      // Minimal shape check: a replayable show needs a full board and a real draw.
+      if (Array.isArray(stored?.blockSol) && stored.blockSol.length === 25 && stored.jackpotSquare != null) {
+        lastFinished.current = stored;
+        forceRender((x) => x + 1);
+      }
+    } catch { /* corrupted key — replay simply stays unavailable */ }
+  }, []);
 
   useEffect(() => clear, []);
 
