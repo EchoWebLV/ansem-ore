@@ -12,6 +12,7 @@ import { Hud } from "./Hud.js";
 import { Leaderboard } from "./Leaderboard.js";
 import { ActivityFeed } from "./ActivityFeed.js";
 import { WalletBar } from "./WalletBar.js";
+import { PhaseNav } from "./PhaseNav.js";
 import { PlayControls } from "./PlayControls.js";
 import { Stage } from "./Stage.js";
 import { VerifyPanel, type Receipt, type ReceiptInput } from "./VerifyPanel.js";
@@ -53,6 +54,7 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
       <div className="dust" aria-hidden />
       <div className="grid-floor hidden lg:block" aria-hidden />
       <div className="vignette hidden lg:block" aria-hidden />
+      <PhaseNav />
       <WalletBar />
       <div className="text-[10px] tracking-widest text-bull-muted text-right">
         KEEPER: {status.toUpperCase()}

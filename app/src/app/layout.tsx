@@ -3,8 +3,8 @@ import "./globals.css";
 import { Providers } from "../components/Providers.js";
 
 export const metadata: Metadata = {
-  title: "ANSEM Miner — Bull Board",
-  description: "Stake the bull. 60-second rounds, verifiable on-chain.",
+  title: "BullStake — ANSEM Miner (Phase I)",
+  description: "BullStake: bet SOL, win ANSEM. Winner-take-all rounds, provably fair via on-chain VRF.",
 };
 
 export const viewport: Viewport = {

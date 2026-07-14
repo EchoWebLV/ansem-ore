@@ -68,14 +68,15 @@ describe("PlayBoard", () => {
 
   it("hides the write column until a wallet + L1 program are present", () => {
     renderWithSnapshot(); // ctl.l1 = null, ctl.wallet = null
-    expect(screen.queryByText(/STAKE/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /stake · one approval/i })).toBeNull();
   });
 
   it("shows the direct-stake write column (one-approval rail + wallet balance) once connected", async () => {
     ctl.l1 = {}; ctl.wallet = { publicKey: { toBase58: () => "Wallet1111" } };
     renderWithSnapshot();
-    await waitFor(() => expect(screen.getByText("STAKE")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: /stake · one approval/i })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /stake · one approval/i })).toBeInTheDocument(),
+    );
     // No escrow lifecycle anywhere in direct mode.
     expect(screen.queryByText(/ESCROW/)).toBeNull();
     expect(screen.queryByRole("button", { name: /enter round/i })).toBeNull();
