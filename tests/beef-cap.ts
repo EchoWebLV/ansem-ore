@@ -2,8 +2,8 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey, Keypair } from "@solana/web3.js";
-import { assert } from "chai";
-import { createMint, createAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { assert, expect } from "chai";
+import { createMint, createAccount, getAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 const enc = (s: string) => Buffer.from(s);
 const u64le = (n: number) => new anchor.BN(n).toArrayLike(Buffer, "le", 8);
@@ -100,6 +100,11 @@ describe("beef hard-cap exhaustion", () => {
   }
   const mintedTotal = async (): Promise<bigint> =>
     BigInt((await program.account.beefConfig.fetch(beefConfigPda)).mintedTotal.toString());
+  const assertCollateralized = async () => {
+    const bc = await program.account.beefConfig.fetch(beefConfigPda);
+    const vault = await getAccount(provider.connection, beefVault);
+    expect(vault.amount >= BigInt(bc.totalOwed.toString())).to.equal(true);
+  };
 
   it("bootstraps with a LOW hard_cap (120_000_000)", async () => {
     await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc()
@@ -112,14 +117,19 @@ describe("beef hard-cap exhaustion", () => {
 
     await program.methods
       .initBeef(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
-        new anchor.BN(HARD_CAP.toString()), Number(TREASURY_BPS), 3, 30_000, new anchor.BN(86_400), new anchor.BN(60))
+        new anchor.BN(HARD_CAP.toString()), Number(TREASURY_BPS), 0, 0, new anchor.BN(86_400), new anchor.BN(60))
       .accounts({ admin: admin.publicKey, beefMint, vaultAuthority: vaultAuth, beefVault, beefTreasury }).rpc();
-    assert.equal((await mintedTotal()).toString(), "0");
+    const bc = await program.account.beefConfig.fetch(beefConfigPda);
+    assert.equal(bc.tickBps, 0);
+    assert.equal(bc.bonusCapBps, 0);
+    assert.equal(bc.mintedTotal.toString(), "0");
+    await assertCollateralized();
   });
 
   it("genesis 1-SOL round mints 105_000_000 (decay factor 1)", async () => {
     await playAndStamp(1_000_000_000);
     assert.equal((await mintedTotal()).toString(), "105000000", "genesis fills 105M of the 120M cap");
+    await assertCollateralized();
   });
 
   it("a 2-SOL round is CLAMPED to the 15_000_000 remainder (not the 17_500_000 curve*decay)", async () => {
@@ -131,6 +141,7 @@ describe("beef hard-cap exhaustion", () => {
     // players' share of the clamped 15M total: 15M - 20% = 12M.
     const br = await program.account.beefRound.fetch(beefRoundOf(r.id));
     assert.equal(br.emission.toString(), "12000000", "BeefRound.emission == players' 80% of the remainder");
+    await assertCollateralized();
   });
 
   it("every round after exhaustion mints 0 (emission stops forever at the cap)", async () => {
@@ -140,5 +151,6 @@ describe("beef hard-cap exhaustion", () => {
     assert.equal((after - before).toString(), "0", "past the cap -> zero mint");
     const br = await program.account.beefRound.fetch(beefRoundOf(r.id));
     assert.equal(br.emission.toString(), "0", "BeefRound.emission == 0 at/after the cap");
+    await assertCollateralized();
   });
 });

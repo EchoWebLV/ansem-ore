@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey, Keypair, Transaction } from "@solana/web3.js";
-import { assert } from "chai";
+import { assert, expect } from "chai";
 import { createMint, createAccount, getAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 const enc = (s: string) => Buffer.from(s);
@@ -12,8 +12,8 @@ const u64le = (n: number) => new anchor.BN(n).toArrayLike(Buffer, "le", 8);
 // Supersedes the dormant vault-drip divisor model: stamp_beef no longer drains a
 // pre-funded vault — it MINTS each round's emission (players' 80% into the vault
 // buffer, treasury's 20% straight to a pinned ATA) from a program-owned classic-SPL
-// mint whose authority is the vault_authority PDA. Fresh local validator; FAST
-// bonus params (secs_per_tick=1) so hold-to-grow is testable in wall-clock seconds.
+// mint whose authority is the vault_authority PDA. Fresh local validator; bonus
+// parameters stay disabled so every liability is backed by minted vault tokens.
 //
 // The suite mirrors the on-chain emission math (programs/ansem-miner/src/math.rs
 // `beef_emission`, decay-aware) in TS so every assertion is EXACT regardless of the
@@ -46,13 +46,13 @@ describe("beef mint-on-emission", () => {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const STAKE_WINDOW = 12;
 
-  // ---- Launch emission params (constants.rs BEEF_*). FAST bonus for in-test hold. ----
+  // ---- Launch emission params (constants.rs BEEF_*). Base emissions only. ----
   const MAX_ROUND_MINT = 210_000_000n; // 210 BEEF @6dp
   const SAT = 1_000_000_000n;          // half-max at 1 SOL pot
   const HARD_CAP = 21_000_000_000_000n; // 21,000,000 BEEF — decay ~= 1 for this suite
   const TREASURY_BPS = 2_000n;         // 20%
-  const TICK_BPS = 1000;               // +10%/tick (fast, so seconds pin a bonus)
-  const BONUS_CAP_BPS = 30_000;        // +300% -> 4x
+  const TICK_BPS = 0;
+  const BONUS_CAP_BPS = 0;
   const WINDOW = 86_400;
   const SECS_PER_TICK = 1;
 
@@ -204,17 +204,19 @@ describe("beef mint-on-emission", () => {
     assert.equal(bc.maxRoundMint.toString(), MAX_ROUND_MINT.toString());
     assert.equal(bc.hardCap.toString(), HARD_CAP.toString());
     assert.equal(bc.treasuryBps, Number(TREASURY_BPS));
+    assert.equal(bc.tickBps, 0);
+    assert.equal(bc.bonusCapBps, 0);
     assert.equal(bc.mintedTotal.toString(), "0");
     assert.equal(bc.totalOwed.toString(), "0");
   });
 
-  it("set_beef_params tunes the curve/bonus knobs (admin-gated); cannot touch mint/vault/cap", async () => {
+  it("set_beef_params tunes the curve with base-only params (admin-gated); cannot touch mint/vault/cap", async () => {
     await program.methods.setBeefParams(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
       TICK_BPS, BONUS_CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
       .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
     const outsider = await fundedPlayer(1);
     try {
-      await program.methods.setBeefParams(new anchor.BN(1), new anchor.BN(1), 1, 1, new anchor.BN(1), new anchor.BN(1))
+      await program.methods.setBeefParams(new anchor.BN(1), new anchor.BN(1), 0, 0, new anchor.BN(1), new anchor.BN(1))
         .accounts({ admin: outsider.publicKey, config: configPda, beefConfig: beefConfigPda })
         .signers([outsider]).rpc();
       assert.fail("non-admin must not set beef params");
@@ -224,6 +226,36 @@ describe("beef mint-on-emission", () => {
     assert.equal(bc.beefMint.toBase58(), beefMint.toBase58());
     assert.equal(bc.hardCap.toString(), HARD_CAP.toString());
     assert.equal(bc.treasuryBps, Number(TREASURY_BPS));
+    assert.equal(bc.tickBps, 0);
+    assert.equal(bc.bonusCapBps, 0);
+  });
+
+  async function expectBadBeefParams(tickBps: number, bonusCapBps: number, label: string) {
+    let error: unknown;
+    try {
+      await program.methods.setBeefParams(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
+        tickBps, bonusCapBps, new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
+        .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
+    } catch (e: unknown) {
+      error = e;
+    }
+
+    // Keep the shared fixture base-only even when the current program wrongly
+    // accepts the invalid update. This prevents one RED assertion cascading.
+    await program.methods.setBeefParams(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
+      0, 0, new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
+      .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
+
+    assert.isDefined(error, `set_beef_params accepted ${label}`);
+    assert.include(String(error), "BadBeefParams");
+  }
+
+  it("rejects tick_bps > 0 with bonus_cap_bps = 0", async () => {
+    await expectBadBeefParams(1, 0, "tick_bps > 0 with bonus_cap_bps = 0");
+  });
+
+  it("rejects tick_bps = 0 with bonus_cap_bps > 0", async () => {
+    await expectBadBeefParams(0, 1, "tick_bps = 0 with bonus_cap_bps > 0");
   });
 
   it("HEADLINE: a 1-SOL pot mints exactly 105_000_000 -> 84_000_000 vault + 21_000_000 treasury", async () => {
@@ -259,6 +291,8 @@ describe("beef mint-on-emission", () => {
     const bc = await program.account.beefConfig.fetch(beefConfigPda);
     assert.equal(bc.mintedTotal.toString(), "105000000", "minted_total counts BOTH shares");
     assert.equal(bc.totalOwed.toString(), "84000000", "total_owed tracks only the players' liability");
+    expect((await getAccount(provider.connection, beefVault)).amount >= BigInt(bc.totalOwed.toString()))
+      .to.equal(true);
 
     // double-stamp: BeefRound is `init` -> second call fails at the account level.
     try {
@@ -316,6 +350,45 @@ describe("beef mint-on-emission", () => {
     assert.equal(again.unclaimed.toString(), "63000000");
   });
 
+  it("activity time adds no liability; roll + claim pays exactly the stamped base emission", async () => {
+    const stamped = BigInt((await program.account.beefRound.fetch(beefRoundOf(round1.id))).emission.toString());
+    const bcBeforeActivity = await program.account.beefConfig.fetch(beefConfigPda);
+    const vaultBeforeActivity = await getAccount(provider.connection, beefVault);
+    const p1BeforeActivity = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
+    const p2BeforeActivity = await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey));
+
+    assert.equal(stamped.toString(), "84000000");
+    assert.equal(vaultBeforeActivity.amount.toString(), stamped.toString(), "fresh vault equals stamped player emission");
+    assert.equal(bcBeforeActivity.totalOwed.toString(), stamped.toString(), "fresh liability equals stamped player emission");
+    expect(vaultBeforeActivity.amount >= BigInt(bcBeforeActivity.totalOwed.toString())).to.equal(true);
+
+    await sleep(2500); // multiple tick intervals pass, but base-only config cannot accrue a bonus
+
+    const bcAfterActivity = await program.account.beefConfig.fetch(beefConfigPda);
+    const p1AfterActivity = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
+    const p2AfterActivity = await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey));
+    assert.equal(p1AfterActivity.unclaimed.toString(), p1BeforeActivity.unclaimed.toString(), "activity time did not grow p1 shares");
+    assert.equal(p2AfterActivity.unclaimed.toString(), p2BeforeActivity.unclaimed.toString(), "activity time did not grow p2 shares");
+    assert.equal(bcAfterActivity.totalOwed.toString(), bcBeforeActivity.totalOwed.toString(), "activity time did not grow total_owed");
+
+    await program.methods.claimBeef().accounts(claimBeefAccts(p1.publicKey)).signers([p1]).rpc();
+    await program.methods.claimBeef().accounts(claimBeefAccts(p2.publicKey)).signers([p2]).rpc();
+
+    const p1Paid = BigInt((await getAccount(provider.connection,
+      getAssociatedTokenAddressSync(beefMint, p1.publicKey))).amount.toString());
+    const p2Paid = BigInt((await getAccount(provider.connection,
+      getAssociatedTokenAddressSync(beefMint, p2.publicKey))).amount.toString());
+    assert.equal(p1Paid.toString(), p1BeforeActivity.unclaimed.toString(), "p1 received only base entitlement");
+    assert.equal(p2Paid.toString(), p2BeforeActivity.unclaimed.toString(), "p2 received only base entitlement");
+    assert.equal((p1Paid + p2Paid).toString(), stamped.toString(), "claims equal exact stamped player emission");
+
+    const bcAfterClaims = await program.account.beefConfig.fetch(beefConfigPda);
+    const vaultAfterClaims = await getAccount(provider.connection, beefVault);
+    assert.equal(bcAfterClaims.totalOwed.toString(), "0", "fresh liability delta returns to zero after claims");
+    assert.equal(vaultAfterClaims.amount.toString(), "0", "fresh vault delta returns to zero after claims");
+    expect(vaultAfterClaims.amount >= BigInt(bcAfterClaims.totalOwed.toString())).to.equal(true);
+  });
+
   it("bundle order [roll_beef, claim_direct] in ONE tx preserves the BEEF share", async () => {
     const p3 = await fundedPlayer();
     const { round: r, pot, mintedBefore } = await playRound([{ kp: p3, square: 5, amount: 200_000_000 }]);
@@ -348,39 +421,11 @@ describe("beef mint-on-emission", () => {
     assert.equal(bm.unclaimed.toString(), "0", "stakes zeroed pre-roll -> zero share (no error)");
   });
 
-  it("claim_beef pays from the vault with the hold-to-grow bonus; decrements owed; resets; double-claim pays zero", async () => {
-    // p2 holds 21_000_000 from round1; secs_per_tick=1 & tick=1000bps mean real
-    // seconds have accrued a bonus. Vault (84M base, only p2 claims) comfortably
-    // covers 21M*(1+bonus) for a modest bonus, so the transfer stays solvent.
-    const bcBefore = await program.account.beefConfig.fetch(beefConfigPda);
-    const base = BigInt((await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey))).unclaimed.toString());
-    assert.equal(base.toString(), "21000000");
-    await sleep(2500); // >=1 tick -> a strictly positive bonus
-
-    await program.methods.claimBeef().accounts(claimBeefAccts(p2.publicKey)).signers([p2]).rpc();
-
-    const ata = getAssociatedTokenAddressSync(beefMint, p2.publicKey);
-    const got = BigInt((await getAccount(provider.connection, ata)).amount.toString());
-    assert.isTrue(got > base, "hold-to-grow: payout strictly exceeds base (bonus applied)");
-    assert.isTrue(got <= base * 4n, "payout never beyond the 4x cap");
-
-    const bm = await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey));
-    assert.equal(bm.unclaimed.toString(), "0", "full reset");
-    assert.equal(bm.bonusBps, 0);
-    const bc = await program.account.beefConfig.fetch(beefConfigPda);
-    assert.isTrue(BigInt(bc.totalOwed.toString()) < BigInt(bcBefore.totalOwed.toString()), "owed shrank by the payout");
-
-    // double claim: nothing moves.
-    await program.methods.claimBeef().accounts(claimBeefAccts(p2.publicKey)).signers([p2]).rpc();
-    const got2 = BigInt((await getAccount(provider.connection, ata)).amount.toString());
-    assert.equal(got2.toString(), got.toString());
-  });
-
   it("INVARIANT: a zero-emission round (max_round_mint 0) stamps 0 and the ANSEM game is untouched", async () => {
     // The minted analogue of the old "drained vault" invariant: emission floors to
     // 0, roll/claim no-op, and the ANSEM claim pays exactly as in the no-BEEF world.
     await program.methods.setBeefParams(new anchor.BN(0), new anchor.BN(SAT.toString()),
-      TICK_BPS, BONUS_CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
+      0, 0, new anchor.BN(WINDOW), new anchor.BN(1))
       .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
 
     const p5 = await fundedPlayer();
@@ -401,7 +446,7 @@ describe("beef mint-on-emission", () => {
 
     // restore live params for anything that follows.
     await program.methods.setBeefParams(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
-      TICK_BPS, BONUS_CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
+      0, 0, new anchor.BN(WINDOW), new anchor.BN(1))
       .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
   });
 
@@ -410,16 +455,13 @@ describe("beef mint-on-emission", () => {
     // (players' buffer, minus anything already claimed out) and the treasury ATA.
     // Because a claim moves BEEF OUT of the vault to a player ATA, we reconcile against
     // total minted = vault + treasury + claimed-out. claimed-out = minted_total -
-    // (vault + treasury). It must be >= 0 (no phantom supply) and, since only p2 has
-    // claimed, equal to p2's realized payout region.
+    // (vault + treasury). It must be >= 0 (no phantom supply).
     const bc = await program.account.beefConfig.fetch(beefConfigPda);
     const vaultAmt = BigInt((await getAccount(provider.connection, beefVault)).amount.toString());
     const treAmt = BigInt((await getAccount(provider.connection, beefTreasury)).amount.toString());
     const minted = BigInt(bc.mintedTotal.toString());
     const claimedOut = minted - vaultAmt - treAmt;
     assert.isTrue(claimedOut >= 0n, "no phantom supply: minted >= vault + treasury");
-    // total_owed (players' liability) can never exceed what remains in the vault PLUS
-    // the surplus already paid — i.e. the vault still covers the un-bonused base owed.
-    assert.isTrue(BigInt(bc.totalOwed.toString()) >= 0n);
+    expect(vaultAmt >= BigInt(bc.totalOwed.toString())).to.equal(true);
   });
 });
