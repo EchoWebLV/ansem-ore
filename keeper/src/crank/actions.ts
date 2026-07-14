@@ -1,14 +1,16 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { Program } from "@coral-xyz/anchor";
 import {
-  AnsemMiner, roundPda, minerPda, escrowPda,
+  AnsemMiner, BN, roundPda, minerPda, escrowPda, ataForMint,
   createRoundIx, delegateRoundIx, requestSettleIx, commitRoundIx, commitMinerIx,
-  reconcileMinerIx, executeSwapMockIx, cancelRoundIx, setRoundDurationIx, stampBeefIx,
+  reconcileMinerIx, executeSwapMockIx, executeSwapRealIx, cancelRoundIx, setRoundDurationIx, stampBeefIx,
   erRpcTolerant, retryPastDeadline, l1Send, awaitOwnerIs, flushCommit, fetchMiner,
   DLP_PROGRAM_ID, PROGRAM_ID,
+  type ConfigState, type RoundStateData,
 } from "@ansem/sdk";
 import type { Logger } from "../logger.js";
 import { fetchJoinedWallets } from "../participants.js";
+import { quoteSolToAnsem, FetchLike } from "../jupiter.js";
 
 export interface ActionCtx {
   conn: Connection;
@@ -25,6 +27,15 @@ export interface ActionCtx {
   /** BEEF emission layer: set at startup if BeefConfig exists on-chain. */
   beefEnabled?: boolean;
   beefVault?: PublicKey;
+  // ---- Real-payout swap (plan 2026-07-14, Task 7) ----
+  /** "real" routes finalize through Jupiter + execute_swap_real; "mock" mints synthetic ANSEM. */
+  swapMode: "mock" | "real";
+  jupBaseUrl: string;
+  slippageBps: number;
+  /** Alert floor (ANSEM base units): warn when keeper inventory drops below this. 0 disables. */
+  inventoryMinAnsem: bigint;
+  /** Injected so the Jupiter quote is stubbable in tests; defaults to global fetch in service. */
+  fetchImpl: FetchLike;
   log: Logger;
 }
 
@@ -137,15 +148,88 @@ export async function finalizeSettled(_roundId: number, deps: FinalizeDeps): Pro
   }
 }
 
-export function liveFinalizeDeps(ctx: ActionCtx, roundId: number): FinalizeDeps {
+// ---- Real-mode swap leg (Jupiter quote -> keeper-inventory execute_swap_real) ----
+
+/** Injected surface so the quote / inventory-gate / send sequence is unit-testable. */
+export interface RealSwapDeps {
+  /** Quote net SOL (lamports) -> ANSEM base units via Jupiter. */
+  quote: (netLamports: bigint) => Promise<bigint>;
+  /** Current keeper ANSEM ATA balance (base units). */
+  inventory: () => Promise<bigint>;
+  /** Send execute_swap_real for `ansemOut`. */
+  sendSwap: (ansemOut: bigint) => Promise<void>;
+  log: Logger;
+}
+
+/**
+ * SETTLED real-mode payout: fee off the pot, quote the net SOL -> ANSEM, then GATE on
+ * keeper inventory. If the ATA can't cover the quoted payout we log an error and return
+ * WITHOUT sending — the tick retries next pass (buyback refills between). Only when the
+ * inventory covers it do we send execute_swap_real, which pulls the exact amount in-ix.
+ * feeBps comes from the fetched config (never hardcoded).
+ */
+export async function realExecuteSwap(
+  roundId: number,
+  pot: bigint,
+  feeBps: number,
+  inventoryMin: bigint,
+  deps: RealSwapDeps,
+): Promise<void> {
+  const fee = (pot * BigInt(feeBps)) / 10_000n;
+  const net = pot - fee;
+  const ansemOut = await deps.quote(net);
+  const have = await deps.inventory();
+  if (have < ansemOut) {
+    deps.log.error("inventory short — real swap deferred (tick retries)", {
+      roundId, need: ansemOut.toString(), have: have.toString(),
+    });
+    return; // NO send: leave the round SETTLED so the next tick retries after refill
+  }
+  if (inventoryMin > 0n && have < inventoryMin) {
+    deps.log.warn("keeper ANSEM inventory below alert floor", {
+      roundId, have: have.toString(), floor: inventoryMin.toString(),
+    });
+  }
+  await deps.sendSwap(ansemOut);
+}
+
+/** Live real-swap deps: Jupiter quote + on-chain ATA balance + execute_swap_real send. */
+export function liveRealSwapDeps(ctx: ActionCtx, roundId: number, config: ConfigState): RealSwapDeps {
+  const ansemMint = new PublicKey(config.ansemMint);
+  return {
+    quote: (net) =>
+      quoteSolToAnsem(
+        { jupBaseUrl: ctx.jupBaseUrl, ansemMint: config.ansemMint, slippageBps: ctx.slippageBps },
+        ctx.fetchImpl, net,
+      ),
+    inventory: async () => {
+      const ata = ataForMint(ansemMint, ctx.keeper);
+      const bal = await ctx.conn.getTokenAccountBalance(ata).catch(() => null);
+      return bal ? BigInt(bal.value.amount) : 0n;
+    },
+    sendSwap: async (ansemOut) => {
+      await l1Send(() =>
+        executeSwapRealIx(ctx.program, ctx.keeper, roundId, new BN(ansemOut.toString()), ansemMint).rpc());
+      ctx.log.info("round swapped (real) -> CLAIMABLE", { roundId, ansemOut: ansemOut.toString() });
+    },
+    log: ctx.log,
+  };
+}
+
+export function liveFinalizeDeps(
+  ctx: ActionCtx, roundId: number, config: ConfigState, round: RoundStateData,
+): FinalizeDeps {
+  const executeSwap = ctx.swapMode === "real"
+    ? () => realExecuteSwap(roundId, round.pot, config.feeBps, ctx.inventoryMinAnsem, liveRealSwapDeps(ctx, roundId, config))
+    : async () => {
+        await l1Send(() => executeSwapMockIx(ctx.program, ctx.keeper, roundId).rpc());
+        ctx.log.info("round swapped -> CLAIMABLE", { roundId });
+      };
   return {
     joinedWallets: () => fetchJoinedWallets(ctx.conn, roundId),
     reconcileMiner: (w) =>
       l1Send(() => reconcileMinerIx(ctx.program, roundId, escrowPda(w), minerPda(w)).rpc()),
-    executeSwap: async () => {
-      await l1Send(() => executeSwapMockIx(ctx.program, ctx.keeper, roundId).rpc());
-      ctx.log.info("round swapped -> CLAIMABLE", { roundId });
-    },
+    executeSwap,
     stampBeef: ctx.beefEnabled && ctx.beefVault ? async () => {
       await l1Send(() => stampBeefIx(ctx.program, ctx.keeper, roundId, ctx.beefVault!).rpc());
       ctx.log.info("beef emission stamped", { roundId });

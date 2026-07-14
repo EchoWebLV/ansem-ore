@@ -1,8 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { PublicKey } from "@solana/web3.js";
-import { commitToL1, CommitDeps, finalizeSettled, FinalizeDeps, isNotThisRoundError } from "../src/crank/actions.js";
+import {
+  commitToL1, CommitDeps, finalizeSettled, FinalizeDeps, isNotThisRoundError,
+  realExecuteSwap, RealSwapDeps,
+} from "../src/crank/actions.js";
 
 const wallet = () => PublicKey.unique();
+
+// A logger stub that records the level + fields of each call for assertions.
+function recordingLog() {
+  const errors: { m: string; f?: any }[] = [];
+  const warns: { m: string; f?: any }[] = [];
+  const log = {
+    info: () => {},
+    warn: (m: string, f?: any) => { warns.push({ m, f }); },
+    error: (m: string, f?: any) => { errors.push({ m, f }); },
+  };
+  return { log, errors, warns };
+}
 
 describe("commitToL1", () => {
   it("commits every joined miner, then the round -- in order", async () => {
@@ -106,5 +121,53 @@ describe("finalizeSettled + BEEF stamp", () => {
       executeSwap: async () => { calls.push("swap"); },
     });
     expect(calls).toEqual(["swap"]);
+  });
+});
+
+describe("realExecuteSwap (real-mode payout guard)", () => {
+  it("quotes net-of-fee SOL and sends execute_swap_real when inventory covers the payout", async () => {
+    const { log } = recordingLog();
+    let quotedNet: bigint | null = null;
+    let sent: bigint | null = null;
+    const deps: RealSwapDeps = {
+      quote: async (net) => { quotedNet = net; return 1000n; },
+      inventory: async () => 5000n,
+      sendSwap: async (out) => { sent = out; },
+      log,
+    };
+    // pot 1_000_000, feeBps 500 (5%) -> net 950_000
+    await realExecuteSwap(42, 1_000_000n, 500, 0n, deps);
+    expect(quotedNet).toBe(950_000n);
+    expect(sent).toBe(1000n); // sends exactly the quoted ANSEM out
+  });
+
+  it("does NOT send and logs error when inventory is short (leave SETTLED, tick retries)", async () => {
+    const { log, errors } = recordingLog();
+    let sent = false;
+    const deps: RealSwapDeps = {
+      quote: async () => 10_000n,
+      inventory: async () => 9_999n, // one base unit short of the payout
+      sendSwap: async () => { sent = true; },
+      log,
+    };
+    await realExecuteSwap(42, 1_000_000n, 0, 0n, deps);
+    expect(sent).toBe(false);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].m).toMatch(/inventory short/);
+    expect(errors[0].f).toMatchObject({ need: "10000", have: "9999" });
+  });
+
+  it("warns (but still sends) when inventory covers the payout yet sits below the alert floor", async () => {
+    const { log, warns } = recordingLog();
+    let sent = false;
+    const deps: RealSwapDeps = {
+      quote: async () => 1000n,
+      inventory: async () => 1500n, // covers the 1000 payout, below the 5000 floor
+      sendSwap: async () => { sent = true; },
+      log,
+    };
+    await realExecuteSwap(42, 1_000_000n, 0, 5000n, deps);
+    expect(sent).toBe(true);
+    expect(warns.some((w) => /below alert floor/.test(w.m))).toBe(true);
   });
 });

@@ -57,7 +57,7 @@ export async function runTick(deps: TickDeps, state: TickState): Promise<TickSta
   const crankState: CrankState = {
     finalized: config.currentRoundFinalized,
     currentRoundId: config.currentRoundId,
-    round: round ? { state: round.state, deadlineTs: round.deadlineTs, roundId: round.roundId } : null,
+    round: round ? { state: round.state, deadlineTs: round.deadlineTs, roundId: round.roundId, pot: round.pot } : null,
     roundDelegated: delegated,
     nowSec: now,
     vrfPendingSinceSec,

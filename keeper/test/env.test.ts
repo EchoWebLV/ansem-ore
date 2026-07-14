@@ -22,6 +22,29 @@ describe("loadKeeperConfig", () => {
     expect(cfg.pollMs).toBe(4000);
     expect(cfg.httpPort).toBe(8787);
     expect(cfg.adminKeypair.publicKey.equals(kp.publicKey)).toBe(true);
+    // Mainnet real-payout layer defaults.
+    expect(cfg.swapMode).toBe("mock");
+    expect(cfg.jupBaseUrl).toBe("https://lite-api.jup.ag/swap/v1");
+    expect(cfg.slippageBps).toBe(100);
+    expect(cfg.buybackMinSol).toBe(0.05);
+    expect(cfg.treasuryKeepSol).toBe(0.01);
+    expect(cfg.inventoryMinAnsem).toBe(0);
+  });
+
+  it("swap config: defaults to mock, honors SWAP_MODE=real + jupiter/buyback overrides", () => {
+    const cfg = loadKeeperConfig(
+      { ...baseEnv, SWAP_MODE: "real", JUP_BASE_URL: "https://api.jup.ag/swap/v1",
+        SLIPPAGE_BPS: "250", BUYBACK_MIN_SOL: "0.1", TREASURY_KEEP_SOL: "0.02", INVENTORY_MIN: "1000000" } as any,
+      fakeLoad,
+    );
+    expect(cfg.swapMode).toBe("real");
+    expect(cfg.jupBaseUrl).toBe("https://api.jup.ag/swap/v1");
+    expect(cfg.slippageBps).toBe(250);
+    expect(cfg.buybackMinSol).toBe(0.1);
+    expect(cfg.treasuryKeepSol).toBe(0.02);
+    expect(cfg.inventoryMinAnsem).toBe(1000000);
+    // an unrecognized SWAP_MODE falls back to the safe mock path
+    expect(loadKeeperConfig({ ...baseEnv, SWAP_MODE: "garbage" } as any, fakeLoad).swapMode).toBe("mock");
   });
 
   it("honors overrides", () => {

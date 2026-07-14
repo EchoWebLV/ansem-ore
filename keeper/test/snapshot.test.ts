@@ -15,6 +15,7 @@ const config = {
   admin: "A", ansemMint: "M", swapMode: 0, currentRoundId: 100, roundDurationSecs: 60,
   feeBps: 0, multMinBps: 5000, multMaxBps: 5000, minStake: 0n, maxStakePerRound: 0n,
   mockRate: 1n, totalEscrowBalance: 100n, rolloverJackpot: 4n, currentRoundFinalized: false,
+  ansemObligations: 0n, claimWindowSecs: 86400, minSwapRate: 0n,
 };
 
 describe("buildFullSnapshot", () => {
@@ -42,5 +43,10 @@ describe("buildFullSnapshot", () => {
     const settled = { ...round, state: RoundState.Settled, jackpotSquare: 7 };
     const snap = buildFullSnapshot(settled as any, config as any, [], [], 1);
     expect(snap.jackpotSquare).toBe(7);
+  });
+
+  it("exposes claimWindowSecs from config so the app can render claim countdowns", () => {
+    const snap = buildFullSnapshot(round as any, config as any, [], [], 1);
+    expect(snap.claimWindowSecs).toBe(86400);
   });
 });

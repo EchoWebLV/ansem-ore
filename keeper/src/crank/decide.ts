@@ -14,6 +14,7 @@ export interface CrankRoundView {
   state: RoundState;
   deadlineTs: number;
   roundId: number;
+  pot: bigint; // live pot — an empty (pot == 0) past-deadline round is cancelled, not settled
 }
 
 export interface CrankState {
@@ -48,7 +49,12 @@ export function decideAction(s: CrankState): CrankAction {
       if (s.nowSec < s.round.deadlineTs) return CrankAction.Idle;
       // Past deadline: while still delegated we must commit the round back to L1
       // (its live state is in the ER); once program-owned on L1 we can settle.
-      return s.roundDelegated ? CrankAction.CommitToL1 : CrankAction.Settle;
+      if (s.roundDelegated) return CrankAction.CommitToL1;
+      // Empty round (nobody staked) -> cancel instead of settling: cancel_round needs
+      // no VRF, so quiet hours cost zero oracle fee. cancel_round runs on L1, so this
+      // only fires once undelegated (a delegated empty round commits back first, above).
+      if (s.round.pot === 0n) return CrankAction.Cancel;
+      return CrankAction.Settle;
 
     case RoundState.VrfPending: {
       const waited = s.vrfPendingSinceSec === null ? 0 : s.nowSec - s.vrfPendingSinceSec;

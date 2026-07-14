@@ -15,6 +15,9 @@ import {
 import { fetchStakerWallets } from "./participants.js";
 import { startReadServer, ReadServer } from "./read/server.js";
 import type { FullSnapshot } from "./read/snapshot.js";
+import { runBuyback, BuybackCtx, BUYBACK_TICK_CADENCE } from "./buyback.js";
+import { runJanitor, JanitorCtx, JANITOR_TICK_CADENCE } from "./janitor.js";
+import type { FetchLike } from "./jupiter.js";
 
 export interface Service { start: () => Promise<void>; stop: () => Promise<void>; }
 
@@ -23,7 +26,11 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
   const ctx: ActionCtx = {
     conn: chain.conn, erConn: chain.erConn, program: chain.program, erProgram: chain.erProgram,
     keeper: cfg.adminKeypair.publicKey, validator: cfg.validator, vrfQueue: cfg.vrfQueue,
-    roundDurationSecs: cfg.roundDurationSecs, directMode: cfg.directMode, log,
+    roundDurationSecs: cfg.roundDurationSecs, directMode: cfg.directMode,
+    swapMode: cfg.swapMode, jupBaseUrl: cfg.jupBaseUrl, slippageBps: cfg.slippageBps,
+    inventoryMinAnsem: BigInt(Math.trunc(cfg.inventoryMinAnsem)),
+    fetchImpl: (globalThis as unknown as { fetch: FetchLike }).fetch,
+    log,
   };
   let latest: FullSnapshot | null = null;
   let server: ReadServer | undefined;
@@ -40,7 +47,7 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
         if (s.round) await requestSettle(ctx, s.round.roundId);
         return;
       case CrankAction.Finalize:
-        if (s.round) await finalizeSettled(s.round.roundId, liveFinalizeDeps(ctx, s.round.roundId));
+        if (s.round) await finalizeSettled(s.round.roundId, liveFinalizeDeps(ctx, s.round.roundId, s.config, s.round));
         return;
       case CrankAction.Cancel:
         if (s.round) await cancelRound(ctx, s.round.roundId);
@@ -79,7 +86,21 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
         ctx.log.info("BEEF not initialized — emission stamping disabled");
       }
 
+      // Periodic maintenance cranks (own ctx so they can run off the main tick).
+      const buybackCtx: BuybackCtx = {
+        conn: chain.conn, program: chain.program, keeper: ctx.keeper, keypair: cfg.adminKeypair,
+        fetchImpl: ctx.fetchImpl, jupBaseUrl: cfg.jupBaseUrl, slippageBps: cfg.slippageBps,
+        minSol: cfg.buybackMinSol, keepSol: cfg.treasuryKeepSol,
+        getConfig: () => fetchConfig(chain.program, configPda()), log,
+      };
+      const janitorCtx: JanitorCtx = {
+        program: chain.program, keeper: ctx.keeper,
+        getClaimWindowSecs: async () => (await fetchConfig(chain.program, configPda())).claimWindowSecs,
+        nowSec: () => Math.floor(Date.now() / 1000), log,
+      };
+
       running = true;
+      let tick = 0;
       let state: TickState = { prevSnapshot: null, vrfPendingSinceSec: null };
       while (running) {
         try {
@@ -103,6 +124,16 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
             nowSec: () => Math.floor(Date.now() / 1000),
             graceSecs: cfg.graceSecs,
           }, state);
+          tick++;
+          // Real-mode inventory refill from treasury fees (buyback), and permissionless
+          // rent reclamation for closeable rounds (janitor — runs in mock + real). Each
+          // is self-contained: a failure logs and is retried on its next cadence hit.
+          if (cfg.swapMode === "real" && tick % BUYBACK_TICK_CADENCE === 0) {
+            await runBuyback(buybackCtx).catch((e) => log.error("buyback failed", { err: String(e) }));
+          }
+          if (tick % JANITOR_TICK_CADENCE === 0) {
+            await runJanitor(janitorCtx).catch((e) => log.error("janitor failed", { err: String(e) }));
+          }
         } catch (e) {
           log.error("tick failed", { err: String(e) });
         }

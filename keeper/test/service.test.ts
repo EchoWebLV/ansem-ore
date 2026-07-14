@@ -42,12 +42,20 @@ describe("runTick", () => {
     expect(dispatched).toEqual([CrankAction.CommitToL1]);
   });
 
-  it("dispatches Settle once the round is back on L1 (undelegated) past the deadline", async () => {
+  it("dispatches Settle once a STAKED round is back on L1 (undelegated) past the deadline", async () => {
+    const { deps, dispatched } = makeDeps({
+      fetchRound: async () => ({ round: { ...openRound, pot: 15n }, delegated: false }), nowSec: () => 6000,
+    });
+    await runTick(deps, { prevSnapshot: null, vrfPendingSinceSec: null });
+    expect(dispatched).toEqual([CrankAction.Settle]);
+  });
+
+  it("dispatches Cancel for an EMPTY round (pot 0) undelegated past the deadline", async () => {
     const { deps, dispatched } = makeDeps({
       fetchRound: async () => ({ round: openRound, delegated: false }), nowSec: () => 6000,
     });
     await runTick(deps, { prevSnapshot: null, vrfPendingSinceSec: null });
-    expect(dispatched).toEqual([CrankAction.Settle]);
+    expect(dispatched).toEqual([CrankAction.Cancel]);
   });
 
   it("stamps vrfPendingSinceSec the first tick a round is VRF_PENDING", async () => {
