@@ -31,6 +31,11 @@ export interface KeeperConfig {
   treasuryKeepSol: number;
   /** Alert floor: warn when the keeper ANSEM inventory drops below this (base units). 0 disables. */
   inventoryMinAnsem: number;
+  // ---- Stale-floor auto-refresh (spec 2026-07-14 D9) ----
+  /** Seconds between min_swap_rate refresh passes. <=0 disables the loop. Real mode only. */
+  floorRefreshSecs: number;
+  /** BEEF listing unix ts (env LISTING_TS) surfaced in the snapshot for the app banner. Null = unset. */
+  listingTs: number | null;
 }
 
 const req = (env: NodeJS.ProcessEnv, key: string): string => {
@@ -70,6 +75,8 @@ export function loadKeeperConfig(
     buybackMinSol: num(env, "BUYBACK_MIN_SOL", 0.05),
     treasuryKeepSol: num(env, "TREASURY_KEEP_SOL", 0.01),
     inventoryMinAnsem: num(env, "INVENTORY_MIN", 0),
+    floorRefreshSecs: num(env, "FLOOR_REFRESH_SECS", 300),
+    listingTs: env.LISTING_TS === undefined || env.LISTING_TS === "" ? null : Number(env.LISTING_TS),
   };
 }
 

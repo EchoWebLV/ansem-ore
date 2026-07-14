@@ -15,9 +15,11 @@ import {
 } from "./crank/actions.js";
 import { fetchStakerWallets } from "./participants.js";
 import { startReadServer, ReadServer } from "./read/server.js";
-import type { FullSnapshot } from "./read/snapshot.js";
+import type { FullSnapshot, SnapshotExtras } from "./read/snapshot.js";
+import { makeJackpotReader } from "./read/jackpot.js";
 import { runBuyback, BuybackCtx, BUYBACK_TICK_CADENCE } from "./buyback.js";
 import { runJanitor, JanitorCtx, JANITOR_TICK_CADENCE } from "./janitor.js";
+import { startFloorRefresh, FloorRefresh } from "./floor.js";
 import type { FetchLike } from "./jupiter.js";
 
 export interface Service { start: () => Promise<void>; stop: () => Promise<void>; }
@@ -35,7 +37,26 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
   };
   let latest: FullSnapshot | null = null;
   let server: ReadServer | undefined;
+  let floor: FloorRefresh | undefined;
   let running = false;
+
+  // Cached, null-safe read of the on-chain jackpot params (null until the JackpotConfig PDA
+  // exists — keeper runs against both the current and the upgraded program).
+  const readJackpot = makeJackpotReader(chain.conn);
+  // Last stamped BEEF emission (players' base units) surfaced as snapshot.beefPerRound.
+  // TODO(beef-stamp-crank): the deferred minted-BEEF stamp crank (plan Task 6 Step 2 —
+  // see the seam in crank/actions.ts liveFinalizeDeps.stampBeef) must set this after each
+  // successful stamp so the app's BEEF drip counter reads a live value. Stays null until then.
+  let lastBeefEmission: bigint | null = null;
+  const getExtras = async (): Promise<SnapshotExtras> => {
+    const jp = await readJackpot();
+    return {
+      jackpotTriggerOdds: jp.jackpotTriggerOdds,
+      jackpotCapMult: jp.jackpotCapMult,
+      listingTs: cfg.listingTs,
+      beefPerRound: lastBeefEmission,
+    };
+  };
 
   const dispatch = async (action: CrankAction, s: { config: ConfigState; round: RoundStateData | null }) => {
     switch (action) {
@@ -119,6 +140,22 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
         nowSec: () => Math.floor(Date.now() / 1000), log,
       };
 
+      // Stale-floor auto-refresh (spec 2026-07-14 D9). Real mode only — the floor
+      // (config.min_swap_rate) is enforced solely in execute_swap_real, and only the
+      // external ANSEM mint used in real mode is Jupiter-quotable. FLOOR_REFRESH_SECS<=0
+      // disables it (ops kill switch). Runs off the main tick on its own timer.
+      if (cfg.swapMode === "real" && cfg.floorRefreshSecs > 0) {
+        floor = startFloorRefresh({
+          program: chain.program, keeper: ctx.keeper,
+          getConfig: () => fetchConfig(chain.program, configPda()),
+          jupBaseUrl: cfg.jupBaseUrl, slippageBps: cfg.slippageBps,
+          fetchImpl: ctx.fetchImpl, log,
+        }, cfg.floorRefreshSecs);
+        log.info("floor auto-refresh started", { everySecs: cfg.floorRefreshSecs });
+      } else {
+        log.info("floor auto-refresh disabled", { swapMode: cfg.swapMode, floorRefreshSecs: cfg.floorRefreshSecs });
+      }
+
       running = true;
       let tick = 0;
       let state: TickState = { prevSnapshot: null, vrfPendingSinceSec: null };
@@ -141,6 +178,7 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
             dispatch,
             broadcast: (snap, events) => server!.broadcast(snap, events),
             getSnapshot: (snap) => { latest = snap; },
+            getExtras,
             nowSec: () => Math.floor(Date.now() / 1000),
             graceSecs: cfg.graceSecs,
           }, state);
@@ -160,6 +198,6 @@ export function createService(cfg: KeeperConfig, log: Logger = makeLogger()): Se
         await sleep(cfg.pollMs);
       }
     },
-    async stop() { running = false; await server?.close(); },
+    async stop() { running = false; floor?.stop(); await server?.close(); },
   };
 }

@@ -237,6 +237,16 @@ export function liveFinalizeDeps(
     reconcileMiner: (w) =>
       l1Send(() => reconcileMinerIx(ctx.program, roundId, escrowPda(w), minerPda(w)).rpc()),
     executeSwap,
+    // ---- BEEF stamp crank seam (plan Task 6 Step 2 — DEFERRED) ----
+    // This is the mount point for the per-round BEEF emission stamp. It stays wired to the
+    // OLD dormant vault-drip `stampBeefIx` (roundId + beefVault) and is inert on mainnet:
+    // `beefEnabled` is only true once a BeefConfig exists on-chain, which it does NOT today.
+    // TODO(beef-stamp-crank): when the mint-on-emission program upgrade + the Task 5 SDK land,
+    //   (1) switch to the minted-model builder — stampBeefIx gains beefMint/vaultAuthority/
+    //       beefTreasury/tokenProgram accounts (spec D4, plan Task 2/5);
+    //   (2) capture the stamped players' emission and push it to service.ts `lastBeefEmission`
+    //       so snapshot.beefPerRound reads a live value for the app BEEF drip counter.
+    // INVARIANT (unchanged): a throw here must never block finalize — finalizeSettled swallows it.
     stampBeef: ctx.beefEnabled && ctx.beefVault ? async () => {
       await l1Send(() => stampBeefIx(ctx.program, ctx.keeper, roundId, ctx.beefVault!).rpc());
       ctx.log.info("beef emission stamped", { roundId });

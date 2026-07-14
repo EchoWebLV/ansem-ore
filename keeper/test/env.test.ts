@@ -29,6 +29,20 @@ describe("loadKeeperConfig", () => {
     expect(cfg.buybackMinSol).toBe(0.05);
     expect(cfg.treasuryKeepSol).toBe(0.01);
     expect(cfg.inventoryMinAnsem).toBe(0);
+    // Stale-floor auto-refresh (D9) defaults.
+    expect(cfg.floorRefreshSecs).toBe(300);
+    expect(cfg.listingTs).toBeNull();
+  });
+
+  it("honors FLOOR_REFRESH_SECS + LISTING_TS overrides", () => {
+    const cfg = loadKeeperConfig(
+      { ...baseEnv, FLOOR_REFRESH_SECS: "120", LISTING_TS: "1752000000" } as any,
+      fakeLoad,
+    );
+    expect(cfg.floorRefreshSecs).toBe(120);
+    expect(cfg.listingTs).toBe(1752000000);
+    // FLOOR_REFRESH_SECS=0 disables the loop (ops kill switch).
+    expect(loadKeeperConfig({ ...baseEnv, FLOOR_REFRESH_SECS: "0" } as any, fakeLoad).floorRefreshSecs).toBe(0);
   });
 
   it("swap config: defaults to mock, honors SWAP_MODE=real + jupiter/buyback overrides", () => {

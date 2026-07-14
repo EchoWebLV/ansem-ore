@@ -1,6 +1,6 @@
 import { RoundState, ConfigState, RoundStateData, BoardSnapshot, toBoardSnapshot } from "@ansem/sdk";
 import { decideAction, CrankAction, CrankState } from "./decide.js";
-import { buildFullSnapshot, FullSnapshot, MinerRow } from "../read/snapshot.js";
+import { buildFullSnapshot, FullSnapshot, MinerRow, SnapshotExtras } from "../read/snapshot.js";
 import { diffEvents, KeeperEvent } from "../read/events.js";
 
 /** The current round plus whether its PDA is still delegated to the DLP (live in the ER). */
@@ -15,6 +15,9 @@ export interface TickDeps {
   nowSec: () => number;
   graceSecs?: number;
   getSnapshot?: (snap: FullSnapshot) => void; // optional: store latest for REST
+  /** Optional liveness extras (jackpot params, listing ts, last beef emission) folded into
+   *  each snapshot. Omitted -> the snapshot carries the null defaults (EMPTY_EXTRAS). */
+  getExtras?: () => Promise<SnapshotExtras>;
 }
 
 export interface TickState {
@@ -47,7 +50,8 @@ export async function runTick(deps: TickDeps, state: TickState): Promise<TickSta
   if (round) {
     const miners = await deps.fetchMiners(round.roundId);
     const events = diffEvents(prevSnapshot, buildBoardOnly(round, config, now));
-    const full = buildFullSnapshot(round, config, miners, events, now);
+    const extras = deps.getExtras ? await deps.getExtras() : undefined;
+    const full = buildFullSnapshot(round, config, miners, events, now, extras);
     deps.getSnapshot?.(full);
     deps.broadcast(full, events);
     prevSnapshot = full;

@@ -49,4 +49,22 @@ describe("buildFullSnapshot", () => {
     const snap = buildFullSnapshot(round as any, config as any, [], [], 1);
     expect(snap.claimWindowSecs).toBe(86400);
   });
+
+  it("defaults the liveness extras to null when none are supplied (backward compatible)", () => {
+    const snap = buildFullSnapshot(round as any, config as any, [], [], 1);
+    expect(snap.jackpotTriggerOdds).toBeNull();
+    expect(snap.jackpotCapMult).toBeNull();
+    expect(snap.listingTs).toBeNull();
+    expect(snap.beefPerRound).toBeNull();
+  });
+
+  it("folds supplied liveness extras (jackpot params, listing ts, beef emission) into the snapshot", () => {
+    const snap = buildFullSnapshot(round as any, config as any, [], [], 1, {
+      jackpotTriggerOdds: 25, jackpotCapMult: 100, listingTs: 1_752_000_000, beefPerRound: 84_000_000n,
+    });
+    expect(snap.jackpotTriggerOdds).toBe(25);
+    expect(snap.jackpotCapMult).toBe(100);
+    expect(snap.listingTs).toBe(1_752_000_000);
+    expect(snap.beefPerRound).toBe(84_000_000n);
+  });
 });
