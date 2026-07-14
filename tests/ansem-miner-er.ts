@@ -384,6 +384,7 @@ describe("ansem-miner (ER)", () => {
     // SOLVENCY GATE: swapping BEFORE reconcile must fail Insolvent —
     // total_escrow_balance still counts the staked lamports as idle while
     // round.pot also claims them, so pot_vault can't cover both.
+    const payerBalanceBeforeInsolventSwap = await provider.connection.getBalance(admin.publicKey);
     let insolvent = false;
     try {
       await program.methods.executeSwapMock().accounts(swapAccounts()).rpc();
@@ -391,6 +392,12 @@ describe("ansem-miner (ER)", () => {
       insolvent = /Insolvent/.test(e.toString());
     }
     assert.isTrue(insolvent, "pre-reconcile swap must fail Insolvent (the solvency gate)");
+    const payerBalanceAfterInsolventSwap = await provider.connection.getBalance(admin.publicKey);
+    assert.equal(
+      payerBalanceAfterInsolventSwap,
+      payerBalanceBeforeInsolventSwap,
+      "preflight Insolvent failure must not debit the payer"
+    );
 
     // reconcile_miner reads the committed (DLP-owned) miner snapshot and debits
     // escrow — this is the real ER-flow exercise of the UncheckedAccount read.

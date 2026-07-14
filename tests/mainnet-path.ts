@@ -122,7 +122,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
   // Negative FIRST: while Config does not yet exist, a non-upgrade-authority signer
   // must be rejected. (Running this before the successful init proves the failure is
   // the upgrade-authority constraint, not an "already in use" Config collision.)
-  it("rejects init by a non-upgrade-authority signer (Unauthorized)", async () => {
+  it("rent reserve fixture: rejects init by a non-upgrade-authority signer (Unauthorized)", async () => {
     try {
       await (program.methods as any)
         .initializeReal(keeperAdmin.publicKey)
@@ -135,7 +135,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     }
   });
 
-  it("initialize_real: external mint, JUPITER mode, admin = keeper_admin (not the signer)", async () => {
+  it("rent reserve fixture: initialize_real: external mint, JUPITER mode, admin = keeper_admin (not the signer)", async () => {
     await (program.methods as any)
       .initializeReal(keeperAdmin.publicKey)
       .accountsPartial(initRealAccounts(deployer.publicKey))
@@ -173,7 +173,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
       .rpc();
   });
 
-  it("admin-gated ix signed by the DEPLOY wallet now FAILS Unauthorized", async () => {
+  it("rent reserve fixture: admin-gated ix signed by the DEPLOY wallet now FAILS Unauthorized", async () => {
     try {
       await program.methods
         .setRoundDuration(new anchor.BN(42))
@@ -185,7 +185,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     }
   });
 
-  it("the SAME admin-gated ix signed by keeper_admin SUCCEEDS", async () => {
+  it("rent reserve fixture: the SAME admin-gated ix signed by keeper_admin SUCCEEDS", async () => {
     await program.methods
       .setRoundDuration(new anchor.BN(42))
       .accounts({ admin: keeperAdmin.publicKey })
@@ -268,7 +268,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     }
   };
 
-  it("real round: fund keeper inventory, two wallets stake, settle to a known jackpot", async () => {
+  it("rent reserve fixture: real round: fund keeper inventory, two wallets stake, settle to a known jackpot", async () => {
     payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true, TOKEN_2022_PROGRAM_ID);
     await airdrop(winner.publicKey, 3);
     await airdrop(loser.publicKey, 3);
@@ -352,7 +352,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(r1.jackpotSquare, jsq, "jackpot square == our forced keccak draw");
   });
 
-  it("execute_swap_real rejects a non-admin payer (Unauthorized)", async () => {
+  it("rent reserve fixture: execute_swap_real rejects a non-admin payer (Unauthorized)", async () => {
     // stranger is neither the deploy wallet nor config.admin: the payer==admin
     // constraint on `config` fails before any funds move (round stays SETTLED).
     try {
@@ -369,7 +369,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(r.state, 2, "round still SETTLED after the failed swap");
   });
 
-  it("execute_swap_real enforces the min_swap_rate floor (SwapRateTooLow)", async () => {
+  it("rent reserve fixture: execute_swap_real enforces the min_swap_rate floor (SwapRateTooLow)", async () => {
     // Set an absurd floor: ansem_out >= net * rate / LAMPORTS_PER_SOL is unmeetable.
     await (program.methods as any)
       .setMinSwapRate(new anchor.BN("1000000000000"))
@@ -396,7 +396,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(r.state, 2, "round still SETTLED (rate-floor reverted the tx)");
   });
 
-  it("execute_swap_real fails when the source ATA holds less than ansem_out (SPL transfer)", async () => {
+  it("rent reserve fixture: execute_swap_real fails when the source ATA holds less than ansem_out (SPL transfer)", async () => {
     // Ask to pay out MORE than the keeper minted -> the in-ix SPL transfer fails and
     // the whole tx reverts (the pot->treasury leg that ran first is rolled back too).
     const tooMuch = new anchor.BN((KEEPER_INVENTORY + 1).toString());
