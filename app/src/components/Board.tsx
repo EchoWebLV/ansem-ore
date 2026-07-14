@@ -1,6 +1,8 @@
 "use client";
+import { useEffect, useRef } from "react";
 import { RoundState, type WireSnapshot } from "@ansem/sdk";
 import { svgCells } from "../lib/board-layout.js";
+import { playTap, playFill, playJackpot } from "../lib/sound.js";
 
 const CELLS = svgCells();
 
@@ -34,6 +36,22 @@ export interface BoardProps {
 export function Board({ snapshot, selectedSquares = [], onSelect, revealed = null, jackpotShown }: BoardProps) {
   const settled = snapshot.state >= RoundState.Settled;
   const revealSet = revealed === null ? null : new Set(revealed);
+
+  // Reveal cascade audio: chime the next rising note each time a cell is unveiled,
+  // and ring the jackpot bell once the gold square detonates.
+  const revealedCount = revealed?.length ?? 0;
+  const prevRevealed = useRef(0);
+  useEffect(() => {
+    if (revealedCount > prevRevealed.current) {
+      for (let i = prevRevealed.current; i < revealedCount; i++) playFill(i);
+    }
+    prevRevealed.current = revealedCount;
+  }, [revealedCount]);
+  const jackpotRung = useRef(false);
+  useEffect(() => {
+    if (jackpotShown && !jackpotRung.current) { playJackpot(); jackpotRung.current = true; }
+    if (!jackpotShown) jackpotRung.current = false;
+  }, [jackpotShown]);
   return (
     <svg
       viewBox="0 0 400 348"
@@ -90,7 +108,7 @@ export function Board({ snapshot, selectedSquares = [], onSelect, revealed = nul
             data-lit={lit ? "true" : "false"}
             data-jackpot={jackpot ? "true" : "false"}
             data-selected={selected ? "true" : "false"}
-            onClick={onSelect ? () => onSelect(cell.id) : undefined}
+            onClick={onSelect ? () => { playTap(); onSelect(cell.id); } : undefined}
             className={onSelect ? "cursor-pointer" : undefined}
           >
             {/* Prism side: the dark extrusion the face floats above. */}
