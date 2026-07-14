@@ -166,12 +166,30 @@ button, a, [data-square] { touch-action: manipulation; }
   100% { transform: scale(2.4); opacity: 0; }
 }
 
+/* ---------- liveness package (jackpot odometer + wins ticker) ---------- */
+
+/* Jackpot odometer: replays a soft drop when the mounted value changes (keyed remount). */
+.odometer-pop { animation: odometer-pop 0.5s ease-out both; }
+@keyframes odometer-pop {
+  0%   { transform: translateY(-45%); opacity: 0; }
+  60%  { transform: translateY(6%); opacity: 1; }
+  100% { transform: translateY(0); }
+}
+
+/* Live wins marquee: two identical copies translated -50% for a seamless loop. */
+.ticker-marquee { animation: ticker-marquee 26s linear infinite; }
+@keyframes ticker-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
 /* ---------- accessibility ---------- */
 
 @media (prefers-reduced-motion: reduce) {
   .dust, .board-float, .cell-face.pop, .cell-face.burst,
   .glow-live, .bull-eye, .jackpot-ring, .stage-card,
-  .grid-floor, .gold-flash, .stage-glare {
+  .grid-floor, .gold-flash, .stage-glare,
+  .odometer-pop, .ticker-marquee {
     animation: none !important;
     transition: none !important;
   }

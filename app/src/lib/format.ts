@@ -49,6 +49,20 @@ export function formatCountdown(totalSecs: number): string {
   return `${mm}:${ss}`;
 }
 
+/**
+ * Coarse human countdown for long horizons (the listing banner can be days out):
+ * "Nd Nh Nm" once past a day, "Nh Nm" once past an hour, else mm:ss. Clamped at 0.
+ */
+export function formatUntil(totalSecs: number): string {
+  const s = Math.max(0, Math.floor(totalSecs));
+  const d = Math.floor(s / 86_400);
+  const h = Math.floor((s % 86_400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return formatCountdown(s); // under an hour -> mm:ss
+}
+
 /** hh:mm:ss for a duration in seconds. Used for the claim window (up to 24h — mm:ss would overflow). */
 export function formatHms(totalSecs: number): string {
   const s = Math.max(0, Math.floor(totalSecs));

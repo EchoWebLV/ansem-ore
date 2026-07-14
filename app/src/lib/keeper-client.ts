@@ -4,13 +4,15 @@ export type KeeperStatus = "connecting" | "connected" | "disconnected";
 
 /**
  * The wire snapshot as the keeper actually serves it: the SDK's `WireSnapshot`
- * plus `claimWindowSecs` (seconds a win stays claimable past a round's deadline).
- * The keeper appends it in `keeper/src/read/snapshot.ts`; it is additive and
- * optional so a snapshot from an older keeper (or a cold-load race) simply yields
- * no claim countdown rather than a crash.
+ * plus keeper-appended, additive-optional fields. `claimWindowSecs` = seconds a
+ * win stays claimable past a round's deadline. `jackpotTriggerOdds` = the 1-in-N
+ * jackpot-round odds (added alongside the BEEF launch; older keepers omit it).
+ * All are optional so a snapshot from an older keeper (or a cold-load race) simply
+ * renders without that detail rather than crashing.
  */
 export interface AppSnapshot extends WireSnapshot {
   claimWindowSecs?: number;
+  jackpotTriggerOdds?: number;
 }
 
 export interface KeeperClientOpts {

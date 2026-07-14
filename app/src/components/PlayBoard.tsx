@@ -18,6 +18,11 @@ import { primeAudio } from "../lib/sound.js";
 import { PlayControls } from "./PlayControls.js";
 import { Stage } from "./Stage.js";
 import { VerifyPanel, type Receipt, type ReceiptInput } from "./VerifyPanel.js";
+import { Countdown } from "./Countdown.js";
+import { JackpotMeter } from "./JackpotMeter.js";
+import { WinTicker } from "./WinTicker.js";
+import { ListingBanner } from "./ListingBanner.js";
+import { stateLabel } from "../lib/format.js";
 
 export interface PlayBoardProps {
   wsUrl: string;
@@ -72,7 +77,25 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
       <div className="text-[10px] tracking-widest text-bull-muted text-right">
         KEEPER: {status.toUpperCase()}
       </div>
+      <ListingBanner />
       {snapshot ? (
+        <>
+          {/* Liveness strip: a persistent live clock/status + recent-wins marquee. */}
+          <div className="flex items-center gap-3 rounded-xl border border-bull-edge bg-bull-bg px-3 py-2">
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-bull-green animate-pulse" aria-hidden />
+              <span className="text-[10px] tracking-widest text-bull-muted">LIVE</span>
+              <span className="font-mono tabular-nums text-sm text-bull-green">
+                {snapshot.state === RoundState.Open ? (
+                  <Countdown deadlineTs={snapshot.deadlineTs} nowMs={nowMs} />
+                ) : (
+                  stateLabel(snapshot.state)
+                )}
+              </span>
+            </div>
+            <div className="h-4 w-px bg-bull-edge shrink-0" aria-hidden />
+            <WinTicker events={events.length ? events : snapshot.recentEvents} />
+          </div>
         <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)_minmax(280px,340px)] lg:gap-6 lg:items-start">
           {goldFinale && <div key={snapshot.roundId} className="gold-flash hidden lg:block" aria-hidden />}
           {/* The design card (docs/design/bull-board.html): label/big/sub + SVG board,
@@ -100,6 +123,9 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
               </div>
             </Stage>
           </div>
+          <div className="lg:col-start-1 lg:row-start-1">
+            <JackpotMeter rolloverJackpot={snapshot.rolloverJackpot} triggerOdds={snapshot.jackpotTriggerOdds} />
+          </div>
           {canPlay && (
             <div className="lg:col-start-3 lg:row-start-1">
               <PlayControls
@@ -109,16 +135,17 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
               />
             </div>
           )}
-          <div className="lg:col-start-1 lg:row-start-1">
+          <div className="lg:col-start-1 lg:row-start-2">
             <Leaderboard leaderboard={snapshot.leaderboard} />
           </div>
           <div className={canPlay ? "lg:col-start-3 lg:row-start-2" : "lg:col-start-3 lg:row-start-1"}>
             <ActivityFeed events={events.length ? events : snapshot.recentEvents} />
           </div>
-          <div className="lg:col-start-1 lg:row-start-2">
+          <div className="lg:col-start-1 lg:row-start-3">
             <VerifyPanel roundId={snapshot.roundId} receipts={receipts} />
           </div>
         </div>
+        </>
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <p className="text-bull-muted text-sm tracking-widest animate-pulse">WAITING FOR THE KEEPER…</p>
