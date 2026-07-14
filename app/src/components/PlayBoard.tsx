@@ -79,12 +79,10 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
         : { dot: "bg-bull-gold", label: "RECONNECTING…", pulse: false };
 
   return (
-    <main className="min-h-screen text-white px-4 py-4 pb-[max(24px,env(safe-area-inset-bottom))] flex flex-col gap-4 max-w-[520px] lg:max-w-[1280px] lg:px-8 mx-auto">
-      <div className="abstract-bg" aria-hidden data-testid="abstract-bg" />
-      <div className="bg-aura" aria-hidden />
-      <div className="dust" aria-hidden />
-      <div className="grid-floor hidden lg:block" aria-hidden />
-      <div className="vignette hidden lg:block" aria-hidden />
+    <main
+      data-testid="terminal-shell"
+      className="mx-auto flex min-h-screen max-w-[1430px] flex-col gap-3 px-4 pb-8 text-bull-ink lg:px-7"
+    >
       <PhaseNav>
         <SoundToggle />
         <WalletBar />
@@ -92,32 +90,23 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
       <ListingBanner />
       {snapshot ? (
         <>
-          {/* Liveness strip: status dot + recent-wins marquee. The HUD owns the
-              countdown; the meter card owns the jackpot — no duplicated facts. */}
-          <div className="flex items-center gap-3 rounded-xl border border-bull-edge bg-bull-bg px-3 py-2">
-            <div className="flex items-center gap-2 shrink-0">
+          <div className="terminal-status-strip flex items-center gap-3 border-b border-bull-edge py-2">
+            <div className="flex shrink-0 items-center gap-2">
               <span
-                className={`inline-block h-1.5 w-1.5 rounded-full ${liveness.dot}${liveness.pulse ? " animate-pulse" : ""}`}
+                className={`h-1.5 w-1.5 rounded-full ${liveness.dot}${liveness.pulse ? " animate-pulse" : ""}`}
                 aria-hidden
               />
-              <span className="text-[10px] tracking-widest text-bull-muted">{liveness.label}</span>
+              <span className="terminal-label">{liveness.label}</span>
             </div>
-            <div className="h-4 w-px bg-bull-edge shrink-0" aria-hidden />
+            <div className="h-4 w-px shrink-0 bg-bull-edge" aria-hidden />
             <WinTicker events={events.length ? events : snapshot.recentEvents} />
           </div>
-        <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)_minmax(280px,340px)] lg:gap-6 lg:items-start">
           {goldFinale && <div key={snapshot.roundId} className="gold-flash hidden lg:block" aria-hidden />}
-          {/* The design card (docs/design/bull-board.html): label/big/sub + SVG board,
-              lifted onto a 3D holo stage. Center column on desktop. */}
-          <div className="lg:col-start-2 lg:row-start-1 lg:row-span-3">
-            <Stage className="w-full mx-auto max-w-[460px] lg:max-w-[640px]">
-              <div className="bg-[#0b0b0e] border border-[#23232a] rounded-[18px] p-[18px] lg:p-6 text-center shadow-[0_18px_60px_-24px_rgba(53,224,122,0.25)] lg:shadow-[0_30px_90px_-30px_rgba(53,224,122,0.35)]">
-                {/* During a replay of a PAST round, Hud+Board render the stored old
-                    snapshot (the gold square must land where it did on-chain); the
-                    write column below keeps the LIVE snapshot. Ghost rounds aren't
-                    clickable — the replay self-dismisses in seconds. */}
-                <Hud snapshot={reveal.snapshotOverride ?? snapshot} nowMs={nowMs} reveal={reveal} />
-                <div className="board-float">
+          <div className="grid items-start gap-3 lg:grid-cols-[minmax(190px,232px)_minmax(520px,1fr)_minmax(284px,326px)]">
+            <section aria-label="Round board" className="lg:col-start-2 lg:row-start-1 lg:row-span-4">
+              <Stage className="w-full">
+                <div className="terminal-panel overflow-hidden">
+                  <Hud snapshot={reveal.snapshotOverride ?? snapshot} nowMs={nowMs} reveal={reveal} />
                   <Board
                     snapshot={reveal.snapshotOverride ?? snapshot}
                     selectedSquares={selected}
@@ -126,63 +115,67 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
                     jackpotShown={reveal.jackpotShown}
                     revealMode={reveal.mode}
                   />
+                  {reveal.canReplay && reveal.revealed === null && (
+                    <div className="border-t border-bull-edge p-3 text-center">
+                      <button
+                        onClick={reveal.replay}
+                        className="rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-[12px] font-semibold text-bull-ink hover:border-bull-green"
+                      >
+                        Replay reveal
+                      </button>
+                    </div>
+                  )}
                 </div>
-                {reveal.canReplay && reveal.revealed === null && (
-                  <button
-                    onClick={reveal.replay}
-                    className="mt-2 rounded-full border border-[#35e07a] bg-transparent px-[18px] py-[8px] text-[13px] text-[#35e07a] hover:bg-[rgba(53,224,122,0.15)]"
-                  >▶ Replay reveal</button>
-                )}
-              </div>
-            </Stage>
-          </div>
-          <div className="lg:col-start-1 lg:row-start-1">
-            <JackpotMeter rolloverJackpot={snapshot.rolloverJackpot} triggerOdds={snapshot.jackpotTriggerOdds} />
-          </div>
-          {canPlay && (
-            <div className="lg:col-start-3 lg:row-start-1">
-              <PlayControls
-                l1={l1!} wallet={wallet as unknown as WalletAdapter} snapshot={snapshot}
-                selectedSquares={selected} onStaked={() => setSelected([])}
-                onReceipt={addReceipt}
-              />
+              </Stage>
+            </section>
+            {canPlay && (
+              <section aria-label="Betting and claims" className="lg:col-start-3 lg:row-start-1">
+                <PlayControls
+                  l1={l1!}
+                  wallet={wallet as unknown as WalletAdapter}
+                  snapshot={snapshot}
+                  selectedSquares={selected}
+                  onStaked={() => setSelected([])}
+                  onReceipt={addReceipt}
+                />
+              </section>
+            )}
+            <div className="lg:col-start-1 lg:row-start-1">
+              <JackpotMeter rolloverJackpot={snapshot.rolloverJackpot} triggerOdds={snapshot.jackpotTriggerOdds} />
             </div>
-          )}
-          <div className="lg:col-start-1 lg:row-start-2">
-            <Leaderboard leaderboard={snapshot.leaderboard} />
+            <div className="lg:col-start-1 lg:row-start-2">
+              <Leaderboard leaderboard={snapshot.leaderboard} />
+            </div>
+            <div className={canPlay ? "lg:col-start-3 lg:row-start-2" : "lg:col-start-3 lg:row-start-1"}>
+              <ActivityFeed events={events.length ? events : snapshot.recentEvents} />
+            </div>
+            <div className="lg:col-start-1 lg:row-start-3">
+              <VerifyPanel roundId={snapshot.roundId} receipts={receipts} />
+            </div>
           </div>
-          <div className={canPlay ? "lg:col-start-3 lg:row-start-2" : "lg:col-start-3 lg:row-start-1"}>
-            <ActivityFeed events={events.length ? events : snapshot.recentEvents} />
-          </div>
-          <div className="lg:col-start-1 lg:row-start-3">
-            <VerifyPanel roundId={snapshot.roundId} receipts={receipts} />
-          </div>
-        </div>
         </>
       ) : (
-        /* Pre-snapshot skeleton: the true board at rest (layout is static, so it
-           paints instantly); live data swaps in place when the keeper answers. */
-        <Stage className="w-full mx-auto max-w-[460px]">
-          <div className="bg-[#0b0b0e] border border-[#23232a] rounded-[18px] p-[18px] text-center shadow-[0_18px_60px_-24px_rgba(53,224,122,0.25)]">
-            <div className="text-center">
-              <div className="text-[12px] lg:text-[13px] tracking-[2px] text-[#8a8a93]">
-                ROUND — · CONNECTING
-              </div>
-              <div
-                className="font-mono text-[40px] lg:text-[64px] font-medium my-[2px] animate-pulse"
-                style={{ color: "#35e07a", textShadow: "0 0 20px rgba(53,224,122,0.35)" }}
-              >
-                --:--
-              </div>
-              <div className="text-[12px] lg:text-[13px] min-h-[16px] text-[#8a8a93]">
-                linking to the keeper…
-              </div>
-            </div>
-            <div className="board-float">
+        <section aria-label="Round board">
+          <Stage className="mx-auto w-full max-w-[680px]">
+            <div className="terminal-panel overflow-hidden">
+              <header className="grid min-h-[78px] grid-cols-[1fr_auto_1fr] items-center border-b border-bull-edge px-4 py-3">
+                <div>
+                  <span className="terminal-label">Round</span>
+                  <strong className="mt-1 block font-mono text-[14px]">— · CONNECTING</strong>
+                </div>
+                <div className="text-center">
+                  <span className="terminal-label">Linking</span>
+                  <div className="mt-1 animate-pulse font-mono text-[28px]">--:--</div>
+                </div>
+                <div className="text-right">
+                  <span className="terminal-label">Pool</span>
+                  <strong className="mt-1 block font-mono text-[14px]">—</strong>
+                </div>
+              </header>
               <Board snapshot={SKELETON_SNAP} />
             </div>
-          </div>
-        </Stage>
+          </Stage>
+        </section>
       )}
     </main>
   );

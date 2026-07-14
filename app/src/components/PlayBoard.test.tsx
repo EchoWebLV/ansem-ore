@@ -57,11 +57,11 @@ describe("PlayBoard", () => {
     render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" nowMs={900_000} clientFactory={factory} />);
     // Pre-snapshot: the skeleton board paints instantly — full idle bull-head + connecting header.
     expect(screen.getByTestId("tile-24")).toBeInTheDocument();
-    expect(screen.getByText(/round.+connecting/i)).toBeInTheDocument();
+    expect(screen.getByText("— · CONNECTING")).toBeInTheDocument();
 
     act(() => { captured!.onStatus?.("connected"); captured!.onSnapshot(wireSnap()); });
 
-    await waitFor(() => expect(screen.getByText(/Round 77/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("#77 · OPEN")).toBeInTheDocument());
     expect(screen.getByTestId("tile-5")).toBeInTheDocument();
     expect(screen.getByText("ZZZZ…ZZZZ")).toBeInTheDocument();
     // The verify panel ships with the read-only board too — program link always present.
@@ -79,6 +79,7 @@ describe("PlayBoard", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /stake · one approval/i })).toBeInTheDocument(),
     );
+    expect(screen.getByLabelText("Betting and claims")).toBeInTheDocument();
     // No escrow lifecycle anywhere in direct mode.
     expect(screen.queryByText(/ESCROW/)).toBeNull();
     expect(screen.queryByRole("button", { name: /enter round/i })).toBeNull();
@@ -108,9 +109,10 @@ describe("PlayBoard", () => {
     expect(screen.queryByText(/^KEEPER:/)).toBeNull();
   });
 
-  it("renders the abstract backdrop layer", () => {
+  it("renders the terminal shell without the removed ambient layers", () => {
     const factory = (): KeeperClient => ({ start: () => {}, stop: () => {} });
     render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" clientFactory={factory} />);
-    expect(screen.getByTestId("abstract-bg")).toBeInTheDocument();
+    expect(screen.getByTestId("terminal-shell")).toBeInTheDocument();
+    expect(screen.queryByTestId("abstract-bg")).toBeNull();
   });
 });
