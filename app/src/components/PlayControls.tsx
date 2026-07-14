@@ -159,37 +159,26 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
   return (
     <div className="flex flex-col gap-3">
       {walletLamports !== null && (
-        <div className="flex justify-end">
-          <span className="font-mono text-[10px] text-bull-muted">wallet {lamportsToSolStr(walletLamports)} SOL</span>
+        <div className="flex items-center justify-between px-1 text-[10px] text-bull-muted">
+          <span>Wallet balance</span>
+          <span className="font-mono">{lamportsToSolStr(walletLamports)} SOL</span>
         </div>
       )}
-      <StakeRail
-        selectedSquares={selectedSquares}
-        enabled={!stakeBlocked}
-        busy={busy}
-        onStake={doStake}
-      />
+      <StakeRail selectedSquares={selectedSquares} enabled={!stakeBlocked} busy={busy} onStake={doStake} />
       {!loaded ? (
-        <p className="text-[10px] text-bull-muted">checking your prior round…</p>
+        <p className="px-1 text-[10px] text-bull-muted">Checking your prior round…</p>
       ) : priorUnresolved ? (
-        <p className="text-[10px] text-amber-400">{gateCopy}</p>
+        <p className="px-1 text-[10px] text-amber-400">{gateCopy}</p>
       ) : snapshot.state !== RoundState.Open ? (
-        <p className="text-[10px] text-bull-muted">round is settling — staking opens with the next round.</p>
+        <p className="px-1 text-[10px] text-bull-muted">Round is settling. Betting opens with the next round.</p>
       ) : null}
       {offerable && stakedRoundState !== null && (
-        <ClaimPanel
-          roundId={stakedRound} roundState={stakedRoundState}
-          lastClaimedRound={0}
-          claimByTs={claimByTs}
-          won={won}
-          busy={busy} onClaim={doClaim} onRefund={doRefund}
-        />
+        <ClaimPanel roundId={stakedRound} roundState={stakedRoundState} lastClaimedRound={0} claimByTs={claimByTs} won={won} busy={busy} onClaim={doClaim} onRefund={doRefund} />
       )}
       {CLUSTER !== "mainnet-beta" && (
-        <a href="https://faucet.solana.com" target="_blank" rel="noreferrer"
-          className="text-[10px] text-bull-muted underline self-end">get devnet SOL</a>
+        <a href="https://faucet.solana.com" target="_blank" rel="noreferrer" className="self-end text-[10px] text-bull-muted underline">Get devnet SOL</a>
       )}
-      {err && <p className="text-red-400 text-xs break-words">{err}</p>}
+      {err && <p role="alert" className="break-words px-1 text-xs text-red-400">{err}</p>}
     </div>
   );
 }

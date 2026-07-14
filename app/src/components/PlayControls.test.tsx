@@ -41,9 +41,10 @@ describe("PlayControls (direct mode) — wallet-balance stake gate", () => {
 
   it("blocks the goal scenario client-side: 0.1 SOL bet on a 0.0591 wallet never builds a tx", async () => {
     renderControls([4, 17]); // 2 tiles × 0.05 = the exact 100_000_000 lamports
-    await waitFor(() => expect(screen.getByText(/wallet 0\.0591/i)).toBeInTheDocument());
-    fireEvent.change(screen.getByPlaceholderText(/amount per tile/i), { target: { value: "0.05" } });
-    fireEvent.click(screen.getByRole("button", { name: /stake · one approval/i }));
+    await waitFor(() => expect(screen.getByText(/wallet balance/i)).toBeInTheDocument());
+    expect(screen.getByText(/0\.0591.*SOL/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/amount per tile/i), { target: { value: "0.05" } });
+    fireEvent.click(screen.getByRole("button", { name: /place bet · one approval/i }));
     await waitFor(() =>
       expect(screen.getByText(/more than your wallet holds/i)).toBeInTheDocument(),
     );
@@ -52,9 +53,10 @@ describe("PlayControls (direct mode) — wallet-balance stake gate", () => {
 
   it("lets an affordable bet through to directStake with the picked squares", async () => {
     renderControls([4, 17]);
-    await waitFor(() => expect(screen.getByText(/wallet 0\.0591/i)).toBeInTheDocument());
-    fireEvent.change(screen.getByPlaceholderText(/amount per tile/i), { target: { value: "0.01" } });
-    fireEvent.click(screen.getByRole("button", { name: /stake · one approval/i }));
+    await waitFor(() => expect(screen.getByText(/wallet balance/i)).toBeInTheDocument());
+    expect(screen.getByText(/0\.0591.*SOL/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/amount per tile/i), { target: { value: "0.01" } });
+    fireEvent.click(screen.getByRole("button", { name: /place bet · one approval/i }));
     await waitFor(() => expect(directStake).toHaveBeenCalledTimes(1));
     expect(vi.mocked(directStake).mock.calls[0][0].squares).toEqual([4, 17]);
     expect(screen.queryByText(/more than your wallet holds/i)).toBeNull();

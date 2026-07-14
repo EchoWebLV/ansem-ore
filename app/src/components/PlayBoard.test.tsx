@@ -79,21 +79,22 @@ describe("PlayBoard", () => {
 
   it("hides the write column until a wallet + L1 program are present", () => {
     renderWithSnapshot(); // ctl.l1 = null, ctl.wallet = null
-    expect(screen.queryByRole("button", { name: /stake · one approval/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /place bet · one approval/i })).toBeNull();
   });
 
   it("shows the direct-stake write column (one-approval rail + wallet balance) once connected", async () => {
     ctl.l1 = {}; ctl.wallet = { publicKey: { toBase58: () => "Wallet1111" } };
     renderWithSnapshot();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /stake · one approval/i })).toBeInTheDocument(),
+      expect(screen.getByRole("button", { name: /place bet · one approval/i })).toBeInTheDocument(),
     );
     expect(screen.getByLabelText("Betting and claims")).toBeInTheDocument();
     // No escrow lifecycle anywhere in direct mode.
     expect(screen.queryByText(/ESCROW/)).toBeNull();
     expect(screen.queryByRole("button", { name: /enter round/i })).toBeNull();
     // Wallet balance surfaces so unaffordable stakes are self-explanatory.
-    await waitFor(() => expect(screen.getByText(/wallet 0\.0591/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/wallet balance/i)).toBeInTheDocument());
+    expect(screen.getByText(/0\.0591.*SOL/i)).toBeInTheDocument();
   });
 
   it("keeps the replay button available after the next round opens (persistent replay)", () => {
