@@ -45,6 +45,11 @@ const req = (k) => {
 const kpOf = (p) => Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(p, "utf8"))));
 const arg = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
 const DRY_RUN = process.argv.includes("--dry-run");
+// Local validators (solana-test-validator) have no Metaplex Token Metadata program, so the
+// createV1 step below would fail there. --skip-metadata forces the skip; otherwise we probe
+// for the program account and auto-skip when it is absent (e.g. a bare local validator).
+const SKIP_METADATA = process.argv.includes("--skip-metadata");
+const MPL_TOKEN_METADATA_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
 const RPC = process.env.RPC_URL || process.env.RPC || "https://api.mainnet-beta.solana.com";
 const payer = kpOf(req("PAYER_WALLET"));
@@ -96,18 +101,27 @@ await createMint(conn, payer, payer.publicKey, null, DECIMALS, mintKp);
 console.log("(a) mint created:", mintKp.publicKey.toBase58(), "(freeze authority: NULL, temp mint authority:", payer.publicKey.toBase58() + ")");
 
 // (b) Metadata while the payer still signs as mint authority (see ORDERING NOTE).
-await createV1(umi, {
-  mint: fromWeb3JsPublicKey(mintKp.publicKey),
-  authority: umi.identity, // mint authority signer = payer
-  name: BEEF_NAME,
-  symbol: BEEF_SYMBOL,
-  uri: BEEF_META_URI,
-  sellerFeeBasisPoints: percentAmount(0),
-  decimals: DECIMALS,
-  tokenStandard: TokenStandard.Fungible,
-  isMutable: true, // update authority (payer) can fix logo/URI later; supply stays PDA-gated
-}).sendAndConfirm(umi);
-console.log("(b) metadata created:", toWeb3JsPublicKey(metadataPda).toBase58());
+// Skip on --skip-metadata OR when the Metaplex Token Metadata program is not deployed on
+// this cluster (bare local validator): the mint is created regardless, it just carries no
+// on-chain name/symbol/logo until createV1 is run later on a Metaplex-enabled cluster.
+if (SKIP_METADATA || !(await conn.getAccountInfo(MPL_TOKEN_METADATA_ID))) {
+  console.warn("(b) metadata SKIPPED — Metaplex Token Metadata program not deployed on this cluster");
+  console.warn("    Mint has NO on-chain name/symbol/logo. Run Metaplex createV1 later (payer still holds");
+  console.warn("    update authority via a fresh authority) on a cluster that has Metaplex, or re-run without --skip-metadata.");
+} else {
+  await createV1(umi, {
+    mint: fromWeb3JsPublicKey(mintKp.publicKey),
+    authority: umi.identity, // mint authority signer = payer
+    name: BEEF_NAME,
+    symbol: BEEF_SYMBOL,
+    uri: BEEF_META_URI,
+    sellerFeeBasisPoints: percentAmount(0),
+    decimals: DECIMALS,
+    tokenStandard: TokenStandard.Fungible,
+    isMutable: true, // update authority (payer) can fix logo/URI later; supply stays PDA-gated
+  }).sendAndConfirm(umi);
+  console.log("(b) metadata created:", toWeb3JsPublicKey(metadataPda).toBase58());
+}
 
 // (c) Vault token account (owner = vault_authority PDA) + treasury ATA.
 const vault = await createAccount(conn, payer, mintKp.publicKey, vaultAuthority, vaultKp);
