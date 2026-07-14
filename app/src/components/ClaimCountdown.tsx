@@ -9,7 +9,7 @@ import { secondsLeft, formatHms } from "../lib/format.js";
  * expired claim would fail (the round is reaped by the janitor), so the chip
  * vanishing is the correct signal, not a stale "CLAIM BY 00:00:00".
  */
-export function ClaimCountdown({ deadlineTs, nowMs }: { deadlineTs: number; nowMs?: number }) {
+export function ClaimCountdown({ deadlineTs, nowMs, tone = "neutral" }: { deadlineTs: number; nowMs?: number; tone?: "neutral" | "gold" }) {
   const [tick, setTick] = useState(() => nowMs ?? Date.now());
   useEffect(() => {
     if (nowMs !== undefined) return; // pinned: no timer
@@ -20,7 +20,7 @@ export function ClaimCountdown({ deadlineTs, nowMs }: { deadlineTs: number; nowM
   const left = secondsLeft(deadlineTs, now);
   if (left <= 0) return null; // window closed -> hidden
   return (
-    <span className="font-mono tabular-nums text-[10px] tracking-widest text-bull-gold/80 whitespace-nowrap">
+    <span className={`font-mono tabular-nums text-[10px] tracking-widest whitespace-nowrap ${tone === "gold" ? "text-bull-gold/80" : "text-bull-muted"}`}>
       CLAIM BY {formatHms(left)}
     </span>
   );

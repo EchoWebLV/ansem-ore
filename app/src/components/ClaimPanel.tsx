@@ -34,7 +34,7 @@ export function ClaimPanel({ roundId, roundState, lastClaimedRound, busy, onClai
       <span className="terminal-label">Round #{roundId} {tag}</span>
       {claimable ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
-          {claimByTs !== undefined && <ClaimCountdown deadlineTs={claimByTs} nowMs={nowMs} />}
+          {claimByTs !== undefined && <ClaimCountdown deadlineTs={claimByTs} nowMs={nowMs} tone={won === true ? "gold" : "neutral"} />}
           {won === false ? (
             <button disabled={busy} onClick={() => onClaim(roundId)} className="rounded-[9px] border border-bull-edge bg-bull-raised px-4 py-2 text-sm disabled:opacity-40">Clear round</button>
           ) : (

@@ -6,7 +6,7 @@ describe("StakeRail (direct-stake)", () => {
   it("disables Stake until squares are selected and a valid amount is entered; stakes the amount on EACH selected square", () => {
     const onStake = vi.fn();
     const { rerender } = render(<StakeRail selectedSquares={[]} enabled busy={false} onStake={onStake} />);
-    expect(screen.getByRole("button")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /place bet · one approval/i })).toBeDisabled();
     rerender(<StakeRail selectedSquares={[4, 9]} enabled busy={false} onStake={onStake} />);
     fireEvent.change(screen.getByLabelText(/amount per tile/i), { target: { value: "0.02" } });
     expect(screen.getByText("#05")).toBeInTheDocument();
@@ -29,6 +29,6 @@ describe("StakeRail (direct-stake)", () => {
   it("stays disabled while the rail is not enabled (round settling / unresolved prior round)", () => {
     render(<StakeRail selectedSquares={[4]} enabled={false} busy={false} onStake={vi.fn()} />);
     fireEvent.change(screen.getByLabelText(/amount per tile/i), { target: { value: "0.02" } });
-    expect(screen.getByRole("button")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /place bet · one approval/i })).toBeDisabled();
   });
 });
