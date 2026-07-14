@@ -51,8 +51,8 @@ export function PhaseNav({ children }: { children?: ReactNode }) {
               aria-current={live ? "page" : undefined}
               className={
                 live
-                  ? "rounded-xl bg-bull-green px-4 py-2 font-mono text-[11px] lg:text-[12px] font-extrabold tracking-[1.5px] text-black shadow-[0_0_28px_-4px_rgba(53,224,122,0.85)]"
-                  : "rounded-xl px-4 py-2 font-mono text-[11px] lg:text-[12px] font-bold tracking-[1.5px] text-bull-muted/70 cursor-not-allowed"
+                  ? "whitespace-nowrap rounded-xl bg-bull-green px-4 py-2 font-mono text-[11px] lg:text-[12px] font-extrabold tracking-[1.5px] text-black shadow-[0_0_28px_-4px_rgba(53,224,122,0.85)]"
+                  : "whitespace-nowrap rounded-xl px-4 py-2 font-mono text-[11px] lg:text-[12px] font-bold tracking-[1.5px] text-bull-muted/70 cursor-not-allowed"
               }
             >
               {live ? (

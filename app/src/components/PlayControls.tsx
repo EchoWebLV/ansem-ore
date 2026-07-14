@@ -9,6 +9,7 @@ import {
 import { PublicKey } from "@solana/web3.js";
 import { usePlayerState } from "../hooks/use-player-state.js";
 import { directStake, type WalletAdapter } from "../lib/writes.js";
+import { CLUSTER } from "../lib/explorer.js";
 import { lamportsToSolStr } from "../lib/amount.js";
 import type { AppSnapshot } from "../lib/keeper-client.js";
 import { StakeRail } from "./StakeRail.js";
@@ -150,8 +151,10 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
           busy={busy} onClaim={doClaim} onRefund={doRefund}
         />
       )}
-      <a href="https://faucet.solana.com" target="_blank" rel="noreferrer"
-        className="text-[10px] text-bull-muted underline self-end">get devnet SOL</a>
+      {CLUSTER !== "mainnet-beta" && (
+        <a href="https://faucet.solana.com" target="_blank" rel="noreferrer"
+          className="text-[10px] text-bull-muted underline self-end">get devnet SOL</a>
+      )}
       {err && <p className="text-red-400 text-xs break-words">{err}</p>}
     </div>
   );

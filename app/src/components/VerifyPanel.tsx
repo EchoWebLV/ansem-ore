@@ -62,7 +62,7 @@ export function VerifyPanel({ roundId, receipts }: { roundId: number; receipts: 
         )}
       </ul>
       <p className="text-[10px] text-bull-muted mt-2">
-        every round, stake and payout is a public devnet transaction — click through and check the math.
+        every round, stake and payout is a public Solana transaction — click through and check the math.
       </p>
     </div>
   );

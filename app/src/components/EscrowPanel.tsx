@@ -39,7 +39,7 @@ export function EscrowPanel({ balanceLamports, walletLamports = null, locked, bu
         className="bg-black border border-white/15 rounded-lg px-3 py-2 font-mono text-sm"
       />
       {overWallet && (
-        <p className="text-[10px] text-amber-400">That&apos;s more than your wallet holds — deposit less or grab devnet SOL below.</p>
+        <p className="text-[10px] text-amber-400">That&apos;s more than your wallet holds — deposit a smaller amount.</p>
       )}
       <div className="flex gap-2">
         <button
