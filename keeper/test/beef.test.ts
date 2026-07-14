@@ -6,6 +6,10 @@ import { makeLogger } from "../src/logger.js";
 
 const silentLog = makeLogger(() => {});
 
+type DurableStampDeps = BeefStampDeps & {
+  sleep: (ms: number) => Promise<void>;
+};
+
 // A representative pinned BeefConfig (launch params); only mint/vault/treasury are read by the
 // stamper — the rest rides along from the on-chain fetch.
 const CFG: BeefConfigState = {
@@ -30,6 +34,26 @@ function harness(over: Partial<BeefStampDeps> = {}) {
     ...over,
   };
   return { deps, calls, stamper: makeBeefStamper(deps) };
+}
+
+function durableHarness(over: Partial<DurableStampDeps> = {}) {
+  const calls = {
+    send: [] as number[],
+    read: [] as number[],
+    sleep: [] as number[],
+    published: [] as bigint[],
+  };
+  const deps: DurableStampDeps = {
+    probeConfig: async () => CFG,
+    detectTokenProgram: async () => TOKEN_PROGRAM_ID,
+    sendStamp: async (roundId) => { calls.send.push(roundId); },
+    readEmission: async (roundId) => { calls.read.push(roundId); return 84_000_000n; },
+    sleep: async (ms) => { calls.sleep.push(ms); },
+    pushEmission: (emission) => { calls.published.push(emission); },
+    log: silentLog,
+    ...over,
+  };
+  return { calls, stamper: makeBeefStamper(deps) };
 }
 
 describe("makeBeefStamper", () => {
@@ -142,5 +166,80 @@ describe("makeBeefStamper", () => {
     const { stamper } = harness({ probeConfig: async () => null });
     await stamper.init();
     expect(stamper.enabled()).toBe(false);
+  });
+
+  describe("durable idempotent stamping", () => {
+    it("publishes an existing BeefRound emission without sending a transaction", async () => {
+      const emission = 81_234_567n;
+      const { calls, stamper } = durableHarness({
+        readEmission: async (roundId) => { calls.read.push(roundId); return emission; },
+      });
+
+      await stamper.stamp(41);
+
+      expect(calls.send).toEqual([]);
+      expect(calls.read).toEqual([41]);
+      expect(calls.published).toEqual([emission]);
+    });
+
+    it("sends once, then waits for delayed BeefRound reads before publishing", async () => {
+      let sent = false;
+      let readsAfterSend = 0;
+      const emission = 82_345_678n;
+      const { calls, stamper } = durableHarness({
+        sendStamp: async (roundId) => { calls.send.push(roundId); sent = true; },
+        readEmission: async (roundId) => {
+          calls.read.push(roundId);
+          if (!sent || ++readsAfterSend < 3) throw new Error("BeefRound unavailable");
+          return emission;
+        },
+      });
+
+      await stamper.stamp(42);
+
+      expect(calls.send).toEqual([42]);
+      expect(calls.read).toEqual([42, 42, 42, 42]);
+      expect(calls.sleep.length).toBeGreaterThan(0);
+      expect(calls.published).toEqual([emission]);
+    });
+
+    it("recovers a landed-account send error through the next stamp's pre-read", async () => {
+      let landed = false;
+      const emission = 83_456_789n;
+      const { calls, stamper } = durableHarness({
+        sendStamp: async (roundId) => {
+          calls.send.push(roundId);
+          landed = true;
+          throw new Error("confirmation lost");
+        },
+        readEmission: async (roundId) => {
+          calls.read.push(roundId);
+          if (!landed) throw new Error("BeefRound unavailable");
+          return emission;
+        },
+      });
+
+      await expect(stamper.stamp(43)).rejects.toThrow(/confirmation lost/);
+      await stamper.stamp(43);
+
+      expect(calls.send).toEqual([43]);
+      expect(calls.published).toEqual([emission]);
+    });
+
+    it("throws when BeefRound reads are exhausted and never fabricates an emission", async () => {
+      const { calls, stamper } = durableHarness({
+        readEmission: async (roundId) => {
+          calls.read.push(roundId);
+          throw new Error("BeefRound unavailable");
+        },
+      });
+
+      await expect(stamper.stamp(44)).rejects.toThrow(/BeefRound unavailable/);
+
+      expect(calls.send).toEqual([44]);
+      expect(calls.read.length).toBeGreaterThan(1);
+      expect(calls.sleep.length).toBeGreaterThan(0);
+      expect(calls.published).toEqual([]);
+    });
   });
 });
