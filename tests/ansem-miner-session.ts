@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { Connection, PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { SessionTokenManager } from "@magicblock-labs/gum-sdk";
 import { GetCommitmentSignature } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { assert } from "chai";
@@ -101,13 +101,14 @@ const [bigJackpotAuth] = PublicKey.findProgramAddressSync([enc("jackpot_big_auth
 const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
 const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
 
+// tokenProgram is no longer auto-resolvable (Interface token layer, commit 1ab3f46).
 const swapAccounts = (roundPda: PublicKey) => ({
   payer: admin.publicKey, round: roundPda, ansemMint, mintAuthority: mintAuth,
-  vaultAuthority: vaultAuth, payoutVault, potVault: potVaultPda, treasury,
+  vaultAuthority: vaultAuth, payoutVault, potVault: potVaultPda, treasury, tokenProgram: TOKEN_PROGRAM_ID,
 });
 const claimAccounts = (roundPda: PublicKey) => ({
   authority: player.publicKey, round: roundPda, ansemMint, vaultAuthority: vaultAuth,
-  payoutVault, playerAta,
+  payoutVault, playerAta, tokenProgram: TOKEN_PROGRAM_ID,
 });
 
 // Gum session-token manager, wallet = the PLAYER (fee_payer + authority of the
@@ -140,7 +141,11 @@ async function createSession(sessionSigner: Keypair, target: PublicKey, validUnt
 
 describe("ansem-miner (M2c session keys)", () => {
   before("L1 prelude: initialize, fund player, deposit, init miner", async () => {
-    await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
+    await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
+    // Fixture (BEEF/jackpot upgrade): execute_swap_mock now reads the JackpotConfig
+    // PDA (spec D6). Seed it once so the swap resolves it — defaults (1-in-25/100x)
+    // run at rollover 0 in this suite, so the bite is 0 and payouts are unchanged.
+    await program.methods.initJackpotConfig().accounts({ admin: admin.publicKey }).rpc();
     // Lottery model: flat 50% return band so the sole staker always gets > 0.
     await program.methods.setReturnBand(5000, 5000).accounts({ admin: admin.publicKey }).rpc();
     const sig = await provider.connection.requestAirdrop(player.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL);

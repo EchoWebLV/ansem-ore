@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { Connection, PublicKey, Keypair } from "@solana/web3.js";
 import { GetCommitmentSignature } from "@magicblock-labs/ephemeral-rollups-sdk";
-import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { assert } from "chai";
 
 // ANSEM Miner — Ephemeral Rollup integration suite (M2a).
@@ -136,14 +136,16 @@ const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.p
 const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
 const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
 
+// tokenProgram is no longer auto-resolvable (the token layer is an Interface after
+// the Token-2022 conversion, commit 1ab3f46); the mock ANSEM mint is classic SPL.
 const swapAccounts = () => ({
   payer: admin.publicKey, round: round1Pda, ansemMint,
   mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault,
-  potVault: potVaultPda, treasury,
+  potVault: potVaultPda, treasury, tokenProgram: TOKEN_PROGRAM_ID,
 });
 const claimAccounts = () => ({
   authority: player.publicKey, round: round1Pda, ansemMint, vaultAuthority: vaultAuth,
-  payoutVault, playerAta,
+  payoutVault, playerAta, tokenProgram: TOKEN_PROGRAM_ID,
 });
 
 // Settle round 1 once its (undelegated, on-L1) deadline passes — poll the
@@ -186,7 +188,11 @@ async function settleOnErAfterDeadline(rnd: Buffer, tries = 60): Promise<void> {
 describe("ansem-miner (ER)", () => {
   before("L1 prelude: initialize, fund player, create round 1, init miner", async () => {
     // Idempotent-ish: fresh validator each run (scripts/test-er.sh --reset).
-    await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
+    await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
+    // Fixture (BEEF/jackpot upgrade): execute_swap_mock now reads the JackpotConfig
+    // PDA (spec D6). Seed it once so the swap resolves it — defaults (1-in-25/100x)
+    // run at rollover 0 in this suite, so the bite is 0 and payouts are unchanged.
+    await program.methods.initJackpotConfig().accounts({ admin: admin.publicKey }).rpc();
     // 30s round: long enough to stay OPEN through delegate/join/stake/commit
     // (staking happens within the first few seconds), short enough that the e2e
     // tail can wait out the deadline to settle without a long stall.
