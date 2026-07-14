@@ -20,7 +20,11 @@ Program PDA (`vault_authority`) holds the BEEF mint authority forever. The "mint
 Per-round emission:
 
 ```
-emission = MAX_ROUND_MINT * pot / (pot + S)        // integer math, u128 intermediate
+emission = (MAX_ROUND_MINT * pot / (pot + S)) * (HARD_CAP - minted_total) / HARD_CAP
+// integer math, u128 intermediates; the second factor is the ZINC-style
+// continuous difficulty decay: every BEEF mined makes the next round leaner.
+// At genesis the factor is 1 (full emission); it decays asymptotically toward
+// the cap — no halving cliff, and launch week is provably the richest window.
 ```
 
 - `MAX_ROUND_MINT = 210 BEEF` (210_000_000 base units)
@@ -73,6 +77,7 @@ Mechanics: single-sided **BEEF** seed from the treasury's mined share → fee sc
 Build-time verifications: fee-scheduler on custom-quote pool configs, single-sided create parameters, Jupiter new-pool indexing lag (day-one trades go direct on Meteora).
 
 ### D11 — LATER menu (explicitly out of launch scope; each an independent ship)
+- **Referral system (top priority — ZINC-proven growth loop):** share-link codes; referrer earns a slice of the referee's BEEF mints, paid from the treasury's 20% cut (no new inflation, no program change — keeper-tracked ledger + periodic treasury payouts; on-chain memo tag on stakes for attribution).
 - Buyback crank: fee SOL → SOL→ANSEM→BEEF (buys ANSEM by construction — replaced the tithe design) → **90% burn / 10% stakers**.
 - BEEF staking (no-lockup, revenue-funded yield).
 - `seed_jackpot` permissionless donate ix + "Feed the Jackpot" UI + donor ticker.
