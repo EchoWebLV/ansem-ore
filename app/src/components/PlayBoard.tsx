@@ -170,11 +170,15 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
             <div className="xl:col-start-1 xl:row-start-2">
               <Leaderboard leaderboard={snapshot.leaderboard} />
             </div>
-            <div className={canPlay ? "xl:col-start-3 xl:row-start-2" : "xl:col-start-3 xl:row-start-1"}>
-              <ActivityFeed events={events.length ? events : snapshot.recentEvents} />
-            </div>
+            {/* Leaderboard + verify ride directly under the jackpot (top of the left
+                rail on desktop, straight after the board on mobile). Activity is the
+                quieter surface, so it drops below them in DOM order; the explicit xl
+                grid placements keep the three-column desktop layout unchanged. */}
             <div id="verify" className="xl:col-start-1 xl:row-start-3 scroll-mt-4">
               <VerifyPanel roundId={snapshot.roundId} receipts={receipts} />
+            </div>
+            <div className={canPlay ? "xl:col-start-3 xl:row-start-2" : "xl:col-start-3 xl:row-start-1"}>
+              <ActivityFeed events={events.length ? events : snapshot.recentEvents} />
             </div>
           </div>
         </>

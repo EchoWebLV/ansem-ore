@@ -170,6 +170,22 @@ describe("PlayBoard", () => {
     expect(board.className).not.toContain("lg:col-start");
   });
 
+  it("stacks jackpot → leaderboard → verify at the top of the rail, activity below", () => {
+    renderWithSnapshot();
+    const jackpot = screen.getByRole("heading", { name: "Jackpot" });
+    const leaderboard = screen.getByRole("heading", { name: "Leaderboard" });
+    const verify = screen.getByRole("heading", { name: "Verify on-chain" });
+    const activity = screen.getByRole("heading", { name: "Recent activity" });
+    // DOM order is the mobile order: board → jackpot → leaderboard → verify → activity.
+    const precedes = (a: Element, b: Element) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(precedes(jackpot, leaderboard)).toBe(true);
+    expect(precedes(leaderboard, verify)).toBe(true);
+    expect(precedes(verify, activity)).toBe(true);
+    // Desktop keeps the trio in the left rail via explicit grid placement.
+    expect(verify.closest("#verify")).toHaveClass("xl:col-start-1", "xl:row-start-3");
+  });
+
   it("restores safe-area-aware mobile shell padding", () => {
     const factory = (): KeeperClient => ({ start: () => {}, stop: () => {} });
     render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" clientFactory={factory} />);
