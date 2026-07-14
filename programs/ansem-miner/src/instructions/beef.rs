@@ -1,26 +1,35 @@
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-// Interface types: BEEF's future token is a pump.fun (Token-2022) mint, so the vault +
-// player ATA + payout all go through the Token-2022-compatible interface layer.
-use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
+// BEEF is now the program's OWN classic-SPL mint (6 decimals, spec 2026-07-14-
+// beef-on-ansem-design D1/D4): its mint authority is the vault_authority PDA, so
+// stamp_beef MINTS each round's emission (players' 80% into the vault buffer,
+// treasury's 20% straight to the treasury ATA). The Token-2022-compatible
+// interface layer is retained for generality — a classic SPL mint satisfies it.
+use anchor_spl::token_interface::{self, Mint, MintTo, TokenAccount, TokenInterface, TransferChecked};
 
 use crate::constants::*;
 use crate::error::AnsemError;
 use crate::math;
 use crate::state::{BeefConfig, BeefMiner, BeefRound, Config, MinerPosition, Round, STATE_CLAIMABLE};
 
-// BEEF vault emission layer (plan 2026-07-09-beef-vault-emission).
+// BEEF mint-on-emission layer (spec 2026-07-14-beef-on-ansem-design; supersedes
+// the dormant vault-drip plan 2026-07-09).
 //
-// INVARIANT — BEEF never blocks the game: an empty/missing vault stamps
-// emission 0; roll_beef no-ops (never errors) on already-rolled / round-
-// mismatch so it can't abort a stake or claim bundle; every ANSEM
-// instruction is untouched and takes no BEEF accounts.
+// INVARIANT — BEEF never blocks the game: a dust/empty round stamps emission 0;
+// roll_beef no-ops (never errors) on already-rolled / round-mismatch so it can't
+// abort a stake or claim bundle; every ANSEM instruction is untouched and takes
+// no BEEF accounts.
 //
 // ORDERING (SDK-enforced): roll_beef must precede any block_stake-zeroing ix
 // in a bundle — claim_direct zeroes stakes, stake_direct re-stamps the miner.
 
-fn validate_params(divisor: u64, secs_per_tick: i64) -> Result<()> {
-    require!(divisor > 0 && secs_per_tick > 0, AnsemError::BadBeefParams);
+// Shared validation for the tunable emission/bonus params (init + set_beef_params).
+// sat_lamports and secs_per_tick are denominators in the emission/bonus math, so
+// both must be > 0. treasury_bps and hard_cap are validated at init only — they
+// are init-PINNED (never tunable): raising the cap or the treasury split would
+// break the published trust page.
+fn validate_beef_params(sat_lamports: u64, secs_per_tick: i64) -> Result<()> {
+    require!(sat_lamports > 0 && secs_per_tick > 0, AnsemError::BadBeefParams);
     Ok(())
 }
 
@@ -33,20 +42,30 @@ pub struct InitBeef<'info> {
         constraint = config.admin == admin.key() @ AnsemError::Unauthorized)]
     pub config: Box<Account<'info, Config>>,
 
-    pub beef_mint: Box<InterfaceAccount<'info, Mint>>,
-
-    /// CHECK: existing payout vault authority PDA — reused as the BEEF vault owner.
+    /// CHECK: existing payout vault authority PDA — reused as the BEEF vault owner
+    /// AND (now) the BEEF mint authority. Declared BEFORE beef_mint so the
+    /// mint-authority constraint below can reference its key.
     #[account(seeds = [VAULT_AUTH_SEED], bump = config.vault_auth_bump)]
     pub vault_authority: UncheckedAccount<'info>,
 
-    // The (vanity-address) token account that IS the vault. Created off-chain by
-    // ops (scripts/beef-init.mjs); the program only pins mint + owner here, then
-    // trusts the stored pubkey everywhere else.
+    // The program's OWN BEEF mint. Its mint authority MUST be the vault_authority
+    // PDA so stamp_beef can mint the per-round emission; pinned here, then trusted
+    // by pubkey everywhere else.
+    #[account(constraint = beef_mint.mint_authority.contains(&vault_authority.key()) @ AnsemError::BadBeefParams)]
+    pub beef_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    // The (vanity-address) token account that IS the players' emission buffer.
+    // Created off-chain by ops; the program only pins mint + owner here.
     #[account(
         constraint = beef_vault.mint == beef_mint.key() @ AnsemError::BadBeefVault,
         constraint = beef_vault.owner == vault_authority.key() @ AnsemError::BadBeefVault,
     )]
     pub beef_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    // Treasury ATA — the 20% continuous cut is minted straight here. Pinned at
+    // init; any owner (ops names it), only the mint is constrained.
+    #[account(constraint = beef_treasury.mint == beef_mint.key() @ AnsemError::BadBeefVault)]
+    pub beef_treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(init, payer = admin, space = 8 + BeefConfig::INIT_SPACE,
         seeds = [BEEF_CONFIG_SEED], bump)]
@@ -57,17 +76,27 @@ pub struct InitBeef<'info> {
 
 pub fn init_beef_handler(
     ctx: Context<InitBeef>,
-    divisor: u64,
+    max_round_mint: u64,
+    sat_lamports: u64,
+    hard_cap: u64,
+    treasury_bps: u16,
     tick_bps: u16,
     bonus_cap_bps: u16,
     activity_window_secs: i64,
     secs_per_tick: i64,
 ) -> Result<()> {
-    validate_params(divisor, secs_per_tick)?;
+    validate_beef_params(sat_lamports, secs_per_tick)?;
+    // Init-only pins: split capped at 50% and a positive cap. Never re-settable.
+    require!(treasury_bps <= 5_000 && hard_cap > 0, AnsemError::BadBeefParams);
     let bc = &mut ctx.accounts.beef_config;
     bc.beef_mint = ctx.accounts.beef_mint.key();
     bc.beef_vault = ctx.accounts.beef_vault.key();
-    bc.divisor = divisor;
+    bc.beef_treasury = ctx.accounts.beef_treasury.key();
+    bc.max_round_mint = max_round_mint;
+    bc.sat_lamports = sat_lamports;
+    bc.hard_cap = hard_cap;
+    bc.minted_total = 0;
+    bc.treasury_bps = treasury_bps;
     bc.tick_bps = tick_bps;
     bc.bonus_cap_bps = bonus_cap_bps;
     bc.activity_window_secs = activity_window_secs;
@@ -88,18 +117,23 @@ pub struct SetBeefParams<'info> {
 }
 
 /// The tuning knob promised in the design: launch conservative, adjust with
-/// data. Cannot change mint/vault (those are pinned at init).
+/// data. Tunes the emission CURVE (max_round_mint / sat_lamports) and the bonus
+/// knobs. CANNOT change mint / vault / treasury / hard_cap / treasury_bps — those
+/// are init-pinned trust commitments (raising the cap or the split would break
+/// the trust page).
 pub fn set_beef_params_handler(
     ctx: Context<SetBeefParams>,
-    divisor: u64,
+    max_round_mint: u64,
+    sat_lamports: u64,
     tick_bps: u16,
     bonus_cap_bps: u16,
     activity_window_secs: i64,
     secs_per_tick: i64,
 ) -> Result<()> {
-    validate_params(divisor, secs_per_tick)?;
+    validate_beef_params(sat_lamports, secs_per_tick)?;
     let bc = &mut ctx.accounts.beef_config;
-    bc.divisor = divisor;
+    bc.max_round_mint = max_round_mint;
+    bc.sat_lamports = sat_lamports;
     bc.tick_bps = tick_bps;
     bc.bonus_cap_bps = bonus_cap_bps;
     bc.activity_window_secs = activity_window_secs;
@@ -110,9 +144,9 @@ pub fn set_beef_params_handler(
 #[derive(Accounts)]
 #[instruction(round_id: u64)]
 pub struct StampBeef<'info> {
-    // Permissionless: the payer just funds BeefRound rent. Emission math is
-    // deterministic from frozen round + live vault state; a griefing deposit
-    // into the vault only ever RAISES the players' emission.
+    // Permissionless: the payer just funds BeefRound rent. Emission is
+    // deterministic from the frozen round + config (nothing an attacker
+    // controls) — the stamp mints the exact per-round emission.
     #[account(mut)]
     pub payer: Signer<'info>,
 
@@ -126,14 +160,28 @@ pub struct StampBeef<'info> {
     #[account(mut, seeds = [BEEF_CONFIG_SEED], bump = beef_config.bump)]
     pub beef_config: Box<Account<'info, BeefConfig>>,
 
-    #[account(address = beef_config.beef_vault @ AnsemError::BadBeefVault)]
+    // The BEEF mint — mut because stamp_beef mints this round's emission from it.
+    #[account(mut, address = beef_config.beef_mint @ AnsemError::BadBeefVault)]
+    pub beef_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: vault authority PDA — the BEEF mint authority; signs the mint CPI.
+    #[account(seeds = [VAULT_AUTH_SEED], bump = config.vault_auth_bump)]
+    pub vault_authority: UncheckedAccount<'info>,
+
+    // Players' 80% is minted into the emission buffer (roll_beef splits it out).
+    #[account(mut, address = beef_config.beef_vault @ AnsemError::BadBeefVault)]
     pub beef_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    // Treasury's 20% is minted straight here.
+    #[account(mut, address = beef_config.beef_treasury @ AnsemError::BadBeefVault)]
+    pub beef_treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     // `init` (not init_if_needed) = the once-only stamp guard.
     #[account(init, payer = payer, space = 8 + BeefRound::INIT_SPACE,
         seeds = [BEEF_ROUND_SEED, round_id.to_le_bytes().as_ref()], bump)]
     pub beef_round: Box<Account<'info, BeefRound>>,
 
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -148,17 +196,61 @@ pub fn stamp_beef_handler(ctx: Context<StampBeef>, round_id: u64) -> Result<()> 
         AnsemError::NotCurrentRound
     );
 
-    let bc = &mut ctx.accounts.beef_config;
-    let free = ctx.accounts.beef_vault.amount.saturating_sub(bc.total_owed);
-    // Empty rounds emit nothing (a quiet night never drains the vault).
-    let emission = if round.pot == 0 { 0 } else { free / bc.divisor };
+    // Read config scalars up front — no borrow of beef_config is held across the
+    // mint CPIs. Emission = pot-scaled decayed curve, clamped to the cap remainder
+    // (belt-and-suspenders: the decay factor makes overshoot near-impossible, but
+    // the clamp guards integer rounding at the very last dust of the cap).
+    let pot = round.pot;
+    let bc = &ctx.accounts.beef_config;
+    let total = math::beef_emission(pot, bc.max_round_mint, bc.sat_lamports, bc.minted_total, bc.hard_cap)
+        .min(bc.hard_cap.saturating_sub(bc.minted_total));
+    let treasury_cut = (total as u128 * bc.treasury_bps as u128 / 10_000u128) as u64;
+    let players = total - treasury_cut;
+    let vault_auth_bump = ctx.accounts.config.vault_auth_bump;
+
+    // vault_authority PDA is the mint authority; it signs both mint CPIs.
+    // NOTE: anchor-lang 1.0.2's CpiContext takes the program ID (.key()), matching
+    // every other CPI in this repo (swap.rs / claim_beef / sweep.rs).
+    let va_seeds: &[&[u8]] = &[VAULT_AUTH_SEED, &[vault_auth_bump]];
+    if players > 0 {
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                MintTo {
+                    mint: ctx.accounts.beef_mint.to_account_info(),
+                    to: ctx.accounts.beef_vault.to_account_info(),
+                    authority: ctx.accounts.vault_authority.to_account_info(),
+                },
+                &[va_seeds],
+            ),
+            players,
+        )?;
+    }
+    if treasury_cut > 0 {
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                MintTo {
+                    mint: ctx.accounts.beef_mint.to_account_info(),
+                    to: ctx.accounts.beef_treasury.to_account_info(),
+                    authority: ctx.accounts.vault_authority.to_account_info(),
+                },
+                &[va_seeds],
+            ),
+            treasury_cut,
+        )?;
+    }
 
     let br = &mut ctx.accounts.beef_round;
     br.round_id = round_id;
-    br.emission = emission;
+    br.emission = players; // roll_beef splits only the players' share
     br.bump = ctx.bumps.beef_round;
 
-    bc.total_owed = bc.total_owed.checked_add(emission).ok_or(AnsemError::Overflow)?;
+    let bc = &mut ctx.accounts.beef_config;
+    // minted_total counts BOTH shares (cap accounting); total_owed tracks only the
+    // players' claimable liability (buffered in the vault, drawn by claim_beef).
+    bc.minted_total = bc.minted_total.checked_add(total).ok_or(AnsemError::Overflow)?;
+    bc.total_owed = bc.total_owed.checked_add(players).ok_or(AnsemError::Overflow)?;
     Ok(())
 }
 

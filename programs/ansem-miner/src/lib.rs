@@ -182,17 +182,24 @@ pub mod ansem_miner {
     // hold-to-grow bonus. All-new accounts; the ANSEM path takes no BEEF
     // accounts and cannot be blocked by this layer. ----
     pub fn init_beef(
-        ctx: Context<InitBeef>, divisor: u64, tick_bps: u16, bonus_cap_bps: u16,
+        ctx: Context<InitBeef>, max_round_mint: u64, sat_lamports: u64, hard_cap: u64,
+        treasury_bps: u16, tick_bps: u16, bonus_cap_bps: u16,
         activity_window_secs: i64, secs_per_tick: i64,
     ) -> Result<()> {
-        instructions::beef::init_beef_handler(ctx, divisor, tick_bps, bonus_cap_bps, activity_window_secs, secs_per_tick)
+        instructions::beef::init_beef_handler(
+            ctx, max_round_mint, sat_lamports, hard_cap, treasury_bps,
+            tick_bps, bonus_cap_bps, activity_window_secs, secs_per_tick,
+        )
     }
 
     pub fn set_beef_params(
-        ctx: Context<SetBeefParams>, divisor: u64, tick_bps: u16, bonus_cap_bps: u16,
-        activity_window_secs: i64, secs_per_tick: i64,
+        ctx: Context<SetBeefParams>, max_round_mint: u64, sat_lamports: u64, tick_bps: u16,
+        bonus_cap_bps: u16, activity_window_secs: i64, secs_per_tick: i64,
     ) -> Result<()> {
-        instructions::beef::set_beef_params_handler(ctx, divisor, tick_bps, bonus_cap_bps, activity_window_secs, secs_per_tick)
+        instructions::beef::set_beef_params_handler(
+            ctx, max_round_mint, sat_lamports, tick_bps, bonus_cap_bps,
+            activity_window_secs, secs_per_tick,
+        )
     }
 
     pub fn stamp_beef(ctx: Context<StampBeef>, round_id: u64) -> Result<()> {

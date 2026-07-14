@@ -92,6 +92,12 @@ pub fn sweep_beef_excess_handler(ctx: Context<SweepBeefExcess>, amount: u64) -> 
     // Refundability rule: only supply ABOVE the player solvency ledger may leave. The
     // saturating_sub means a drifted/over-counted total_owed only ever shrinks the free
     // surplus (conservative — it can never let owed BEEF be swept).
+    //
+    // MINTED MODEL (spec 2026-07-14): the vault is no longer pre-funded — stamp_beef
+    // MINTS exactly the players' share into it and books the same amount into
+    // total_owed, so vault.amount == total_owed by construction and this free surplus
+    // is normally 0. Any positive surplus can only come from an EXTERNAL donation into
+    // the vault. The ix is harmless (admin-gated, solvency-bounded) and kept for that.
     let free = ctx
         .accounts
         .beef_vault

@@ -1,25 +1,37 @@
 use anchor_lang::prelude::*;
 
-// BEEF vault emission layer. All-new accounts — Config/Round/MinerPosition are
-// deliberately untouched (zero migrations; the ANSEM path cannot be affected).
+// BEEF mint-on-emission layer (spec 2026-07-14-beef-on-ansem-design). All-new
+// accounts — Config/Round/MinerPosition are deliberately untouched (zero
+// migrations; the ANSEM path cannot be affected). BeefConfig is NOT initialized
+// on live mainnet (verified 2026-07-14), so this struct changed freely.
 
 #[account]
 #[derive(InitSpace)]
 pub struct BeefConfig {
     pub beef_mint: Pubkey,
-    /// SPL token account holding the emission supply. Owner = the existing
-    /// vault_authority PDA. Ops-side this sits at a vanity BEEF... address;
-    /// the program only cares that this pubkey matches.
+    /// Player-emission buffer. Owner = vault_authority PDA, which is ALSO the
+    /// beef mint authority — stamp mints into here, claims transfer out.
     pub beef_vault: Pubkey,
-    /// emission_per_round = free_vault / divisor (free = vault - total_owed).
-    pub divisor: u64,
+    /// Treasury ATA (20% cut minted straight here). Pinned at init.
+    pub beef_treasury: Pubkey,
+    /// emission_total_per_round = max_round_mint * pot/(pot + sat_lamports),
+    /// times the ZINC-style decay factor (hard_cap - minted_total)/hard_cap.
+    pub max_round_mint: u64,
+    pub sat_lamports: u64,
+    /// Emission stops forever at the cap. minted_total counts BOTH shares
+    /// (players + treasury) — it is the supply meter; the cap is init-pinned.
+    pub hard_cap: u64,
+    pub minted_total: u64,
+    /// Continuous treasury cut in bps (init-pinned; 20% at launch).
+    pub treasury_bps: u16,
     pub tick_bps: u16,
     pub bonus_cap_bps: u16,
     pub activity_window_secs: i64,
     pub secs_per_tick: i64,
-    /// Solvency ledger: every stamped emission and accrued bonus is recognized
-    /// here the moment it becomes claimable; claims subtract their payout.
-    /// free_vault = vault.amount - total_owed can never go negative-spendable.
+    /// Solvency ledger for the PLAYERS' buffered share: every stamped players'
+    /// emission and accrued bonus is recognized here the moment it becomes
+    /// claimable; claims subtract their payout. free_vault = vault.amount -
+    /// total_owed can never go negative-spendable.
     pub total_owed: u64,
     pub bump: u8,
 }
