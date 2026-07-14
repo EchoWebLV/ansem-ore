@@ -78,6 +78,8 @@ Build-time verifications: fee-scheduler on custom-quote pool configs, single-sid
 
 ### D11 — LATER menu (explicitly out of launch scope; each an independent ship)
 - **Referral system (top priority — ZINC-proven growth loop):** share-link codes; referrer earns a slice of the referee's BEEF mints, paid from the treasury's 20% cut (no new inflation, no program change — keeper-tracked ledger + periodic treasury payouts; on-chain memo tag on stakes for attribution).
+- **Winnings→BEEF button (post-listing):** claim panel offers one-tap ANSEM→BEEF through our own DAMM v2 pool — winnings become BEEF buying power instead of routing back to SOL, and the ANSEM side accrues in the burned LP. Client-side swap only, no program change. Guardrail: never ship a winnings→SOL button in our own UI — the ANSEM game selling ANSEM from its own app is unacceptable optics.
+- **Direct ANSEM staking (program upgrade, data-gated):** the structural fix for winner re-bet friction — accept ANSEM stakes straight into the payout pool (it is already the prize currency: no swap, no sell pressure), valued at lamport-equivalents via the keeper-refreshed `min_swap_rate` floor (D9). Adds a second currency-unit bridge through pot/emission/jackpot math (the bug class D6's cap needed), so it ships only if the winner repeat-stake metric (keeper-tracked: claim → next-stake per wallet) shows winners aren't coming back.
 - Buyback crank: fee SOL → SOL→ANSEM→BEEF (buys ANSEM by construction — replaced the tithe design) → **90% burn / 10% stakers**.
 - BEEF staking (no-lockup, revenue-funded yield).
 - `seed_jackpot` permissionless donate ix + "Feed the Jackpot" UI + donor ticker.
