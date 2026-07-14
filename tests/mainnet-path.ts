@@ -160,6 +160,17 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(cfg.rolloverJackpot.toString(), "0");
     assert.equal(cfg.minSwapRate.toString(), "0");
     assert.isTrue(cfg.currentRoundFinalized);
+
+    // Fixture (BEEF/jackpot upgrade): execute_swap_real now reads the JackpotConfig
+    // PDA (spec D6) — seed it once here, gated by the real-mode admin (keeper_admin).
+    // Defaults (1-in-25 / 100x) are transparent to this suite's assertions: every
+    // real-swap round below starts from rollover 0, so the bite is 0 and the
+    // "rollover consumed by the winner" identity is unchanged.
+    await (program.methods as any)
+      .initJackpotConfig()
+      .accounts({ admin: keeperAdmin.publicKey })
+      .signers([keeperAdmin])
+      .rpc();
   });
 
   it("admin-gated ix signed by the DEPLOY wallet now FAILS Unauthorized", async () => {
