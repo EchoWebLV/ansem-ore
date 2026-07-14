@@ -45,6 +45,20 @@ export function createKeeperClient(opts: KeeperClientOpts): KeeperClient {
   const setStatus = (s: KeeperStatus) => opts.onStatus?.(s);
 
   async function coldLoad() {
+    // The layout's head-inline script may have parked a snapshot fetch on window
+    // BEFORE the bundle parsed; consume it exactly once and skip our own fetch.
+    const g = globalThis as { __ansemSnap?: Promise<AppSnapshot | null> | null };
+    const early = g.__ansemSnap;
+    if (early && typeof early.then === "function") {
+      g.__ansemSnap = null; // consume once — later starts fetch normally
+      try {
+        const snap = await early;
+        if (snap) {
+          if (!stopped) opts.onSnapshot(snap);
+          return;
+        }
+      } catch { /* early fetch failed — fall through to the normal fetch */ }
+    }
     try {
       const res = await doFetch(`${opts.httpUrl}/snapshot`);
       // Guard: a fetch that resolves after stop() must not push a stale snapshot

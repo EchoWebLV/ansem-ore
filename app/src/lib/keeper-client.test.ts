@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { createKeeperClient, type KeeperStatus } from "./keeper-client.js";
 import type { WireSnapshot } from "@ansem/sdk";
 
@@ -79,5 +79,45 @@ describe("createKeeperClient", () => {
     FakeWS.instances[0].close();
     await new Promise((r) => setTimeout(r, 30));
     expect(FakeWS.instances).toHaveLength(countAfterStop); // no reconnect after stop
+  });
+});
+
+// The layout's head-inline script parks a fetch promise on window before the
+// bundle parses; coldLoad must consume it exactly once and skip its own fetch.
+type EarlyGlobal = { __ansemSnap?: Promise<WireSnapshot | null> | null };
+
+describe("createKeeperClient — pre-hydration early snapshot", () => {
+  afterEach(() => { delete (globalThis as EarlyGlobal).__ansemSnap; });
+
+  it("consumes the early snapshot instead of fetching /snapshot itself", async () => {
+    (globalThis as EarlyGlobal).__ansemSnap = Promise.resolve(wireSnap(7));
+    const { client, snapshots, fetchImpl } = setup();
+    client.start();
+    await vi.waitFor(() => expect(snapshots).toContainEqual(expect.objectContaining({ roundId: 7 })));
+    expect(fetchImpl).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("falls back to its own fetch when the early fetch yielded null", async () => {
+    (globalThis as EarlyGlobal).__ansemSnap = Promise.resolve(null);
+    const { client, snapshots, fetchImpl } = setup();
+    client.start();
+    await vi.waitFor(() => expect(snapshots).toContainEqual(expect.objectContaining({ roundId: 1 })));
+    expect(fetchImpl).toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("consumes the early snapshot only once — the next start() fetches normally", async () => {
+    (globalThis as EarlyGlobal).__ansemSnap = Promise.resolve(wireSnap(7));
+    const first = setup();
+    first.client.start();
+    await vi.waitFor(() => expect(first.snapshots).toContainEqual(expect.objectContaining({ roundId: 7 })));
+    first.client.stop();
+    expect((globalThis as EarlyGlobal).__ansemSnap).toBeNull(); // cleared on consumption
+    const second = setup();
+    second.client.start();
+    await vi.waitFor(() => expect(second.snapshots).toContainEqual(expect.objectContaining({ roundId: 1 })));
+    expect(second.fetchImpl).toHaveBeenCalled();
+    second.client.stop();
   });
 });

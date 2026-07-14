@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { useAnchorWallet } from "@solana/wallet-adapter-react";
-import { RoundState } from "@ansem/sdk";
+import { RoundState, type WireSnapshot } from "@ansem/sdk";
 import { useKeeperSnapshot } from "../hooks/use-keeper-snapshot.js";
 import { useReveal } from "../hooks/use-reveal.js";
 import type { KeeperClientOpts, KeeperClient } from "../lib/keeper-client.js";
@@ -23,6 +23,14 @@ import { JackpotMeter } from "./JackpotMeter.js";
 import { WinTicker } from "./WinTicker.js";
 import { ListingBanner } from "./ListingBanner.js";
 import { stateLabel } from "../lib/format.js";
+
+// Instant-boot placeholder: the real board geometry with zeroed data, so the
+// page looks loaded the moment it paints while the keeper link comes up.
+const SKELETON_SNAP: WireSnapshot = {
+  roundId: 0, state: RoundState.Open, deadlineTs: 0, pot: "0",
+  blockSol: Array(25).fill("0"), jackpotSquare: null, jackpotPool: "0",
+  rolloverJackpot: "0", updatedAt: 0, leaderboard: [], recentEvents: [],
+};
 
 export interface PlayBoardProps {
   wsUrl: string;
@@ -152,9 +160,29 @@ export function PlayBoard({ wsUrl, httpUrl, nowMs, clientFactory }: PlayBoardPro
         </div>
         </>
       ) : (
-        <div className="flex-1 flex items-center justify-center">
-          <p className="text-bull-muted text-sm tracking-widest animate-pulse">WAITING FOR THE KEEPER…</p>
-        </div>
+        /* Pre-snapshot skeleton: the true board at rest (layout is static, so it
+           paints instantly); live data swaps in place when the keeper answers. */
+        <Stage className="w-full mx-auto max-w-[460px]">
+          <div className="bg-[#0b0b0e] border border-[#23232a] rounded-[18px] p-[18px] text-center shadow-[0_18px_60px_-24px_rgba(53,224,122,0.25)]">
+            <div className="text-center">
+              <div className="text-[12px] lg:text-[13px] tracking-[2px] text-[#8a8a93]">
+                ROUND — · CONNECTING
+              </div>
+              <div
+                className="font-mono text-[40px] lg:text-[64px] font-medium my-[2px] animate-pulse"
+                style={{ color: "#35e07a", textShadow: "0 0 20px rgba(53,224,122,0.35)" }}
+              >
+                --:--
+              </div>
+              <div className="text-[12px] lg:text-[13px] min-h-[16px] text-[#8a8a93]">
+                linking to the keeper…
+              </div>
+            </div>
+            <div className="board-float">
+              <Board snapshot={SKELETON_SNAP} />
+            </div>
+          </div>
+        </Stage>
       )}
     </main>
   );

@@ -55,7 +55,9 @@ describe("PlayBoard", () => {
     const factory = (opts: KeeperClientOpts): KeeperClient => { captured = opts; return { start: () => {}, stop: () => {} }; };
 
     render(<PlayBoard wsUrl="ws://x" httpUrl="http://x" nowMs={900_000} clientFactory={factory} />);
-    expect(screen.getByText(/waiting for the keeper/i)).toBeInTheDocument();
+    // Pre-snapshot: the skeleton board paints instantly — full idle bull-head + connecting header.
+    expect(screen.getByTestId("tile-24")).toBeInTheDocument();
+    expect(screen.getByText(/round.+connecting/i)).toBeInTheDocument();
 
     act(() => { captured!.onStatus?.("connected"); captured!.onSnapshot(wireSnap()); });
 
