@@ -1130,69 +1130,20 @@ test "$(shasum -a 256 "$EVIDENCE_DIR/ansem-miner-rollback-check.so" | awk '{prin
 read_beef_state "$EVIDENCE_DIR/beef-after-program-rollback.json"
 ```
 
-Before resuming the keeper, run this post-swap floor monitor in a dedicated terminal and leave it
-active. If the keeper image was also rolled back, the stamp supervisor above must remain active in
-parallel. Either monitor failure stops the keeper.
+Do not resume any keeper after a program rollback. The latest Railway deployment may still point
+to the removed unsafe image, so `railway redeploy` is forbidden here. Confirm the service remains
+stopped. Resume only through a new reviewed release sequence that names and verifies the exact
+recovery source and program binary.
 
 ```bash
-verify_pot_vault_rent_floor() {
-  RPC="$MAINNET_RPC" node --input-type=module <<'NODE'
-import { Connection, Keypair } from "@solana/web3.js";
-import { Wallet } from "@coral-xyz/anchor";
-import {
-  createProgram, configPda, fetchConfig, fetchRound, potVaultPda, roundPda, RoundState,
-} from "@ansem/sdk";
-const conn = new Connection(process.env.RPC, "finalized");
-const program = createProgram(conn, new Wallet(Keypair.generate()));
-const potVault = potVaultPda();
-const rentMinimum = BigInt(await conn.getMinimumBalanceForRentExemption(0, "finalized"));
-const config = await fetchConfig(program, configPda());
-const round = config.currentRoundId === 0
-  ? null
-  : await fetchRound(program, roundPda(config.currentRoundId));
-const imminentPot = round && round.state < RoundState.Claimable ? round.pot : 0n;
-const balance = BigInt(await conn.getBalance(potVault, "finalized"));
-const residualAfterSwap = balance - imminentPot;
-if (residualAfterSwap < rentMinimum) {
-  throw new Error(`STOP: post-swap residual below rent ${residualAfterSwap} < ${rentMinimum}`);
-}
-console.log(JSON.stringify({
-  checkedAt: new Date().toISOString(), potVault: potVault.toBase58(),
-  currentRoundId: round?.roundId ?? 0, currentRoundState: round?.state ?? null,
-  currentRoundPot: imminentPot.toString(), rentMinimum: rentMinimum.toString(),
-  balance: balance.toString(), residualAfterSwap: residualAfterSwap.toString(),
-}));
-NODE
-}
-
-while true; do
-  if ! verify_pot_vault_rent_floor \
-    | tee -a "$EVIDENCE_DIR/pot-vault-rollback-monitor.jsonl"
-  then
-    railway down --yes --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
-    exit 1
-  fi
-  sleep 2
-done
-```
-
-Only after the monitor is active may the operator resume the linked production service in a
-separate terminal. Reassert the 60-second variable and verify health immediately:
-
-```bash
-railway variables --set "KEEPER_ROUND_SECS=60" \
-  --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT"
-railway variables --json --service "$RAILWAY_SERVICE" --environment "$RAILWAY_ENVIRONMENT" \
-  | node -e '
-let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => {
-  const v = JSON.parse(s);
-  if (v.KEEPER_ROUND_SECS !== "60") throw new Error("KEEPER_ROUND_SECS is not 60");
-  console.log("KEEPER_ROUND_SECS=60");
-});'
-railway redeploy --yes --service "$RAILWAY_SERVICE"
-curl --fail --silent --show-error "$KEEPER_BASE_URL/health" | grep -Fx ok
-curl --fail --silent --show-error "$KEEPER_BASE_URL/snapshot" \
-  | tee "$EVIDENCE_DIR/keeper-snapshot-after-program-rollback.json"
+if railway_active_deployment_id >/dev/null 2>&1; then
+  echo "Keeper unexpectedly active after program rollback" >&2
+  exit 1
+fi
+if curl --fail --silent --show-error "$KEEPER_BASE_URL/health" >/dev/null 2>&1; then
+  echo "Keeper health endpoint unexpectedly responds after program rollback" >&2
+  exit 1
+fi
 ```
 
 Record:
@@ -1214,8 +1165,8 @@ Record:
 - Top-up signature, or `none` when the shortfall was zero:
 - Pot vault balance after top-up, lamports:
 - Residual after imminent pot removal, lamports:
-- Residual rent-floor monitor start and stop UTC:
-- Keeper stop event, if any:
+- Keeper remained stopped after program rollback:
+- Health endpoint unavailable after program rollback:
 
 ## 11. Final evidence summary
 
