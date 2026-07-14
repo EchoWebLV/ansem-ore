@@ -77,12 +77,7 @@ button, a, [data-square] { touch-action: manipulation; }
   }
 }
 
-/* The bull's eyes never stop smoldering. */
-.bull-eye { animation: eye-glow 3.2s ease-in-out infinite; }
-@keyframes eye-glow {
-  0%, 100% { opacity: 0.85; }
-  50%      { opacity: 0.45; }
-}
+.bull-eye { opacity: .62; }
 
 /* Gold shockwave on the jackpot square. */
 .jackpot-ring {
@@ -116,7 +111,7 @@ button, a, [data-square] { touch-action: manipulation; }
 
 @media (prefers-reduced-motion: reduce) {
   .cell-face.pop, .cell-face.burst,
-  .bull-eye, .jackpot-ring, .stage-card,
+  .jackpot-ring, .stage-card,
   .gold-flash,
   .odometer-pop, .ticker-marquee {
     animation: none !important;
