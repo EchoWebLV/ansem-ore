@@ -16,7 +16,7 @@ export function PhaseNav({ children }: { children?: ReactNode }) {
       <span aria-current="page" className="hidden text-[12px] font-semibold text-bull-ink sm:block">
         Play
       </span>
-      <div className="flex items-center justify-end gap-2">{children}</div>
+      <div className="flex shrink-0 items-center justify-end gap-2 whitespace-nowrap">{children}</div>
     </nav>
   );
 }

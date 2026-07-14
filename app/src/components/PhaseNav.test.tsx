@@ -30,4 +30,14 @@ describe("PhaseNav", () => {
     expect(container.querySelector('img[src="/bullstake-logo.svg"]')).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /wallet/i })).toBeInTheDocument();
   });
+
+  it("keeps the mobile action slot on one line", () => {
+    render(
+      <PhaseNav>
+        <button>SELECT WALLET</button>
+      </PhaseNav>,
+    );
+    const actions = screen.getByRole("button", { name: /select wallet/i }).parentElement;
+    expect(actions).toHaveClass("shrink-0", "whitespace-nowrap");
+  });
 });
