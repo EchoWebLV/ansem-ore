@@ -45,4 +45,43 @@ describe("ClaimPanel", () => {
       onClaim={vi.fn()} onRefund={vi.fn()} />);
     expect(screen.queryByText(/CLAIM BY/)).toBeNull();
   });
+
+  it("won: labels a real win WON with the gold Claim ANSEM button", () => {
+    const onClaim = vi.fn();
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      won={true} onClaim={onClaim} onRefund={vi.fn()} />);
+    expect(screen.getByText(/· WON/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /claim ansem/i }));
+    expect(onClaim).toHaveBeenCalledWith(7);
+  });
+
+  it("no-win: reads as NO WIN and the button just clears the round (same claim ix)", () => {
+    const onClaim = vi.fn();
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      won={false} onClaim={onClaim} onRefund={vi.fn()} />);
+    expect(screen.getByText(/NO WIN/)).toBeInTheDocument();
+    expect(screen.getByText(/pot rolled to the jackpot/)).toBeInTheDocument();
+    expect(screen.queryByText(/· WON/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /claim ansem/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /clear round/i }));
+    expect(onClaim).toHaveBeenCalledWith(7); // identical ix — clears the miner ledger
+  });
+
+  it("unknown outcome stays neutral (SETTLED) — never flashes WON before it knows", () => {
+    render(<ClaimPanel roundId={7} roundState={RoundState.Claimable} lastClaimedRound={0} busy={false}
+      won={null} onClaim={vi.fn()} onRefund={vi.fn()} />);
+    expect(screen.getByText(/· SETTLED/)).toBeInTheDocument();
+    expect(screen.queryByText(/· WON/)).toBeNull();
+    expect(screen.getByRole("button", { name: /claim ansem/i })).toBeInTheDocument();
+  });
+
+  it("a Closed round still refunds and reads VOIDED regardless of won", () => {
+    const onRefund = vi.fn();
+    render(<ClaimPanel roundId={7} roundState={RoundState.Closed} lastClaimedRound={0} busy={false}
+      won={false} onClaim={vi.fn()} onRefund={onRefund} />);
+    expect(screen.getByText(/· VOIDED/)).toBeInTheDocument();
+    expect(screen.queryByText(/NO WIN/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /refund/i }));
+    expect(onRefund).toHaveBeenCalledWith(7);
+  });
 });

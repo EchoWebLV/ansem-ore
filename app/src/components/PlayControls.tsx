@@ -32,7 +32,7 @@ export interface PlayControlsProps {
 export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, onReceipt }: PlayControlsProps) {
   const { connection } = useConnection();
   const owner = wallet.publicKey;
-  const { miner, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
+  const { miner, config, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -101,16 +101,51 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
   const offerable = stakedRound > 0 && unresolvedLamports > 0n;
   const [stakedRoundState, setStakedRoundState] = useState<RoundState | null>(null);
   const [stakedRoundDeadline, setStakedRoundDeadline] = useState<number | null>(null);
+  // The round's on-chain draw, captured so the panel can label WON vs NO-WIN honestly.
+  const [stakedJackpotSquare, setStakedJackpotSquare] = useState<number | null>(null);
+  const [stakedJackpotPool, setStakedJackpotPool] = useState<bigint | null>(null);
   useEffect(() => {
-    if (!offerable) { setStakedRoundState(null); setStakedRoundDeadline(null); return; }
+    if (!offerable) {
+      setStakedRoundState(null); setStakedRoundDeadline(null);
+      setStakedJackpotSquare(null); setStakedJackpotPool(null);
+      return;
+    }
     let live = true;
     const poll = () => fetchRound(l1, roundPda(stakedRound))
-      .then((r) => { if (live) { setStakedRoundState(r.state); setStakedRoundDeadline(r.deadlineTs); } })
-      .catch(() => { if (live) { setStakedRoundState(null); setStakedRoundDeadline(null); } });
+      .then((r) => { if (live) {
+        setStakedRoundState(r.state); setStakedRoundDeadline(r.deadlineTs);
+        setStakedJackpotSquare(r.jackpotSquare); setStakedJackpotPool(r.jackpotPool);
+      } })
+      .catch(() => { if (live) {
+        setStakedRoundState(null); setStakedRoundDeadline(null);
+        setStakedJackpotSquare(null); setStakedJackpotPool(null);
+      } });
     poll();
     const id = setInterval(poll, 5000);
     return () => { live = false; clearInterval(id); };
   }, [l1, stakedRound, offerable]);
+
+  // Did this player actually win the staked round? jackpotPool > 0 ⟺ someone hit the
+  // drawn square and it pays; == 0 ⟺ no winner, the pot rolled into the jackpot. A
+  // nonzero return band (config.multMaxBps > 0) pays every staked square, so any stake
+  // wins. null until the draw + the player's stakes + the config band are all known —
+  // the panel must never flash WON before it can prove it. (multMaxBps is 0 live today.)
+  const won: boolean | null =
+    stakedJackpotPool === null || stakedJackpotSquare === null || !miner || !config
+      ? null
+      : config.multMaxBps > 0
+        ? unresolvedLamports > 0n
+        : stakedJackpotPool > 0n && (miner.blockStake[stakedJackpotSquare] ?? 0n) > 0n;
+
+  // Gate copy mirrors the panel's honesty: a refundable round says "forfeits it"; a
+  // no-win round just needs clearing before restaking; a real win (or unknown) keeps
+  // the neutral claim wording.
+  const gateCopy =
+    stakedRoundState === RoundState.Closed
+      ? `Refund round ${stakedRound} below first — staking now forfeits it.`
+      : won === false
+        ? `Clear round ${stakedRound} below first to stake again.`
+        : `Claim round ${stakedRound} below first — staking now forfeits it.`;
 
   // Claim-by deadline (unix secs) = staked round's deadline + the config claim
   // window carried on the snapshot. Undefined until both are known (or if the
@@ -137,9 +172,7 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
       {!loaded ? (
         <p className="text-[10px] text-bull-muted">checking your prior round…</p>
       ) : priorUnresolved ? (
-        <p className="text-[10px] text-amber-400">
-          {stakedRoundState === RoundState.Closed ? "Refund" : "Claim"} round {stakedRound} below first — staking now forfeits it.
-        </p>
+        <p className="text-[10px] text-amber-400">{gateCopy}</p>
       ) : snapshot.state !== RoundState.Open ? (
         <p className="text-[10px] text-bull-muted">round is settling — staking opens with the next round.</p>
       ) : null}
@@ -148,6 +181,7 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
           roundId={stakedRound} roundState={stakedRoundState}
           lastClaimedRound={0}
           claimByTs={claimByTs}
+          won={won}
           busy={busy} onClaim={doClaim} onRefund={doRefund}
         />
       )}

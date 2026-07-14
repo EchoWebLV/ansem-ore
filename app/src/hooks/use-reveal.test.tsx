@@ -27,6 +27,29 @@ describe("useReveal", () => {
     expect(result.current.counter).toBe("27.72");
   });
 
+  it("no-winner settle: the finale is NOT gold and says the pot rolled into the jackpot", () => {
+    // The square was drawn but nobody staked it -> jackpotPool 0, proceeds rolled into
+    // the (now larger) rolloverJackpot. Honest theater: no gold, no fabricated win.
+    const settled = snap({ state: RoundState.Settled, jackpotSquare: 4, jackpotPool: "0", rolloverJackpot: "12500000" });
+    const { result } = renderHook(() => useReveal(settled));
+    act(() => { vi.advanceTimersByTime(320 + 25 * 105 + 4 * 90); });
+    expect(result.current.jackpotShown).toBe(false);
+    act(() => { vi.advanceTimersByTime(900 + 10); });
+    expect(result.current.jackpotShown).toBe(true);
+    expect(result.current.sub?.gold).toBe(false);
+    expect(result.current.sub?.text).toMatch(/nobody was on bull #5/);
+    expect(result.current.sub?.text).toMatch(/pot rolls into the jackpot/);
+    expect(result.current.counter).toBe("12.50"); // the growing jackpot, ANSEM units
+  });
+
+  it("labels the climbing settle counter as the POT being scanned, not winnings", () => {
+    const settled = snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "27720000" });
+    const { result } = renderHook(() => useReveal(settled));
+    act(() => { vi.advanceTimersByTime(320 + 3 * 105); }); // mid-cascade, a few cells in
+    expect(result.current.sub?.gold).toBe(false);
+    expect(result.current.sub?.text).toMatch(/pot \d+\.\d\d SOL/);
+  });
+
   it("returns to the live board when the next round opens", () => {
     const settled = snap({ state: RoundState.Settled, jackpotSquare: 3 });
     const { result, rerender } = renderHook(({ s }) => useReveal(s), { initialProps: { s: settled } });

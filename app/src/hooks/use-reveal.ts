@@ -111,16 +111,29 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
         cum += BigInt(snap.blockSol[id] ?? "0");
         setRevealed((r) => [...(r ?? []), id]);
         setCounter((Number(cum) / 1e9).toFixed(2));
-        setSub({ text: `bull #${id + 1} mined · ${k + 1} of ${n} revealed`, gold: false });
+        // Label the climbing number as the POT being scanned, not the player's take —
+        // the only money-won language allowed is the actual-winner finale below.
+        setSub({ text: `bull #${id + 1} mined · ${k + 1} of ${n} · pot ${(Number(cum) / 1e9).toFixed(2)} SOL`, gold: false });
       }, STEP_BASE + k * STEP_MS + extra));
     });
     timers.current.push(setTimeout(() => {
       if (gen.current !== g) return;
       setJackpotShown(true);
       if (snap.jackpotSquare !== null) {
-        // jackpotPool is ANSEM base units (never lamports) — divide by the SDK's ANSEM_DECIMALS.
-        setCounter((Number(BigInt(snap.jackpotPool || "0")) / 10 ** ANSEM_DECIMALS).toFixed(2));
-        setSub({ text: `★ JACKPOT — bull #${snap.jackpotSquare + 1} struck the big pot`, gold: true });
+        // jackpotPool > 0 ⟺ someone was on the drawn square and gets paid; == 0 ⟺ no
+        // winner, the pot rolled into config.rolloverJackpot. Only a real winner earns gold —
+        // honest theater never fabricates a win.
+        const pool = BigInt(snap.jackpotPool || "0");
+        if (pool > 0n) {
+          // jackpotPool is ANSEM base units (never lamports) — divide by the SDK's ANSEM_DECIMALS.
+          setCounter((Number(pool) / 10 ** ANSEM_DECIMALS).toFixed(2));
+          setSub({ text: `★ JACKPOT — bull #${snap.jackpotSquare + 1} struck the big pot`, gold: true });
+        } else {
+          // Settled, but nobody staked the drawn square — no gold. The counter holds the
+          // growing jackpot the same way the sweep does (the rolloverJackpot fallback).
+          setCounter((Number(BigInt(snap.rolloverJackpot || "0")) / 10 ** ANSEM_DECIMALS).toFixed(2));
+          setSub({ text: `nobody was on bull #${snap.jackpotSquare + 1} — pot rolls into the jackpot`, gold: false });
+        }
       }
     }, STEP_BASE + n * STEP_MS + FINALE_MS));
     if (selfDismiss) {

@@ -8,24 +8,44 @@ export interface ClaimPanelProps {
   /** Absolute claim-by deadline (unix secs) = round.deadlineTs + claimWindowSecs.
    *  Undefined until the staked round's deadline is known (or no claim window). */
   claimByTs?: number;
+  /** Did this player actually win the staked round? true = paid (WON, gold claim);
+   *  false = zero entitlement (pot rolled to the jackpot — the claim just clears the
+   *  ledger so the player can restake); null/undefined = not known yet. The claim ix
+   *  is identical in every case — only the dressing changes. NEVER flash WON before
+   *  this resolves. */
+  won?: boolean | null;
   /** Pins the countdown clock for tests. */
   nowMs?: number;
 }
 
-export function ClaimPanel({ roundId, roundState, lastClaimedRound, busy, onClaim, onRefund, claimByTs, nowMs }: ClaimPanelProps) {
+export function ClaimPanel({ roundId, roundState, lastClaimedRound, busy, onClaim, onRefund, claimByTs, won, nowMs }: ClaimPanelProps) {
   const claimable = roundState === RoundState.Claimable && lastClaimedRound < roundId;
   const refundable = roundState === RoundState.Closed;
   if (!claimable && !refundable) return null;
+  // Honest label: only a real win says WON; a no-win claim just clears the round
+  // (the pot rolled to the jackpot); unknown stays neutral until `won` resolves.
+  const tag = refundable
+    ? "· VOIDED"
+    : won === true ? "· WON"
+    : won === false ? "· NO WIN — pot rolled to the jackpot"
+    : "· SETTLED";
   return (
     <section className="rounded-lg border border-bull-gold/30 p-3 flex items-center justify-between gap-3">
       <span className="text-bull-muted tracking-widest text-[10px]">
-        ROUND #{roundId} {claimable ? "· WON" : "· VOIDED"}
+        ROUND #{roundId} {tag}
       </span>
       {claimable ? (
         <div className="flex items-center gap-3">
           {claimByTs !== undefined && <ClaimCountdown deadlineTs={claimByTs} nowMs={nowMs} />}
-          <button disabled={busy} onClick={() => onClaim(roundId)}
-            className="rounded bg-bull-gold/25 text-bull-gold px-4 py-1 text-sm disabled:opacity-40">Claim ANSEM</button>
+          {won === false ? (
+            // Same claim ix, honest dressing: neutral button that reads as clearing the
+            // round (styled like Refund), never a gold "win".
+            <button disabled={busy} onClick={() => onClaim(roundId)}
+              className="rounded border border-white/15 px-4 py-1 text-sm disabled:opacity-40">Clear round</button>
+          ) : (
+            <button disabled={busy} onClick={() => onClaim(roundId)}
+              className="rounded bg-bull-gold/25 text-bull-gold px-4 py-1 text-sm disabled:opacity-40">Claim ANSEM</button>
+          )}
         </div>
       ) : (
         <button disabled={busy} onClick={() => onRefund(roundId)}
