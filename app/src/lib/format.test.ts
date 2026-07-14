@@ -59,7 +59,9 @@ describe("format helpers", () => {
     expect(eventToText({ type: "round.open", roundId: 5, deadlineTs: 0 })).toBe("Round 5 opened");
     expect(eventToText({ type: "stake", roundId: 5, square: 3, totalStake: "20000000" })).toContain("Bull #4");
     expect(eventToText({ type: "round.settling", roundId: 5 })).toBe("Round 5 settling…");
-    expect(eventToText({ type: "round.revealed", roundId: 5, jackpotSquare: 6 })).toContain("Bull #7");
+    const revealed = eventToText({ type: "round.revealed", roundId: 5, jackpotSquare: 6 });
+    expect(revealed).toBe("Round 5 revealed Bull #7");
+    expect(revealed).not.toMatch(/jackpot|win|big pot/i);
     expect(eventToText({ type: "round.claimable", roundId: 5 })).toBe("Round 5 claimable");
   });
 });

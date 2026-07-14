@@ -11,36 +11,66 @@ export interface StakeRailProps {
   enabled: boolean;
   busy: boolean;
   onStake: (squares: number[], amountPerSquare: BN) => void;
+  onRemoveSquare?: (square: number) => void;
+  /** Display-only reserve from PlayControls' existing affordability gate. */
+  feeReserveSol?: string;
 }
 
+const QUICK_AMOUNTS = ["0.01", "0.05", "0.1"] as const;
+
 // Direct-stake rail: ONE wallet approval moves the SOL into the pot.
-export function StakeRail({ selectedSquares, enabled, busy, onStake }: StakeRailProps) {
+export function StakeRail({ selectedSquares, enabled, busy, onStake, onRemoveSquare, feeReserveSol }: StakeRailProps) {
   const [amount, setAmount] = useState("");
   const parsed = solToLamports(amount);
   const n = selectedSquares.length;
   const canStake = enabled && n > 0 && !!parsed && !busy;
   return (
-    <section className="rounded-lg border border-white/10 p-3 flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <span className="text-bull-muted tracking-widest text-[10px]">STAKE</span>
-        <span className="font-mono text-xs text-bull-muted">
-          {n === 0 ? "pick tiles" : n === 1 ? `tile #${selectedSquares[0] + 1}` : `${n} tiles`}
-        </span>
+    <section className="terminal-panel p-4">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-[14px] font-semibold text-bull-ink">Bet slip</h2>
+        <span className="terminal-label">{n} {n === 1 ? "tile" : "tiles"}</span>
       </div>
-      <input
-        inputMode="decimal" placeholder="amount per tile (SOL)" value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-        className="bg-black border border-white/15 rounded-lg px-3 py-2 font-mono text-sm"
-      />
-      {n > 1 && parsed && (
-        <p className="text-[10px] text-bull-muted font-mono">
-          {formatSol(parsed.muln(n).toString())} total · {amount} on each tile
-        </p>
-      )}
-      <button
-        disabled={!canStake} onClick={() => canStake && onStake(selectedSquares, parsed!)}
-        className="rounded-lg bg-bull-green/20 text-bull-green py-2.5 text-sm font-medium disabled:opacity-40 active:scale-[0.98] transition-transform"
-      >Stake · one approval</button>
+      <div className="flex min-h-8 flex-wrap gap-1.5">
+        {selectedSquares.length === 0
+          ? <span className="text-[11px] text-bull-muted">Select tiles on the board</span>
+          : selectedSquares.map((square) => {
+            const label = `#${String(square + 1).padStart(2, "0")}`;
+            return onRemoveSquare ? (
+              <button
+                key={square}
+                type="button"
+                aria-label={`Remove tile ${label}`}
+                onClick={() => onRemoveSquare(square)}
+                className="min-h-11 rounded-[7px] border border-bull-dim bg-bull-raised px-3 font-mono text-[11px] text-bull-green"
+              >
+                {label} <span aria-hidden>×</span>
+              </button>
+            ) : (
+              <span key={square} className="inline-flex min-h-11 items-center rounded-[7px] border border-bull-dim bg-bull-raised px-3 font-mono text-[11px] text-bull-green">{label}</span>
+            );
+          })}
+      </div>
+      <label htmlFor="stake-amount" className="mb-2 mt-4 block text-[11px] text-bull-muted">Amount per tile</label>
+      <div className="flex items-center rounded-[10px] border border-bull-edge bg-bull-bg px-3 focus-within:border-bull-green">
+        <input id="stake-amount" inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} className="min-w-0 flex-1 bg-transparent py-3 font-mono text-[18px] text-bull-ink outline-none" />
+        <span className="text-[11px] font-semibold text-bull-muted">SOL</span>
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-2" aria-label="Quick amounts">
+        {QUICK_AMOUNTS.map((quickAmount) => (
+          <button
+            key={quickAmount}
+            type="button"
+            aria-label={`Set amount to ${quickAmount} SOL`}
+            onClick={() => setAmount(quickAmount)}
+            className="min-h-11 rounded-[8px] border border-bull-edge bg-bull-raised px-2 font-mono text-[11px] text-bull-muted hover:border-bull-green/60 hover:text-bull-ink"
+          >
+            {quickAmount}
+          </button>
+        ))}
+      </div>
+      {n > 0 && parsed && <p className="mt-3 flex justify-between text-[11px] text-bull-muted"><span>{n} × {amount} SOL</span><strong className="font-mono text-bull-ink">{formatSol(parsed.muln(n).toString())} total</strong></p>}
+      {feeReserveSol && <p className="mt-2 text-[11px] text-bull-muted">{feeReserveSol} SOL reserved for network fees</p>}
+      <button disabled={!canStake} onClick={() => canStake && onStake(selectedSquares, parsed!)} className="terminal-primary mt-4 w-full">Place bet · one approval</button>
     </section>
   );
 }

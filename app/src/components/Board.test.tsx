@@ -40,9 +40,16 @@ describe("Board", () => {
     expect(screen.getByTestId("tile-0")).toHaveAttribute("data-lit", "false");
   });
 
-  it("flags the jackpot square gold only once settled", () => {
-    const settled = snap({ state: RoundState.Settled, jackpotSquare: 7 });
-    render(<Board snapshot={settled} />);
+  it("uses the terminal board surface without continuous live breathing", () => {
+    const blockSol = Array(25).fill("0"); blockSol[3] = "60";
+    render(<Board snapshot={snap({ blockSol })} />);
+    expect(screen.getByTestId("bull-board")).toBeInTheDocument();
+    expect(screen.getByTestId("tile-3").querySelector(".glow-live")).toBeNull();
+  });
+
+  it("flags the jackpot square gold only once accounting is Claimable", () => {
+    const claimable = snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "100" });
+    render(<Board snapshot={claimable} />);
     expect(screen.getByTestId("tile-7")).toHaveAttribute("data-jackpot", "true");
   });
 
@@ -56,8 +63,8 @@ describe("Board", () => {
     expect(container.querySelectorAll("[data-depth]")).toHaveLength(25);
   });
 
-  it("fires the gold shockwave ring on the jackpot square once settled", () => {
-    render(<Board snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7 })} />);
+  it("fires the gold shockwave ring on the jackpot square once Claimable", () => {
+    render(<Board snapshot={snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "100" })} />);
     expect(screen.getByTestId("ring-7")).toBeInTheDocument();
     expect(screen.queryByTestId("ring-3")).toBeNull();
   });
@@ -74,16 +81,65 @@ describe("Board", () => {
     expect(container.querySelector('[data-square="0"]')?.getAttribute("data-selected")).toBe("false");
   });
 
-  it("finale rings the jackpot bell for settle/default reveals", () => {
+  it("finale rings the jackpot bell for finalized/default reveals", () => {
     render(
       <Board
-        snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7 })}
+        snapshot={snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "100" })}
         revealed={Array.from({ length: 25 }, (_, i) => i)}
         jackpotShown
       />,
     );
     expect(sound.playJackpot).toHaveBeenCalledTimes(1);
     expect(sound.playRollover).not.toHaveBeenCalled();
+  });
+
+  it("keeps a finalized zero-pool drawn square neutral and plays rollover audio", () => {
+    render(
+      <Board
+        snapshot={snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "0" })}
+        revealed={Array.from({ length: 25 }, (_, i) => i)}
+        jackpotShown
+      />,
+    );
+    expect(screen.getByTestId("tile-7")).toHaveAttribute("data-jackpot", "false");
+    expect(screen.queryByTestId("ring-7")).toBeNull();
+    expect(sound.playRollover).toHaveBeenCalledTimes(1);
+    expect(sound.playJackpot).not.toHaveBeenCalled();
+  });
+
+  it("keeps the pre-accounting Settled frame neutral and silent", () => {
+    render(
+      <Board
+        snapshot={snap({ state: RoundState.Settled, jackpotSquare: 7, jackpotPool: "0" })}
+        revealed={Array.from({ length: 25 }, (_, i) => i)}
+        jackpotShown
+      />,
+    );
+    expect(screen.getByTestId("tile-7")).toHaveAttribute("data-jackpot", "false");
+    expect(screen.queryByTestId("ring-7")).toBeNull();
+    expect(sound.playRollover).not.toHaveBeenCalled();
+    expect(sound.playJackpot).not.toHaveBeenCalled();
+  });
+
+  it("uses gold visuals and jackpot audio only for a proven nonzero pool", () => {
+    render(
+      <Board
+        snapshot={snap({ state: RoundState.Claimable, jackpotSquare: 7, jackpotPool: "100" })}
+        revealed={Array.from({ length: 25 }, (_, i) => i)}
+        jackpotShown
+      />,
+    );
+    expect(screen.getByTestId("tile-7")).toHaveAttribute("data-jackpot", "true");
+    expect(screen.getByTestId("ring-7")).toBeInTheDocument();
+    expect(sound.playJackpot).toHaveBeenCalledTimes(1);
+    expect(sound.playRollover).not.toHaveBeenCalled();
+  });
+
+  it("does not attach an inline all-properties transition to tile faces", () => {
+    const { container } = render(<Board snapshot={snap()} />);
+    const facePolygons = container.querySelectorAll(".cell-face > polygon");
+    expect(facePolygons.length).toBeGreaterThan(0);
+    facePolygons.forEach((polygon) => expect(polygon).not.toHaveStyle({ transition: "all .18s" }));
   });
 
   it("finale plays the rollover sound, not the bell, in sweep mode", () => {
@@ -97,5 +153,19 @@ describe("Board", () => {
     );
     expect(sound.playRollover).toHaveBeenCalledTimes(1);
     expect(sound.playJackpot).not.toHaveBeenCalled();
+  });
+
+  it("keeps a no-draw sweep neutral even when the rolling pool is nonzero", () => {
+    render(
+      <Board
+        snapshot={snap({ state: RoundState.Closed, jackpotSquare: null, jackpotPool: "100" })}
+        revealMode="sweep"
+        revealed={Array.from({ length: 25 }, (_, i) => i)}
+        jackpotShown
+      />,
+    );
+    expect(sound.playRollover).toHaveBeenCalledTimes(1);
+    expect(sound.playJackpot).not.toHaveBeenCalled();
+    expect(screen.queryByTestId(/ring-/)).toBeNull();
   });
 });

@@ -4,7 +4,7 @@ import { RoundState, ANSEM_DECIMALS, type WireSnapshot } from "@ansem/sdk";
 
 /**
  * The design prototype's settle-reveal (docs/design/bull-board.html playReveal),
- * driven by real round data. When a round settles, cells unveil in shuffled order
+ * driven by real round data. Once swap accounting makes a round Claimable, cells unveil in shuffled order
  * with the prototype's pacing; the counter climbs with the cumulative revealed
  * stake; the finale flashes the REAL VRF jackpot square gold. Honest theater —
  * outcomes are fixed on-chain before the first frame.
@@ -62,7 +62,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   const [, forceRender] = useState(0);
   // The id of the round whose ENDING has been handled (settle theater, sweep, or refund).
   const playedRound = useRef<number>(0);
-  // The last REAL settle's snapshot (carries blockSol/jackpotSquare/jackpotPool),
+  // The last finalized Claimable snapshot (carries blockSol/jackpotSquare/jackpotPool),
   // kept so the show can be re-watched anytime. Sweeps are not stored — replay
   // is for actual jackpot reveals only.
   const lastFinished = useRef<WireSnapshot | null>(null);
@@ -96,7 +96,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
     sweeping.current = false;
     const g = gen.current;
     // Replays of past rounds hand their OWN snapshot to the board; natural
-    // settles clear any lingering ghost from an interrupted replay.
+    // Natural finalized reveals clear any lingering ghost from an interrupted replay.
     setSnapshotOverride(override);
     setMode("settle");
     setRevealed([]);
@@ -190,7 +190,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   useEffect(() => {
     if (!snapshot) return;
     const prev = lastSnap.current;
-    if (snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed) {
+    if (snapshot.state === RoundState.Claimable) {
       if (playedRound.current !== snapshot.roundId) {
         playedRound.current = snapshot.roundId;
         play(snapshot);
@@ -240,8 +240,13 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
       const raw = window.localStorage?.getItem(LAST_REVEAL_KEY);
       if (!raw) return;
       const stored = JSON.parse(raw) as WireSnapshot;
-      // Minimal shape check: a replayable show needs a full board and a real draw.
-      if (Array.isArray(stored?.blockSol) && stored.blockSol.length === 25 && stored.jackpotSquare != null) {
+      // A replayable show needs finalized accounting, a full board, and a real draw.
+      if (
+        stored?.state === RoundState.Claimable &&
+        Array.isArray(stored.blockSol) &&
+        stored.blockSol.length === 25 &&
+        stored.jackpotSquare != null
+      ) {
         lastFinished.current = stored;
         forceRender((x) => x + 1);
       }
@@ -254,10 +259,10 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
     revealed, jackpotShown, counter, sub, mode, snapshotOverride,
     canReplay:
       lastFinished.current !== null ||
-      (snapshot !== null && snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed),
+      (snapshot !== null && snapshot.state === RoundState.Claimable),
     replay: () => {
-      if (snapshot && snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed) {
-        // The settled round is still on screen — replay it in place (persists
+      if (snapshot?.state === RoundState.Claimable) {
+        // The finalized round is still on screen — replay it in place (persists
         // until the next round opens, exactly the old behavior).
         play(snapshot);
         return;

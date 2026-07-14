@@ -4,14 +4,14 @@ import { eventToText } from "../lib/format.js";
 
 export function ActivityFeed({ events }: { events: KeeperEvent[] }) {
   return (
-    <div className="rounded-xl border border-bull-edge bg-bull-bg p-3">
-      <h2 className="text-[10px] tracking-widest text-bull-muted mb-2">ACTIVITY</h2>
+    <div className="terminal-panel p-4">
+      <h2 className="text-[12px] font-semibold text-bull-ink">Recent activity</h2>
       {events.length === 0 ? (
-        <p className="text-bull-muted text-sm">Waiting for the bull…</p>
+        <p className="mt-3 text-sm text-bull-muted">Waiting for the bull…</p>
       ) : (
-        <ul className="space-y-1">
+        <ul className="mt-2">
           {events.map((e, i) => (
-            <li key={i} className="text-sm text-bull-muted">{eventToText(e)}</li>
+            <li key={i} className="border-b border-bull-edge/70 py-2 text-sm text-bull-muted last:border-0">{eventToText(e)}</li>
           ))}
         </ul>
       )}

@@ -21,6 +21,7 @@ export interface PlayControlsProps {
   wallet: WalletAdapter;
   snapshot: AppSnapshot;
   selectedSquares: number[];
+  onRemoveSquare?: (square: number) => void;
   onStaked?: () => void;
   /** Fired with an explorer-linkable artifact after every landed action. */
   onReceipt?: (r: ReceiptInput) => void;
@@ -29,7 +30,7 @@ export interface PlayControlsProps {
 // Direct-stake engine (ORE model): pick squares -> ONE approval moves the SOL
 // wallet->pot in that tx. No escrow, no session key, no round entry. Winnings
 // are pull-claimed per round (claim_direct); cancelled rounds refund exactly.
-export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, onReceipt }: PlayControlsProps) {
+export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSquare, onStaked, onReceipt }: PlayControlsProps) {
   const { connection } = useConnection();
   const owner = wallet.publicKey;
   const { miner, config, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
@@ -142,10 +143,12 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
   // the neutral claim wording.
   const gateCopy =
     stakedRoundState === RoundState.Closed
-      ? `Refund round ${stakedRound} below first — staking now forfeits it.`
+      ? `Refund round ${stakedRound} below first. Staking now forfeits it.`
       : won === false
         ? `Clear round ${stakedRound} below first to stake again.`
-        : `Claim round ${stakedRound} below first — staking now forfeits it.`;
+        : won === true
+          ? `Claim round ${stakedRound} below first. Staking now forfeits it.`
+          : `Resolve round ${stakedRound} below first to stake again.`;
 
   // Claim-by deadline (unix secs) = staked round's deadline + the config claim
   // window carried on the snapshot. Undefined until both are known (or if the
@@ -159,8 +162,9 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
   return (
     <div className="flex flex-col gap-3">
       {walletLamports !== null && (
-        <div className="flex justify-end">
-          <span className="font-mono text-[10px] text-bull-muted">wallet {lamportsToSolStr(walletLamports)} SOL</span>
+        <div className="flex items-center justify-between px-1 text-[10px] text-bull-muted">
+          <span>Wallet balance</span>
+          <span className="font-mono">{lamportsToSolStr(walletLamports)} SOL</span>
         </div>
       )}
       <StakeRail
@@ -168,28 +172,23 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
         enabled={!stakeBlocked}
         busy={busy}
         onStake={doStake}
+        onRemoveSquare={onRemoveSquare}
+        feeReserveSol={lamportsToSolStr(FEE_HEADROOM)}
       />
       {!loaded ? (
-        <p className="text-[10px] text-bull-muted">checking your prior round…</p>
+        <p className="px-1 text-[10px] text-bull-muted">Checking your prior round…</p>
       ) : priorUnresolved ? (
-        <p className="text-[10px] text-amber-400">{gateCopy}</p>
+        <p className="px-1 text-[10px] text-amber-400">{gateCopy}</p>
       ) : snapshot.state !== RoundState.Open ? (
-        <p className="text-[10px] text-bull-muted">round is settling — staking opens with the next round.</p>
+        <p className="px-1 text-[10px] text-bull-muted">Round is settling. Betting opens with the next round.</p>
       ) : null}
       {offerable && stakedRoundState !== null && (
-        <ClaimPanel
-          roundId={stakedRound} roundState={stakedRoundState}
-          lastClaimedRound={0}
-          claimByTs={claimByTs}
-          won={won}
-          busy={busy} onClaim={doClaim} onRefund={doRefund}
-        />
+        <ClaimPanel roundId={stakedRound} roundState={stakedRoundState} lastClaimedRound={0} claimByTs={claimByTs} won={won} busy={busy} onClaim={doClaim} onRefund={doRefund} />
       )}
       {CLUSTER !== "mainnet-beta" && (
-        <a href="https://faucet.solana.com" target="_blank" rel="noreferrer"
-          className="text-[10px] text-bull-muted underline self-end">get devnet SOL</a>
+        <a href="https://faucet.solana.com" target="_blank" rel="noreferrer" className="self-end text-[10px] text-bull-muted underline">Get devnet SOL</a>
       )}
-      {err && <p className="text-red-400 text-xs break-words">{err}</p>}
+      {err && <p role="alert" className="break-words px-1 text-xs text-red-400">{err}</p>}
     </div>
   );
 }

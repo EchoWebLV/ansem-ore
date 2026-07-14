@@ -2,7 +2,7 @@
 import { type KeeperEvent } from "@ansem/sdk";
 import { eventToText } from "../lib/format.js";
 
-/** Settle/claim moments worth surfacing as a "win" — the round's payoff phases. */
+/** Settle, reveal and claim moments worth surfacing as round updates. */
 function isHighlight(e: KeeperEvent): boolean {
   return (
     e.type === "round.settling" ||
@@ -19,24 +19,24 @@ function isHighlight(e: KeeperEvent): boolean {
  * from an older keeper with no events — degrades to a quiet idle line, never a crash.
  */
 export function WinTicker({ events }: { events: KeeperEvent[] }) {
-  const wins = (events ?? []).filter(isHighlight).slice(0, 12);
+  const updates = (events ?? []).filter(isHighlight).slice(0, 12);
 
-  if (wins.length === 0) {
+  if (updates.length === 0) {
     return (
       <p className="min-w-0 flex-1 truncate text-[11px] text-bull-muted">
-        the ring is quiet — place a bet to wake the bull
+        the ring is quiet · place a bet to wake the bull
       </p>
     );
   }
 
-  const items = wins.map((e, i) => (
+  const items = updates.map((e, i) => (
     <span key={i} className="text-[11px] text-bull-muted whitespace-nowrap">
-      <span className="text-bull-gold">◆</span> {eventToText(e)}
+      <span className="text-bull-dim" aria-hidden>◆</span> {eventToText(e)}
     </span>
   ));
 
   return (
-    <div className="min-w-0 flex-1 overflow-hidden" role="marquee" aria-label="recent wins">
+    <div className="min-w-0 flex-1 overflow-hidden" role="marquee" aria-label="recent round updates">
       <div className="flex w-max ticker-marquee">
         {/* pr-6 makes each copy self-contained (trailing gap included) so -50% loops seamlessly */}
         <div className="flex items-center gap-6 pr-6 shrink-0">{items}</div>

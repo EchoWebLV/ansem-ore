@@ -83,7 +83,7 @@ export function eventToText(e: KeeperEvent): string {
     case "round.open": return `Round ${e.roundId} opened`;
     case "stake": return `Bull #${e.square + 1} staked → ${formatSol(e.totalStake)}`;
     case "round.settling": return `Round ${e.roundId} settling…`;
-    case "round.revealed": return `Jackpot: Bull #${e.jackpotSquare + 1} struck the big pot`;
+    case "round.revealed": return `Round ${e.roundId} revealed Bull #${e.jackpotSquare + 1}`;
     case "round.claimable": return `Round ${e.roundId} claimable`;
   }
 }
