@@ -596,7 +596,8 @@ Record:
 
 Use a dedicated, funded proof wallet with no unrelated pending BEEF entitlement. Its keypair stays
 local. The existing seeder submits exactly one minimum stake when `MAX_ROUNDS=1`, waits for the
-keeper swap and stamp, and rolls the stamped BEEF before it exits.
+keeper swap and stamp, and rolls the stamped BEEF before it exits. Its plan output records only
+the RPC origin, never the configured path, query string, fragment, or URL credentials.
 
 ```bash
 : "${CONTROLLED_WALLET:?CONTROLLED_WALLET must identify the approved proof wallet}"
@@ -632,7 +633,9 @@ TARGET_ANSEM_BASE_UNITS="$TARGET_ANSEM_BASE_UNITS" MAX_ROUNDS="$MAX_ROUNDS" \
 node scripts/seed-jackpot-roll.mjs --live | tee "$EVIDENCE_DIR/proof-stake-and-roll.log"
 ```
 
-Claim the rolled BEEF and print the exact claim signature and amount received.
+Claim the rolled BEEF and print the exact claim signature and amount received. Submit the claim
+exactly once. After submission, poll finalized token balance and BeefMiner state for at most 90
+seconds so temporary RPC/account read lag cannot be mistaken for a failed claim.
 
 ```bash
 RPC="$MAINNET_RPC" PLAYER_WALLET="$CONTROLLED_WALLET" node --input-type=module <<'NODE' \
@@ -659,12 +662,14 @@ else if (mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) tokenProgram = TOKEN_2022
 else throw new Error(`BEEF mint has unsupported owner ${mintInfo.owner.toBase58()}`);
 const ata = getAssociatedTokenAddressSync(mint, player.publicKey, false, tokenProgram);
 const minerPda = beefMinerPda(player.publicKey);
+const VISIBILITY_ATTEMPTS = 45;
+const VISIBILITY_POLL_MS = 2_000;
 let minerBefore = null;
-for (let attempt = 1; attempt <= 45; attempt += 1) {
-  minerBefore = await program.account.beefMiner.fetchNullable(minerPda);
+for (let attempt = 1; attempt <= VISIBILITY_ATTEMPTS; attempt += 1) {
+  minerBefore = await program.account.beefMiner.fetchNullable(minerPda, "finalized");
   if (minerBefore && BigInt(minerBefore.unclaimed.toString()) > 0n) break;
-  if (attempt === 45) break;
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
+  if (attempt === VISIBILITY_ATTEMPTS) break;
+  await new Promise((resolve) => setTimeout(resolve, VISIBILITY_POLL_MS));
 }
 const expectedUnclaimed = minerBefore ? BigInt(minerBefore.unclaimed.toString()) : 0n;
 if (expectedUnclaimed <= 0n) {
@@ -678,21 +683,34 @@ const before = await balance();
 const signature = await claimBeefIx(
   program, player.publicKey, mint, new PublicKey(beef.beefVault), tokenProgram,
 ).signers([player]).rpc({ commitment: "finalized" });
-const after = await balance();
-if (after <= before) throw new Error(`BEEF claim did not increase balance: ${before} -> ${after}`);
-const received = after - before;
-if (received !== expectedUnclaimed) {
-  throw new Error(`claim received ${received}, fresh rolled entitlement was ${expectedUnclaimed}`);
+let after = before;
+let received = 0n;
+let minerAfter = null;
+let unclaimedAfter = null;
+for (let attempt = 1; attempt <= VISIBILITY_ATTEMPTS; attempt += 1) {
+  [after, minerAfter] = await Promise.all([
+    balance(),
+    program.account.beefMiner.fetchNullable(minerPda, "finalized"),
+  ]);
+  received = after - before;
+  unclaimedAfter = minerAfter ? BigInt(minerAfter.unclaimed.toString()) : null;
+  if (received === expectedUnclaimed && unclaimedAfter === 0n) break;
+  if (attempt === VISIBILITY_ATTEMPTS) break;
+  await new Promise((resolve) => setTimeout(resolve, VISIBILITY_POLL_MS));
 }
-const minerAfter = await program.account.beefMiner.fetch(minerPda);
-if (BigInt(minerAfter.unclaimed.toString()) !== 0n) {
-  throw new Error(`claim left unclaimed BEEF: ${minerAfter.unclaimed}`);
+if (received !== expectedUnclaimed || unclaimedAfter !== 0n) {
+  throw new Error(
+    `claim ${signature} was submitted exactly once, but finalized reads did not show the expected ` +
+    `result within 90s: balance delta ${received} (expected ${expectedUnclaimed}), ` +
+    `BeefMiner unclaimed ${unclaimedAfter === null ? "unavailable" : unclaimedAfter} (expected 0). ` +
+    "Do not resend automatically; inspect the recorded signature and finalized transaction first.",
+  );
 }
 console.log(JSON.stringify({
   signature, player: player.publicKey.toBase58(), playerAta: ata.toBase58(),
   beefMiner: minerPda.toBase58(), expectedUnclaimed: expectedUnclaimed.toString(),
   before: before.toString(), after: after.toString(), received: received.toString(),
-  unclaimedAfter: "0",
+  unclaimedAfter: unclaimedAfter.toString(),
 }, null, 2));
 NODE
 
@@ -1221,3 +1239,74 @@ operator evidence directory; commit only this public summary.
 - Rollback keeper state: `not used`
 - Rollback program state: `not used`
 - Final audit UTC: `2026-07-15T07:53:38Z`
+
+## 12. Cross-rail double-claim fix deployment evidence
+
+This is the public record for the follow-up security upgrade. Raw command outputs and retained
+rollback bytes remain in `/tmp/ansem-cross-rail-deploy-20260715T124500Z`.
+
+- Deployed program source commit: `3449408fd25aca38e6ac47e8c27cad37f4f28440`
+- Release worktree clean at deployment gate: yes
+- Independent program review: GO
+- Program ID: `8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz`
+- ProgramData: `2K1sLP43GKajCgrGTgkAfvc23GVLgqY1YQwwkCGBaFvM`
+- Upgrade authority: `FP39ztVCx7FDPpou4mfPV6HyXoNVDRLEqZyvKkFgpCCM`
+- Previous deployed SHA-256: `a612d60e3f70c1bfc15bbd8423630bddf0fd22d45fb5f5e41c1d41b1ad50b411`
+- Release artifact bytes: `993448`
+- Release artifact SHA-256: `9acac2e264953bd6723cfbb13d9fb91a67031003a3dafe1bdd1fd40e8e464625`
+- Program upgrade signature:
+  `52RfYCGkWB5mWg8jFpUcrtcCRZ3GcCPx9q8dWVaTRt7EKZZVCPc2q9mFnFeb24SNkEUKAqwE1qxCwcyUQ5fdJTUT`
+- Program upgrade finalized slot: `433068284`
+- Deployed-byte proof: the first `993448` on-chain executable bytes exactly match the release
+  SHA-256; the loader-added `10208`-byte ProgramData suffix contains only zero bytes
+- Keeper Railway deployment ID: `cf25f4a0-c032-4f51-b6f1-7946e73093dc`
+- Keeper Railway deployment status: `SUCCESS`
+- Keeper container image digest:
+  `sha256:453382aa6bda5b6c8534a4ca64d0cf55c722a4c10eda7b303fcc8fce9a1f501e`
+- Railway deployment metadata digest:
+  `sha256:f7c2239cd1a2a096c6a0a5e8be3150df8ef7f4472b15b209fd2108514d92a71a`
+- Keeper mode: `KEEPER_ROUND_SECS=60`, `KEEPER_DIRECT_MODE=1`, `SWAP_MODE=real`
+- Keeper health: `https://keeper-production-33d5.up.railway.app/health` returned `ok`
+- Keeper snapshot: `https://keeper-production-33d5.up.railway.app/snapshot` returned live rounds
+- Verification summary: SDK `36/36`; keeper `130/130` with 2 expected live integration suites
+  skipped; seeder `2/2`; fresh-validator program suites `83/83`; Rust `32/32`; app typecheck
+  passed; app tests `210/211`
+- Documented baseline exceptions: the unchanged PlayBoard accessibility test still fails at
+  `app/src/components/PlayBoard.test.tsx:207`; repository-wide formatting check still reports
+  pre-existing drift in untouched files
+- Controlled proof round ID: `423`
+- Controlled proof slot window: `433069096..433069384`
+- Controlled stake: `0.01 SOL` (`10000000` lamports)
+- Stake signature:
+  `fhsuuztgU5BLkoKL8WWsPQJrPqd1gg3wtw9menkEeiWUhrmhNvHu72RygvNuans5Mvng2MNizBK1dFJkwZP2XwC`
+- Real swap signature:
+  `4pHoj4dSYWACPuSQc3T86MGedYWjbp18Xzh9ncDhwCGRTP5LsBEwtUPHHPZdtMoq8go5QesJo72yMuL6KHxnBQ16`
+- BEEF stamp signature:
+  `3h8vfx6abDa4VGrasyC4AS88hi6jue1hwcFhT35uaCa76iYH9eeLi7d4EiX4fnwWWc1XKTscNSDcrhFGqWAWWnRE`
+- BEEF roll signature:
+  `3tqoyvH76zP3Hugs59Xxby2ytrsg1K5UkdYugbmRsjb2QXGKYyHoUwy5LpdWQEzxkVAkynz3UQoA4EBtAyXwf4mT`
+- BEEF claim signature:
+  `Xeiw6NGcpgZr2wjb2mPMGHtMsCv1ezWFqjSJkovm3Kuiqnu6JV8n7edEFj48QbnS1XgJmE9yY3nZRXyxm3M9jDd`
+- Proof BEEF minted: `2.079196` BEEF (`2079196` base units)
+- Proof player claim: `1.663357` BEEF (`1663357` base units)
+- Proof treasury emission: `0.415839` BEEF (`415839` base units)
+- BEEF supply: `105351619 -> 107430815` base units
+- Proof wallet balance: `1663361 -> 3326718` base units
+- BEEF vault: unchanged at `47481502` base units
+- BEEF `total_owed`: unchanged at `47481502` base units after the exact claim
+- Quiet BEEF window: exactly one stamp, one claim, and zero sweeps
+- Protected BEEF vault floor maintained: yes
+- Post-claim BeefMiner unclaimed amount: `0`
+- Live 60-second timing proof: round `427`, create signature
+  `3vS2rMxVGTU17jNFXwTUgjPjDXs9wxWFq2Rr8nHKbXc5AQQkEBkYBDBeyq6CoRXk7ZFNsP93y924nj7rPHkbkhMg`,
+  create time `1784121209`, deadline `1784121269`, delta `60` seconds
+- Public app smoke: `https://ansem-miner.vercel.app/` loaded round `430` as `LIVE`; the visible
+  countdown advanced from `00:12` to `00:09`; no frontend redeploy was required for this program
+  and keeper-only release
+- Proof tooling follow-up: finalized RPC reads briefly lagged successful roll and claim
+  transactions. Finalized account reads and the bounded signature scan confirmed the exact
+  results. The seeder now redacts RPC credentials and the claim proof polls finalized state
+  without resending the transaction.
+- Rollback keeper state: `not used`
+- Rollback program state: `not used`
+- Final audit UTC: `2026-07-15T13:19:53Z`

@@ -31,6 +31,7 @@ import {
   stakeDirectIx, rollBeefIx, beefRoundPda, RoundState, GRID_SIZE, BN,
 } from "@ansem/sdk";
 import { rollStampedRound } from "./_seed-beef-roll.mjs";
+import { safeRpcLabel } from "./_safe-rpc-label.mjs";
 
 const req = (k) => {
   const v = process.env[k];
@@ -61,7 +62,7 @@ const program = createProgram(conn, new Wallet(seeder));
 const c0 = await fetchConfig(program, configPda());
 console.log("SEED PLAN:", JSON.stringify({
   mode: LIVE ? "LIVE" : "DRY-RUN",
-  rpc: RPC,
+  rpc: safeRpcLabel(RPC),
   seeder: LIVE || process.env.SEEDER_WALLET ? seeder.publicKey.toBase58() : "(throwaway — dry-run only)",
   square,
   perRoundLamports: perRound.toString(),
