@@ -2,16 +2,27 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey, Keypair, Transaction } from "@solana/web3.js";
-import { assert } from "chai";
-import { createMint, createAccount, mintTo, transfer, getAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { assert, expect } from "chai";
+import { createMint, createAccount, getAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 const enc = (s: string) => Buffer.from(s);
 const u64le = (n: number) => new anchor.BN(n).toArrayLike(Buffer, "le", 8);
 
-// BEEF vault emission layer suite. Fresh local validator; tolerant initialize
-// so it can share a validator with another suite if needed. FAST bonus params
-// (secs_per_tick = 1) so hold-to-grow is testable in wall-clock seconds.
-describe("beef vault emission", () => {
+// BEEF MINT-ON-EMISSION suite (spec 2026-07-14-beef-on-ansem-design D2/D3).
+// Supersedes the dormant vault-drip divisor model: stamp_beef no longer drains a
+// pre-funded vault — it MINTS each round's emission (players' 80% into the vault
+// buffer, treasury's 20% straight to a pinned ATA) from a program-owned classic-SPL
+// mint whose authority is the vault_authority PDA. Fresh local validator; bonus
+// parameters stay disabled so every liability is backed by minted vault tokens.
+//
+// The suite mirrors the on-chain emission math (programs/ansem-miner/src/math.rs
+// `beef_emission`, decay-aware) in TS so every assertion is EXACT regardless of the
+// running minted_total. Genesis (minted_total == 0) has decay factor exactly 1, so
+// a 1-SOL pot mints exactly 105_000_000 total (84_000_000 players + 21_000_000
+// treasury) — the launch's headline number. Cap EXHAUSTION lives in beef-cap.ts
+// (it needs a low hard_cap incompatible with this suite's full-lifecycle rounds;
+// BeefConfig is a singleton PDA, so the two caps cannot share one validator).
+describe("beef mint-on-emission", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
   const program = anchor.workspace.AnsemMiner as Program<AnsemMiner>;
@@ -33,19 +44,37 @@ describe("beef vault emission", () => {
     PublicKey.findProgramAddressSync([enc("beef_round"), u64le(id)], program.programId)[0];
 
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  const STAKE_WINDOW = 15;
+  const STAKE_WINDOW = 12;
 
-  let beefMint: PublicKey;
-  const beefVaultKp = Keypair.generate(); // vanity grinding is ops-side cosmetics only
-  let beefVault: PublicKey;
-
-  // Test params: 1s ticks so bonuses accrue in-test. tick=1000bps/s, cap 30_000.
-  const DIVISOR = 1000;
-  const TICK_BPS = 1000;
-  const CAP_BPS = 30_000;
+  // ---- Launch emission params (constants.rs BEEF_*). Base emissions only. ----
+  const MAX_ROUND_MINT = 210_000_000n; // 210 BEEF @6dp
+  const SAT = 1_000_000_000n;          // half-max at 1 SOL pot
+  const HARD_CAP = 21_000_000_000_000n; // 21,000,000 BEEF — decay ~= 1 for this suite
+  const TREASURY_BPS = 2_000n;         // 20%
+  const TICK_BPS = 0;
+  const BONUS_CAP_BPS = 0;
   const WINDOW = 86_400;
   const SECS_PER_TICK = 1;
-  const VAULT_FILL = 1_000_000_000; // 1000 BEEF @6dp -> first emission = 1_000_000
+
+  // Mirror of math::beef_emission (decay-aware) + the 80/20 split, so every
+  // assertion is exact against whatever minted_total the round runs at.
+  const beefEmission = (pot: bigint, mintedTotal: bigint): bigint => {
+    if (pot === 0n || MAX_ROUND_MINT === 0n || HARD_CAP === 0n || mintedTotal >= HARD_CAP) return 0n;
+    const curve = (MAX_ROUND_MINT * pot) / (pot + SAT);
+    const remaining = HARD_CAP - mintedTotal;
+    return (curve * remaining) / HARD_CAP;
+  };
+  const emissionTotal = (pot: bigint, mintedTotal: bigint): bigint => {
+    const raw = beefEmission(pot, mintedTotal);
+    const remaining = HARD_CAP - mintedTotal;
+    return raw < remaining ? raw : remaining; // math.rs `.min(hard_cap - minted_total)`
+  };
+  const splitPlayers = (total: bigint): bigint => total - (total * TREASURY_BPS) / 10_000n;
+
+  let beefMint: PublicKey;
+  const beefVaultKp = Keypair.generate();
+  let beefVault: PublicKey;
+  let beefTreasury: PublicKey; // 20% cut ATA (owner = admin; any owner is allowed)
 
   async function freshRound(durationSecs = 0): Promise<{ id: number; pda: PublicKey }> {
     await program.methods.setRoundDuration(new anchor.BN(durationSecs)).accounts({ admin: admin.publicKey }).rpc();
@@ -69,8 +98,6 @@ describe("beef vault emission", () => {
     throw new Error("round never became settleable");
   }
 
-  // tokenProgram is no longer auto-resolvable (the program's token layer is an Interface);
-  // the mock ANSEM + BEEF mints are classic SPL, so pass the classic token program.
   const swapAccounts = (roundPda: PublicKey) => ({
     payer: admin.publicKey, round: roundPda, ansemMint,
     mintAuthority: mintAuth, vaultAuthority: vaultAuth, payoutVault, potVault, treasury,
@@ -79,6 +106,28 @@ describe("beef vault emission", () => {
   const stakeDirectAccts = (pk: PublicKey, roundPda: PublicKey) => ({
     authority: pk, config: configPda, round: roundPda, miner: minerOf(pk), potVault,
   });
+  // Minted-model stamp: the mint + vault_authority (mint authority) + treasury ATA
+  // + token program join the old account set. beef_round is `init` (once-only guard).
+  const stampAccts = (roundId: number, roundPda: PublicKey) => ({
+    payer: admin.publicKey, config: configPda, round: roundPda, beefConfig: beefConfigPda,
+    beefMint, vaultAuthority: vaultAuth, beefVault, beefTreasury,
+    beefRound: beefRoundOf(roundId), tokenProgram: TOKEN_PROGRAM_ID,
+  });
+  const rollAccts = (pk: PublicKey, roundId: number, roundPda: PublicKey) => ({
+    authority: pk, round: roundPda, miner: minerOf(pk), beefRound: beefRoundOf(roundId),
+    beefConfig: beefConfigPda, beefMiner: beefMinerOf(pk),
+  });
+  const claimBeefAccts = (pk: PublicKey) => ({
+    authority: pk, beefConfig: beefConfigPda, beefMiner: beefMinerOf(pk),
+    beefMint, vaultAuthority: vaultAuth, beefVault,
+    playerBeefAta: getAssociatedTokenAddressSync(beefMint, pk),
+    tokenProgram: TOKEN_PROGRAM_ID,
+  });
+  const claimDirectAccts = (pk: PublicKey, roundPda: PublicKey, ata: PublicKey) => ({
+    authority: pk, config: configPda, round: roundPda, miner: minerOf(pk),
+    ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: ata, tokenProgram: TOKEN_PROGRAM_ID,
+  });
+
   async function fundedPlayer(sol = 3): Promise<Keypair> {
     const kp = Keypair.generate();
     const sig = await provider.connection.requestAirdrop(kp.publicKey, sol * anchor.web3.LAMPORTS_PER_SOL);
@@ -86,69 +135,140 @@ describe("beef vault emission", () => {
     return kp;
   }
 
-  it("bootstraps: initialize (tolerant) + mock BEEF mint + vault owned by vault_authority", async () => {
+  // Play a full round to CLAIMABLE + stamped (returns pot for mirror math).
+  async function playRound(stakes: Array<{ kp: Keypair; square: number; amount: number }>) {
+    const round = await freshRound(STAKE_WINDOW);
+    let pot = 0n;
+    for (const s of stakes) {
+      await program.methods.stakeDirect(new anchor.BN(round.id), s.square, new anchor.BN(s.amount))
+        .accounts(stakeDirectAccts(s.kp.publicKey, round.pda)).signers([s.kp]).rpc();
+      pot += BigInt(s.amount);
+    }
+    await settleAfterDeadline(round.pda, Buffer.alloc(32, 9));
+    await program.methods.executeSwapMock().accounts(swapAccounts(round.pda)).rpc();
+    const mintedBefore = BigInt((await program.account.beefConfig.fetch(beefConfigPda)).mintedTotal.toString());
+    await program.methods.stampBeef(new anchor.BN(round.id)).accounts(stampAccts(round.id, round.pda)).rpc();
+    return { round, pot, mintedBefore };
+  }
+
+  let p1: Keypair, p2: Keypair;
+  let round1: { id: number; pda: PublicKey };
+
+  it("bootstraps: initialize + jackpot fixture + BEEF mint whose authority IS the vault PDA", async () => {
     try {
       await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
     } catch (e: any) {
       if (!/already in use/.test(e.toString())) throw e;
     }
-    beefMint = await createMint(provider.connection, admin.payer, admin.publicKey, null, 6);
+    // Fixture (BEEF/jackpot upgrade): execute_swap_mock reads the JackpotConfig PDA.
+    await program.methods.initJackpotConfig().accounts({ admin: admin.publicKey }).rpc();
+
+    // The program's OWN BEEF mint: mint authority = vault_authority PDA (so stamp
+    // can mint), freeze authority null. createMint only records the authority — the
+    // PDA never signs here; it signs the mint CPI later via seeds.
+    beefMint = await createMint(provider.connection, admin.payer, vaultAuth, null, 6);
     beefVault = await createAccount(provider.connection, admin.payer, beefMint, vaultAuth, beefVaultKp);
-    await mintTo(provider.connection, admin.payer, beefMint, beefVault, admin.payer, VAULT_FILL);
+    // Treasury ATA — any owner; only the mint is constrained. Owned by admin here.
+    beefTreasury = await createAccount(provider.connection, admin.payer, beefMint, admin.publicKey, Keypair.generate());
     const v = await getAccount(provider.connection, beefVault);
     assert.equal(v.owner.toBase58(), vaultAuth.toBase58());
-    assert.equal(Number(v.amount), VAULT_FILL);
+    assert.equal(Number(v.amount), 0, "minted model: vault starts EMPTY (no pre-fill)");
   });
 
-  it("init_beef pins mint+vault and stores params; wrong-owner vault is rejected", async () => {
-    // wrong owner -> BadBeefVault
-    const bogus = await createAccount(provider.connection, admin.payer, beefMint, admin.publicKey, Keypair.generate());
+  it("init_beef pins mint/vault/treasury; a mint whose authority != vault PDA is rejected", async () => {
+    // Wrong-authority mint (authority = admin, not the vault PDA) + its own vault/treasury
+    // so the ONLY failing constraint is the mint-authority pin -> BadBeefParams.
+    const wrongMint = await createMint(provider.connection, admin.payer, admin.publicKey, null, 6);
+    const wrongVault = await createAccount(provider.connection, admin.payer, wrongMint, vaultAuth, Keypair.generate());
+    const wrongTreasury = await createAccount(provider.connection, admin.payer, wrongMint, admin.publicKey, Keypair.generate());
     try {
-      await program.methods.initBeef(new anchor.BN(DIVISOR), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
-        .accounts({ admin: admin.publicKey, beefMint, vaultAuthority: vaultAuth, beefVault: bogus }).rpc();
-      assert.fail("should reject vault not owned by vault_authority");
-    } catch (e: any) { assert.include(e.toString(), "BadBeefVault"); }
+      await program.methods
+        .initBeef(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
+          new anchor.BN(HARD_CAP.toString()), Number(TREASURY_BPS), TICK_BPS, BONUS_CAP_BPS,
+          new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
+        .accounts({ admin: admin.publicKey, beefMint: wrongMint, vaultAuthority: vaultAuth,
+          beefVault: wrongVault, beefTreasury: wrongTreasury }).rpc();
+      assert.fail("init_beef must reject a mint whose authority is not the vault PDA");
+    } catch (e: any) { assert.include(e.toString(), "BadBeefParams"); }
 
-    await program.methods.initBeef(new anchor.BN(DIVISOR), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
-      .accounts({ admin: admin.publicKey, beefMint, vaultAuthority: vaultAuth, beefVault }).rpc();
+    // The good mint pins cleanly.
+    await program.methods
+      .initBeef(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
+        new anchor.BN(HARD_CAP.toString()), Number(TREASURY_BPS), TICK_BPS, BONUS_CAP_BPS,
+        new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
+      .accounts({ admin: admin.publicKey, beefMint, vaultAuthority: vaultAuth, beefVault, beefTreasury }).rpc();
     const bc = await program.account.beefConfig.fetch(beefConfigPda);
+    assert.equal(bc.beefMint.toBase58(), beefMint.toBase58());
     assert.equal(bc.beefVault.toBase58(), beefVault.toBase58());
-    assert.equal(bc.divisor.toNumber(), DIVISOR);
-    assert.equal(bc.totalOwed.toNumber(), 0);
+    assert.equal(bc.beefTreasury.toBase58(), beefTreasury.toBase58());
+    assert.equal(bc.maxRoundMint.toString(), MAX_ROUND_MINT.toString());
+    assert.equal(bc.hardCap.toString(), HARD_CAP.toString());
+    assert.equal(bc.treasuryBps, Number(TREASURY_BPS));
+    assert.equal(bc.tickBps, 0);
+    assert.equal(bc.bonusCapBps, 0);
+    assert.equal(bc.mintedTotal.toString(), "0");
+    assert.equal(bc.totalOwed.toString(), "0");
   });
 
-  it("set_beef_params tunes knobs (admin-gated)", async () => {
-    await program.methods.setBeefParams(new anchor.BN(DIVISOR), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
+  it("set_beef_params tunes the curve with base-only params (admin-gated); cannot touch mint/vault/cap", async () => {
+    await program.methods.setBeefParams(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
+      TICK_BPS, BONUS_CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
       .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
     const outsider = await fundedPlayer(1);
     try {
-      await program.methods.setBeefParams(new anchor.BN(1), 1, 1, new anchor.BN(1), new anchor.BN(1))
+      await program.methods.setBeefParams(new anchor.BN(1), new anchor.BN(1), 0, 0, new anchor.BN(1), new anchor.BN(1))
         .accounts({ admin: outsider.publicKey, config: configPda, beefConfig: beefConfigPda })
         .signers([outsider]).rpc();
-      assert.fail("non-admin must not set params");
+      assert.fail("non-admin must not set beef params");
     } catch (e: any) { assert.include(e.toString(), "Unauthorized"); }
+    // mint/vault/treasury/cap are untouched by the tune.
+    const bc = await program.account.beefConfig.fetch(beefConfigPda);
+    assert.equal(bc.beefMint.toBase58(), beefMint.toBase58());
+    assert.equal(bc.hardCap.toString(), HARD_CAP.toString());
+    assert.equal(bc.treasuryBps, Number(TREASURY_BPS));
+    assert.equal(bc.tickBps, 0);
+    assert.equal(bc.bonusCapBps, 0);
   });
 
-  const stampAccts = (roundId: number, roundPda: PublicKey) => ({
-    payer: admin.publicKey, config: configPda, round: roundPda,
-    beefConfig: beefConfigPda, beefVault, beefRound: beefRoundOf(roundId),
+  async function expectBadBeefParams(tickBps: number, bonusCapBps: number, label: string) {
+    let error: unknown;
+    try {
+      await program.methods.setBeefParams(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
+        tickBps, bonusCapBps, new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
+        .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
+    } catch (e: unknown) {
+      error = e;
+    }
+
+    // Keep the shared fixture base-only even when the current program wrongly
+    // accepts the invalid update. This prevents one RED assertion cascading.
+    await program.methods.setBeefParams(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
+      0, 0, new anchor.BN(WINDOW), new anchor.BN(SECS_PER_TICK))
+      .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
+
+    assert.isDefined(error, `set_beef_params accepted ${label}`);
+    assert.include(String(error), "BadBeefParams");
+  }
+
+  it("rejects tick_bps > 0 with bonus_cap_bps = 0", async () => {
+    await expectBadBeefParams(1, 0, "tick_bps > 0 with bonus_cap_bps = 0");
   });
 
-  let p1: Keypair, p2: Keypair;
-  let round1: { id: number; pda: PublicKey };
-  const P1_STAKE = 300_000_000;
-  const P2_STAKE = 100_000_000;
+  it("rejects tick_bps = 0 with bonus_cap_bps > 0", async () => {
+    await expectBadBeefParams(0, 1, "tick_bps = 0 with bonus_cap_bps > 0");
+  });
 
-  it("stamp_beef freezes emission = free_vault/divisor and recognizes the liability", async () => {
+  it("HEADLINE: a 1-SOL pot mints exactly 105_000_000 -> 84_000_000 vault + 21_000_000 treasury", async () => {
     p1 = await fundedPlayer();
     p2 = await fundedPlayer();
     round1 = await freshRound(STAKE_WINDOW);
-    await program.methods.stakeDirect(new anchor.BN(round1.id), 3, new anchor.BN(P1_STAKE))
+    // pot == exactly 1 SOL: p1 0.75 on sq3, p2 0.25 on sq7. Doubles as the pro-rata roll fixture.
+    await program.methods.stakeDirect(new anchor.BN(round1.id), 3, new anchor.BN(750_000_000))
       .accounts(stakeDirectAccts(p1.publicKey, round1.pda)).signers([p1]).rpc();
-    await program.methods.stakeDirect(new anchor.BN(round1.id), 7, new anchor.BN(P2_STAKE))
+    await program.methods.stakeDirect(new anchor.BN(round1.id), 7, new anchor.BN(250_000_000))
       .accounts(stakeDirectAccts(p2.publicKey, round1.pda)).signers([p2]).rpc();
 
-    // pre-CLAIMABLE stamp must fail
+    // pre-CLAIMABLE stamp must fail (round still SETTLED->needs swap first, actually OPEN here).
     try {
       await program.methods.stampBeef(new anchor.BN(round1.id)).accounts(stampAccts(round1.id, round1.pda)).rpc();
       assert.fail("stamp before swap must fail");
@@ -156,296 +276,192 @@ describe("beef vault emission", () => {
 
     await settleAfterDeadline(round1.pda, Buffer.alloc(32, 7));
     await program.methods.executeSwapMock().accounts(swapAccounts(round1.pda)).rpc();
+
+    const treBefore = BigInt((await getAccount(provider.connection, beefTreasury)).amount.toString());
     await program.methods.stampBeef(new anchor.BN(round1.id)).accounts(stampAccts(round1.id, round1.pda)).rpc();
 
+    // Genesis decay factor == 1: total 105_000_000, players 84_000_000, treasury 21_000_000.
+    assert.equal(emissionTotal(1_000_000_000n, 0n).toString(), "105000000", "mirror sanity: genesis total");
     const br = await program.account.beefRound.fetch(beefRoundOf(round1.id));
-    assert.equal(br.emission.toNumber(), VAULT_FILL / DIVISOR); // 1_000_000
+    assert.equal(br.emission.toString(), "84000000", "BeefRound.emission == players' 80% share");
+    const vaultAmt = BigInt((await getAccount(provider.connection, beefVault)).amount.toString());
+    assert.equal(vaultAmt.toString(), "84000000", "vault got the players' 84_000_000");
+    const treAfter = BigInt((await getAccount(provider.connection, beefTreasury)).amount.toString());
+    assert.equal((treAfter - treBefore).toString(), "21000000", "treasury got the 20% = 21_000_000");
     const bc = await program.account.beefConfig.fetch(beefConfigPda);
-    assert.equal(bc.totalOwed.toNumber(), VAULT_FILL / DIVISOR);
+    assert.equal(bc.mintedTotal.toString(), "105000000", "minted_total counts BOTH shares");
+    assert.equal(bc.totalOwed.toString(), "84000000", "total_owed tracks only the players' liability");
+    expect((await getAccount(provider.connection, beefVault)).amount >= BigInt(bc.totalOwed.toString()))
+      .to.equal(true);
 
-    // double-stamp: BeefRound is `init` -> second call fails at account level
+    // double-stamp: BeefRound is `init` -> second call fails at the account level.
     try {
       await program.methods.stampBeef(new anchor.BN(round1.id)).accounts(stampAccts(round1.id, round1.pda)).rpc();
       assert.fail("double stamp must fail");
     } catch (e: any) { assert.include(e.toString(), "already in use"); }
   });
 
+  it("stamp on an EMPTY round mints 0 (dust-farming is worthless)", async () => {
+    // duration 0, nobody stakes -> pot 0 -> emission 0. Also exercises the anti
+    // retro-stamp gate below.
+    const rEmpty = await freshRound(0);
+    await settleAfterDeadline(rEmpty.pda, Buffer.alloc(32, 3));
+    await program.methods.executeSwapMock().accounts(swapAccounts(rEmpty.pda)).rpc();
+    const mintedBefore = BigInt((await program.account.beefConfig.fetch(beefConfigPda)).mintedTotal.toString());
+    await program.methods.stampBeef(new anchor.BN(rEmpty.id)).accounts(stampAccts(rEmpty.id, rEmpty.pda)).rpc();
+    const br = await program.account.beefRound.fetch(beefRoundOf(rEmpty.id));
+    assert.equal(br.emission.toString(), "0", "empty pot -> zero emission");
+    const mintedAfter = BigInt((await program.account.beefConfig.fetch(beefConfigPda)).mintedTotal.toString());
+    assert.equal((mintedAfter - mintedBefore).toString(), "0", "empty round mints nothing");
+  });
+
   it("stamp_beef rejects a non-current round (anti retro-stamp grief)", async () => {
-    // Settle+swap an old round but leave it UNSTAMPED, then open a newer round.
-    // Stamping the now-old (still unstamped) round must hit the current_round_id
-    // gate — the anti retro-stamp guard. (duration 0: no stakers, settle at once.)
     const rOld = await freshRound(0);
     await settleAfterDeadline(rOld.pda, Buffer.alloc(32, 4));
     await program.methods.executeSwapMock().accounts(swapAccounts(rOld.pda)).rpc();
-    const rNew = await freshRound(0);
+    const rNew = await freshRound(0); // rOld is no longer current
     try {
       await program.methods.stampBeef(new anchor.BN(rOld.id)).accounts(stampAccts(rOld.id, rOld.pda)).rpc();
       assert.fail("stamping an old (non-current) round must fail");
     } catch (e: any) { assert.include(e.toString(), "NotCurrentRound"); }
-
-    // finish rNew clean: empty pot -> emission 0, leaving state finalized for the
-    // roll tests that follow.
+    // finish rNew clean (empty -> 0) so state is finalized for the roll tests.
     await settleAfterDeadline(rNew.pda, Buffer.alloc(32, 3));
     await program.methods.executeSwapMock().accounts(swapAccounts(rNew.pda)).rpc();
     await program.methods.stampBeef(new anchor.BN(rNew.id)).accounts(stampAccts(rNew.id, rNew.pda)).rpc();
-    const br = await program.account.beefRound.fetch(beefRoundOf(rNew.id));
-    assert.equal(br.emission.toNumber(), 0);
   });
 
-  const rollAccts = (pk: PublicKey, roundId: number, roundPda: PublicKey) => ({
-    authority: pk, round: roundPda, miner: minerOf(pk), beefRound: beefRoundOf(roundId),
-    beefConfig: beefConfigPda, beefMiner: beefMinerOf(pk),
-  });
-
-  // Full stake -> settle -> swap -> stamp lifecycle used by later tests.
-  async function playRound(stakes: Array<{ kp: Keypair; square: number; amount: number }>) {
-    const round = await freshRound(STAKE_WINDOW);
-    for (const s of stakes) {
-      await program.methods.stakeDirect(new anchor.BN(round.id), s.square, new anchor.BN(s.amount))
-        .accounts(stakeDirectAccts(s.kp.publicKey, round.pda)).signers([s.kp]).rpc();
-    }
-    await settleAfterDeadline(round.pda, Buffer.alloc(32, 9));
-    await program.methods.executeSwapMock().accounts(swapAccounts(round.pda)).rpc();
-    await program.methods.stampBeef(new anchor.BN(round.id)).accounts(stampAccts(round.id, round.pda)).rpc();
-    return round;
-  }
-
-  it("roll_beef credits pro-rata shares; second roll is a no-op (never an error)", async () => {
+  it("roll_beef credits pro-rata shares of the 84_000_000 emission; second roll is a no-op", async () => {
     await program.methods.rollBeef(new anchor.BN(round1.id))
       .accounts(rollAccts(p1.publicKey, round1.id, round1.pda)).signers([p1]).rpc();
     await program.methods.rollBeef(new anchor.BN(round1.id))
       .accounts(rollAccts(p2.publicKey, round1.id, round1.pda)).signers([p2]).rpc();
 
-    const emission = VAULT_FILL / DIVISOR; // 1_000_000
+    // emission 84_000_000 split by stake share: p1 0.75 SOL -> 63M, p2 0.25 SOL -> 21M.
     const bm1 = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
     const bm2 = await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey));
-    assert.equal(bm1.unclaimed.toNumber(), (emission * P1_STAKE) / (P1_STAKE + P2_STAKE)); // 750_000
-    assert.equal(bm2.unclaimed.toNumber(), (emission * P2_STAKE) / (P1_STAKE + P2_STAKE)); // 250_000
+    assert.equal(bm1.unclaimed.toString(), "63000000", "p1 = 84M * 0.75");
+    assert.equal(bm2.unclaimed.toString(), "21000000", "p2 = 84M * 0.25");
     assert.equal(bm1.lastRolledRoundId.toNumber(), round1.id);
 
-    // idempotent: second roll changes nothing and does NOT throw (bundle safety)
+    // idempotent: second roll changes nothing and does NOT throw (bundle safety).
     await program.methods.rollBeef(new anchor.BN(round1.id))
       .accounts(rollAccts(p1.publicKey, round1.id, round1.pda)).signers([p1]).rpc();
     const again = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
-    assert.equal(again.unclaimed.toNumber(), bm1.unclaimed.toNumber());
+    assert.equal(again.unclaimed.toString(), "63000000");
+  });
+
+  it("activity time adds no liability; roll + claim pays exactly the stamped base emission", async () => {
+    const stamped = BigInt((await program.account.beefRound.fetch(beefRoundOf(round1.id))).emission.toString());
+    const bcBeforeActivity = await program.account.beefConfig.fetch(beefConfigPda);
+    const vaultBeforeActivity = await getAccount(provider.connection, beefVault);
+    const p1BeforeActivity = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
+    const p2BeforeActivity = await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey));
+
+    assert.equal(stamped.toString(), "84000000");
+    assert.equal(vaultBeforeActivity.amount.toString(), stamped.toString(), "fresh vault equals stamped player emission");
+    assert.equal(bcBeforeActivity.totalOwed.toString(), stamped.toString(), "fresh liability equals stamped player emission");
+    expect(vaultBeforeActivity.amount >= BigInt(bcBeforeActivity.totalOwed.toString())).to.equal(true);
+
+    await sleep(2500); // multiple tick intervals pass, but base-only config cannot accrue a bonus
+
+    const bcAfterActivity = await program.account.beefConfig.fetch(beefConfigPda);
+    const p1AfterActivity = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
+    const p2AfterActivity = await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey));
+    assert.equal(p1AfterActivity.unclaimed.toString(), p1BeforeActivity.unclaimed.toString(), "activity time did not grow p1 shares");
+    assert.equal(p2AfterActivity.unclaimed.toString(), p2BeforeActivity.unclaimed.toString(), "activity time did not grow p2 shares");
+    assert.equal(bcAfterActivity.totalOwed.toString(), bcBeforeActivity.totalOwed.toString(), "activity time did not grow total_owed");
+
+    await program.methods.claimBeef().accounts(claimBeefAccts(p1.publicKey)).signers([p1]).rpc();
+    await program.methods.claimBeef().accounts(claimBeefAccts(p2.publicKey)).signers([p2]).rpc();
+
+    const p1Paid = BigInt((await getAccount(provider.connection,
+      getAssociatedTokenAddressSync(beefMint, p1.publicKey))).amount.toString());
+    const p2Paid = BigInt((await getAccount(provider.connection,
+      getAssociatedTokenAddressSync(beefMint, p2.publicKey))).amount.toString());
+    assert.equal(p1Paid.toString(), p1BeforeActivity.unclaimed.toString(), "p1 received only base entitlement");
+    assert.equal(p2Paid.toString(), p2BeforeActivity.unclaimed.toString(), "p2 received only base entitlement");
+    assert.equal((p1Paid + p2Paid).toString(), stamped.toString(), "claims equal exact stamped player emission");
+
+    const bcAfterClaims = await program.account.beefConfig.fetch(beefConfigPda);
+    const vaultAfterClaims = await getAccount(provider.connection, beefVault);
+    assert.equal(bcAfterClaims.totalOwed.toString(), "0", "fresh liability delta returns to zero after claims");
+    assert.equal(vaultAfterClaims.amount.toString(), "0", "fresh vault delta returns to zero after claims");
+    expect(vaultAfterClaims.amount >= BigInt(bcAfterClaims.totalOwed.toString())).to.equal(true);
   });
 
   it("bundle order [roll_beef, claim_direct] in ONE tx preserves the BEEF share", async () => {
     const p3 = await fundedPlayer();
-    const r = await playRound([{ kp: p3, square: 5, amount: 200_000_000 }]);
+    const { round: r, pot, mintedBefore } = await playRound([{ kp: p3, square: 5, amount: 200_000_000 }]);
+    const expectedEmission = splitPlayers(emissionTotal(pot, mintedBefore));
     const p3Ata = getAssociatedTokenAddressSync(ansemMint, p3.publicKey);
 
     const rollIx = await program.methods.rollBeef(new anchor.BN(r.id))
       .accounts(rollAccts(p3.publicKey, r.id, r.pda)).instruction();
     const claimIx = await program.methods.claimDirect(new anchor.BN(r.id))
-      .accounts({ authority: p3.publicKey, config: configPda, round: r.pda, miner: minerOf(p3.publicKey),
-        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p3Ata,
-        tokenProgram: TOKEN_PROGRAM_ID }).instruction();
+      .accounts(claimDirectAccts(p3.publicKey, r.pda, p3Ata)).instruction();
     await provider.sendAndConfirm(new Transaction().add(rollIx, claimIx), [p3]);
 
     const bm = await program.account.beefMiner.fetch(beefMinerOf(p3.publicKey));
-    assert.isAbove(bm.unclaimed.toNumber(), 0); // share survived the zeroing claim
-    // and the miner's stakes are zeroed by claim_direct as before
+    // sole staker -> whole players' emission; share survived the zeroing claim.
+    assert.equal(bm.unclaimed.toString(), expectedEmission.toString(), "BEEF share survived the bundled ANSEM claim");
+    assert.isAbove(Number(bm.unclaimed), 0);
     const m = await program.account.minerPosition.fetch(minerOf(p3.publicKey));
-    assert.equal(m.blockStake.reduce((a: number, b: any) => a + b.toNumber(), 0), 0);
+    assert.equal(m.blockStake.reduce((a: number, b: any) => a + b.toNumber(), 0), 0, "claim_direct zeroed stakes");
   });
 
-  it("roll after ANSEM-claim-first rolls ZERO (stakes gone) — documented forfeit, still no error", async () => {
+  it("roll after an ANSEM-claim-first rolls ZERO (stakes gone) — documented forfeit, still no error", async () => {
     const p4 = await fundedPlayer();
-    const r = await playRound([{ kp: p4, square: 1, amount: 150_000_000 }]);
+    const { round: r } = await playRound([{ kp: p4, square: 1, amount: 150_000_000 }]);
     const p4Ata = getAssociatedTokenAddressSync(ansemMint, p4.publicKey);
     await program.methods.claimDirect(new anchor.BN(r.id))
-      .accounts({ authority: p4.publicKey, config: configPda, round: r.pda, miner: minerOf(p4.publicKey),
-        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p4Ata,
-        tokenProgram: TOKEN_PROGRAM_ID }).signers([p4]).rpc();
+      .accounts(claimDirectAccts(p4.publicKey, r.pda, p4Ata)).signers([p4]).rpc();
     await program.methods.rollBeef(new anchor.BN(r.id))
       .accounts(rollAccts(p4.publicKey, r.id, r.pda)).signers([p4]).rpc();
     const bm = await program.account.beefMiner.fetch(beefMinerOf(p4.publicKey));
-    assert.equal(bm.unclaimed.toNumber(), 0);
+    assert.equal(bm.unclaimed.toString(), "0", "stakes zeroed pre-roll -> zero share (no error)");
   });
 
-  const claimBeefAccts = (pk: PublicKey) => ({
-    authority: pk, beefConfig: beefConfigPda, beefMiner: beefMinerOf(pk),
-    beefMint, vaultAuthority: vaultAuth, beefVault,
-    playerBeefAta: getAssociatedTokenAddressSync(beefMint, pk),
-    tokenProgram: TOKEN_PROGRAM_ID,
-  });
-
-  it("claim_beef pays unclaimed*(1+bonus), decrements owed, resets; double-claim pays zero", async () => {
-    // p1 holds 750_000 from round1; secs_per_tick=1 & tick=1000bps mean real
-    // seconds have been accruing bonus since the roll. Claim and check bounds.
-    const bcBefore = await program.account.beefConfig.fetch(beefConfigPda);
-    const bmBefore = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
-    const base = bmBefore.unclaimed.toNumber();
-
-    await program.methods.claimBeef().accounts(claimBeefAccts(p1.publicKey)).signers([p1]).rpc();
-
-    const ata = getAssociatedTokenAddressSync(beefMint, p1.publicKey);
-    const got = Number((await getAccount(provider.connection, ata)).amount);
-    assert.isAtLeast(got, base);            // at least the base
-    assert.isAtMost(got, base * 4);         // never beyond the 4x cap
-
-    const bm = await program.account.beefMiner.fetch(beefMinerOf(p1.publicKey));
-    assert.equal(bm.unclaimed.toNumber(), 0);  // full reset
-    assert.equal(bm.bonusBps, 0);
-    const bc = await program.account.beefConfig.fetch(beefConfigPda);
-    assert.isBelow(bc.totalOwed.toNumber(), bcBefore.totalOwed.toNumber()); // owed shrank
-
-    // double claim: nothing moves
-    await program.methods.claimBeef().accounts(claimBeefAccts(p1.publicKey)).signers([p1]).rpc();
-    const got2 = Number((await getAccount(provider.connection, ata)).amount);
-    assert.equal(got2, got);
-  });
-
-  it("hold-to-grow: bonus caps at 4x and dilution waters a new share down", async () => {
-    // crank ticks way up so p2's held balance pins the cap in seconds
-    await program.methods.setBeefParams(new anchor.BN(DIVISOR), 30_000, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
-      .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
-    await sleep(3000); // >=1 tick at 30_000bps -> instantly capped
-
-    // p2 rolls a NEW round's share on top of the capped balance -> dilution
-    const r = await playRound([{ kp: p2, square: 9, amount: 100_000_000 }]);
-    await program.methods.rollBeef(new anchor.BN(r.id))
-      .accounts(rollAccts(p2.publicKey, r.id, r.pda)).signers([p2]).rpc();
-    const bm = await program.account.beefMiner.fetch(beefMinerOf(p2.publicKey));
-    assert.isBelow(bm.bonusBps, CAP_BPS); // new share diluted the capped bonus
-    assert.isAbove(bm.bonusBps, 0);
-
-    // claim: payout is (1+bonus)x of the combined balance, bounded by 4x
-    const base = bm.unclaimed.toNumber();
-    await program.methods.claimBeef().accounts(claimBeefAccts(p2.publicKey)).signers([p2]).rpc();
-    const ata = getAssociatedTokenAddressSync(beefMint, p2.publicKey);
-    const got = Number((await getAccount(provider.connection, ata)).amount);
-    assert.isAtLeast(got, base);
-    assert.isAtMost(got, base * 4);
-    // restore fast-but-sane params for later tests
-    await program.methods.setBeefParams(new anchor.BN(DIVISOR), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
-      .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
-  });
-
-  it("INVARIANT: a drained vault stamps emission 0 and the ANSEM game is untouched", async () => {
-    // Drain the vault to (approximately) its owed floor by pointing divisor at 1
-    // and claiming everything claimable? Simpler: fetch free = amount - owed and
-    // assert stamp math directly on a fresh round with near-zero free balance.
-    const bc = await program.account.beefConfig.fetch(beefConfigPda);
-    const v = await getAccount(provider.connection, beefVault);
-    const free = Number(v.amount) - bc.totalOwed.toNumber();
-    // crank divisor so emission floors to 0 even with free balance remaining:
-    await program.methods.setBeefParams(new anchor.BN("18446744073709551615"), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
+  it("INVARIANT: a zero-emission round (max_round_mint 0) stamps 0 and the ANSEM game is untouched", async () => {
+    // The minted analogue of the old "drained vault" invariant: emission floors to
+    // 0, roll/claim no-op, and the ANSEM claim pays exactly as in the no-BEEF world.
+    await program.methods.setBeefParams(new anchor.BN(0), new anchor.BN(SAT.toString()),
+      0, 0, new anchor.BN(WINDOW), new anchor.BN(1))
       .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
 
     const p5 = await fundedPlayer();
-    const r = await playRound([{ kp: p5, square: 2, amount: 120_000_000 }]);
+    const { round: r } = await playRound([{ kp: p5, square: 2, amount: 120_000_000 }]);
     const br = await program.account.beefRound.fetch(beefRoundOf(r.id));
-    assert.equal(br.emission.toNumber(), 0); // "empty" vault -> zero emission
-    assert.isAtLeast(free, 0);
+    assert.equal(br.emission.toString(), "0", "max_round_mint 0 -> zero emission");
 
-    // roll + claim still succeed as no-ops...
+    // roll + claim_beef still succeed as no-ops...
     await program.methods.rollBeef(new anchor.BN(r.id))
       .accounts(rollAccts(p5.publicKey, r.id, r.pda)).signers([p5]).rpc();
     await program.methods.claimBeef().accounts(claimBeefAccts(p5.publicKey)).signers([p5]).rpc();
 
-    // ...and the ANSEM claim works exactly as in the no-BEEF world.
+    // ...and the ANSEM claim works exactly as in the no-BEEF world (sole staker wins).
     const p5Ata = getAssociatedTokenAddressSync(ansemMint, p5.publicKey);
     await program.methods.claimDirect(new anchor.BN(r.id))
-      .accounts({ authority: p5.publicKey, config: configPda, round: r.pda, miner: minerOf(p5.publicKey),
-        ansemMint, vaultAuthority: vaultAuth, payoutVault, playerAta: p5Ata,
-        tokenProgram: TOKEN_PROGRAM_ID }).signers([p5]).rpc();
-    const won = Number((await getAccount(provider.connection, p5Ata)).amount);
-    assert.isAbove(won, 0); // sole staker -> wins the jackpot regardless of BEEF
+      .accounts(claimDirectAccts(p5.publicKey, r.pda, p5Ata)).signers([p5]).rpc();
+    assert.isAbove(Number((await getAccount(provider.connection, p5Ata)).amount), 0, "ANSEM game untouched by BEEF");
 
-    // restore params
-    await program.methods.setBeefParams(new anchor.BN(DIVISOR), TICK_BPS, CAP_BPS, new anchor.BN(WINDOW), new anchor.BN(1))
+    // restore live params for anything that follows.
+    await program.methods.setBeefParams(new anchor.BN(MAX_ROUND_MINT.toString()), new anchor.BN(SAT.toString()),
+      0, 0, new anchor.BN(WINDOW), new anchor.BN(1))
       .accounts({ admin: admin.publicKey, config: configPda, beefConfig: beefConfigPda }).rpc();
   });
 
-  it("SOLVENCY: total BEEF paid out never exceeds the vault fill", async () => {
-    const v = await getAccount(provider.connection, beefVault);
-    const stillVaulted = Number(v.amount);
-    assert.isAtLeast(stillVaulted, 0);
-    assert.isAtMost(VAULT_FILL - stillVaulted, VAULT_FILL); // paid <= filled
+  it("SUPPLY: minted_total == vault balance + treasury balance (every base unit is accounted)", async () => {
+    // Conservation: the mint has issued exactly minted_total, split between the vault
+    // (players' buffer, minus anything already claimed out) and the treasury ATA.
+    // Because a claim moves BEEF OUT of the vault to a player ATA, we reconcile against
+    // total minted = vault + treasury + claimed-out. claimed-out = minted_total -
+    // (vault + treasury). It must be >= 0 (no phantom supply).
     const bc = await program.account.beefConfig.fetch(beefConfigPda);
-    assert.isAtMost(bc.totalOwed.toNumber(), stillVaulted); // owed always covered
-  });
-
-  // ---- Task 4: sweep_beef_excess (admin-gated, solvency-bounded token exit) ----
-  // Only BEEF ABOVE the total_owed solvency ledger may leave the vault. The fixtures
-  // above have accrued a real liability (rolled, still-unclaimed shares -> total_owed>0)
-  // AND a large free surplus, so the boundary `amount <= vault.amount - total_owed` is
-  // meaningfully exercised. This test is placed AFTER the suite's last vault-balance
-  // assertion (the SOLVENCY invariant above) and additionally RESTORES the vault to its
-  // exact pre-sweep balance at the end, so it cannot disturb any earlier assertion.
-  const sweepBeefAccounts = (destAta: PublicKey, adminPk: PublicKey) => ({
-    admin: adminPk,
-    config: configPda,
-    beefConfig: beefConfigPda,
-    vaultAuthority: vaultAuth,
-    beefMint, // required for transfer_checked (mint + decimals)
-    beefVault,
-    destinationAta: destAta,
-    tokenProgram: TOKEN_PROGRAM_ID,
-  });
-
-  it("sweep_beef_excess: exact free surplus leaves; +1 unit and non-admin fail; vault restored", async () => {
-    const bc0 = await program.account.beefConfig.fetch(beefConfigPda);
-    const v0 = await getAccount(provider.connection, beefVault);
-    const vaultAmt = v0.amount;
-    const owed = BigInt(bc0.totalOwed.toString());
-    const free = vaultAmt - owed;
-    // Fixtures must give us a real liability AND a real surplus for the boundary to bite.
-    assert.isAbove(bc0.totalOwed.toNumber(), 0, "fixtures left a real BEEF liability (total_owed > 0)");
-    assert.isAbove(Number(free), 0, "there is free BEEF above the owed floor to sweep");
-
-    // Admin-owned destination token account for the beef mint (any owner is allowed;
-    // the ix only constrains token::mint == beef_config.beef_mint).
-    const destAta = await createAccount(
-      provider.connection, admin.payer, beefMint, admin.publicKey, Keypair.generate()
-    );
-
-    // (a) non-admin signer -> Unauthorized (no tokens move).
-    const outsider = await fundedPlayer(1);
-    try {
-      await (program.methods as any)
-        .sweepBeefExcess(new anchor.BN(free.toString()))
-        .accounts(sweepBeefAccounts(destAta, outsider.publicKey))
-        .signers([outsider])
-        .rpc();
-      assert.fail("a non-admin must not be able to sweep BEEF");
-    } catch (e: any) {
-      assert.include(e.toString(), "Unauthorized");
-    }
-
-    // (b) one base unit ABOVE the free surplus -> InsufficientBalance (solvency floor).
-    try {
-      await (program.methods as any)
-        .sweepBeefExcess(new anchor.BN((free + 1n).toString()))
-        .accounts(sweepBeefAccounts(destAta, admin.publicKey))
-        .rpc();
-      assert.fail("sweeping into the owed floor must be rejected");
-    } catch (e: any) {
-      assert.include(e.toString(), "InsufficientBalance");
-    }
-
-    // (c) exactly the free surplus succeeds and drains the vault down to total_owed.
-    await (program.methods as any)
-      .sweepBeefExcess(new anchor.BN(free.toString()))
-      .accounts(sweepBeefAccounts(destAta, admin.publicKey))
-      .rpc();
-
-    const vaultAfter = (await getAccount(provider.connection, beefVault)).amount;
-    const destAfter = (await getAccount(provider.connection, destAta)).amount;
-    const bc1 = await program.account.beefConfig.fetch(beefConfigPda);
-    assert.equal(destAfter.toString(), free.toString(), "destination received exactly the free surplus");
-    assert.equal(vaultAfter.toString(), owed.toString(), "vault drained down to exactly total_owed");
-    assert.equal(bc1.totalOwed.toString(), bc0.totalOwed.toString(), "total_owed ledger unchanged by the sweep");
-    // Solvency invariant still holds: the vault fully covers everything owed.
-    assert.isAtLeast(Number(vaultAfter), bc1.totalOwed.toNumber());
-
-    // RESTORE: deposit the swept BEEF back so the vault balance is exactly as before
-    // (plain permissionless SPL transfer, admin ATA -> vault). Proves no interference:
-    // the suite's vault ends identical to its pre-sweep state.
-    await transfer(provider.connection, admin.payer, destAta, beefVault, admin.payer, free);
-    const vaultRestored = (await getAccount(provider.connection, beefVault)).amount;
-    assert.equal(vaultRestored.toString(), vaultAmt.toString(), "vault fully restored to its pre-sweep balance");
+    const vaultAmt = BigInt((await getAccount(provider.connection, beefVault)).amount.toString());
+    const treAmt = BigInt((await getAccount(provider.connection, beefTreasury)).amount.toString());
+    const minted = BigInt(bc.mintedTotal.toString());
+    const claimedOut = minted - vaultAmt - treAmt;
+    assert.isTrue(claimedOut >= 0n, "no phantom supply: minted >= vault + treasury");
+    expect(vaultAmt >= BigInt(bc.totalOwed.toString())).to.equal(true);
   });
 });

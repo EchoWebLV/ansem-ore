@@ -4,7 +4,7 @@ import { RoundState, ANSEM_DECIMALS, type WireSnapshot } from "@ansem/sdk";
 
 /**
  * The design prototype's settle-reveal (docs/design/bull-board.html playReveal),
- * driven by real round data. When a round settles, cells unveil in shuffled order
+ * driven by real round data. Once swap accounting makes a round Claimable, cells unveil in shuffled order
  * with the prototype's pacing; the counter climbs with the cumulative revealed
  * stake; the finale flashes the REAL VRF jackpot square gold. Honest theater —
  * outcomes are fixed on-chain before the first frame.
@@ -62,7 +62,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   const [, forceRender] = useState(0);
   // The id of the round whose ENDING has been handled (settle theater, sweep, or refund).
   const playedRound = useRef<number>(0);
-  // The last REAL settle's snapshot (carries blockSol/jackpotSquare/jackpotPool),
+  // The last finalized Claimable snapshot (carries blockSol/jackpotSquare/jackpotPool),
   // kept so the show can be re-watched anytime. Sweeps are not stored — replay
   // is for actual jackpot reveals only.
   const lastFinished = useRef<WireSnapshot | null>(null);
@@ -96,7 +96,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
     sweeping.current = false;
     const g = gen.current;
     // Replays of past rounds hand their OWN snapshot to the board; natural
-    // settles clear any lingering ghost from an interrupted replay.
+    // Natural finalized reveals clear any lingering ghost from an interrupted replay.
     setSnapshotOverride(override);
     setMode("settle");
     setRevealed([]);
@@ -111,16 +111,29 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
         cum += BigInt(snap.blockSol[id] ?? "0");
         setRevealed((r) => [...(r ?? []), id]);
         setCounter((Number(cum) / 1e9).toFixed(2));
-        setSub({ text: `bull #${id + 1} mined · ${k + 1} of ${n} revealed`, gold: false });
+        // Label the climbing number as the POT being scanned, not the player's take —
+        // the only money-won language allowed is the actual-winner finale below.
+        setSub({ text: `bull #${id + 1} mined · ${k + 1} of ${n} · pot ${(Number(cum) / 1e9).toFixed(2)} SOL`, gold: false });
       }, STEP_BASE + k * STEP_MS + extra));
     });
     timers.current.push(setTimeout(() => {
       if (gen.current !== g) return;
       setJackpotShown(true);
       if (snap.jackpotSquare !== null) {
-        // jackpotPool is ANSEM base units (never lamports) — divide by the SDK's ANSEM_DECIMALS.
-        setCounter((Number(BigInt(snap.jackpotPool || "0")) / 10 ** ANSEM_DECIMALS).toFixed(2));
-        setSub({ text: `★ JACKPOT — bull #${snap.jackpotSquare + 1} struck the big pot`, gold: true });
+        // jackpotPool > 0 ⟺ someone was on the drawn square and gets paid; == 0 ⟺ no
+        // winner, the pot rolled into config.rolloverJackpot. Only a real winner earns gold —
+        // honest theater never fabricates a win.
+        const pool = BigInt(snap.jackpotPool || "0");
+        if (pool > 0n) {
+          // jackpotPool is ANSEM base units (never lamports) — divide by the SDK's ANSEM_DECIMALS.
+          setCounter((Number(pool) / 10 ** ANSEM_DECIMALS).toFixed(2));
+          setSub({ text: `★ JACKPOT — bull #${snap.jackpotSquare + 1} struck the big pot`, gold: true });
+        } else {
+          // Settled, but nobody staked the drawn square — no gold. The counter holds the
+          // growing jackpot the same way the sweep does (the rolloverJackpot fallback).
+          setCounter((Number(BigInt(snap.rolloverJackpot || "0")) / 10 ** ANSEM_DECIMALS).toFixed(2));
+          setSub({ text: `nobody was on bull #${snap.jackpotSquare + 1} — pot rolls into the jackpot`, gold: false });
+        }
       }
     }, STEP_BASE + n * STEP_MS + FINALE_MS));
     if (selfDismiss) {
@@ -177,7 +190,7 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
   useEffect(() => {
     if (!snapshot) return;
     const prev = lastSnap.current;
-    if (snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed) {
+    if (snapshot.state === RoundState.Claimable) {
       if (playedRound.current !== snapshot.roundId) {
         playedRound.current = snapshot.roundId;
         play(snapshot);
@@ -227,8 +240,13 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
       const raw = window.localStorage?.getItem(LAST_REVEAL_KEY);
       if (!raw) return;
       const stored = JSON.parse(raw) as WireSnapshot;
-      // Minimal shape check: a replayable show needs a full board and a real draw.
-      if (Array.isArray(stored?.blockSol) && stored.blockSol.length === 25 && stored.jackpotSquare != null) {
+      // A replayable show needs finalized accounting, a full board, and a real draw.
+      if (
+        stored?.state === RoundState.Claimable &&
+        Array.isArray(stored.blockSol) &&
+        stored.blockSol.length === 25 &&
+        stored.jackpotSquare != null
+      ) {
         lastFinished.current = stored;
         forceRender((x) => x + 1);
       }
@@ -241,10 +259,10 @@ export function useReveal(snapshot: WireSnapshot | null): RevealView {
     revealed, jackpotShown, counter, sub, mode, snapshotOverride,
     canReplay:
       lastFinished.current !== null ||
-      (snapshot !== null && snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed),
+      (snapshot !== null && snapshot.state === RoundState.Claimable),
     replay: () => {
-      if (snapshot && snapshot.state >= RoundState.Settled && snapshot.state !== RoundState.Closed) {
-        // The settled round is still on screen — replay it in place (persists
+      if (snapshot?.state === RoundState.Claimable) {
+        // The finalized round is still on screen — replay it in place (persists
         // until the next round opens, exactly the old behavior).
         play(snapshot);
         return;

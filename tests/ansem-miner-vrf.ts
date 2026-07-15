@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { Connection, PublicKey, Keypair } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { GetCommitmentSignature } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { spawn, ChildProcess } from "child_process";
 import { assert } from "chai";
@@ -120,18 +120,23 @@ const [treasury] = PublicKey.findProgramAddressSync([enc("treasury")], program.p
 const payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true);
 const playerAta = getAssociatedTokenAddressSync(ansemMint, player.publicKey);
 
+// tokenProgram is no longer auto-resolvable (Interface token layer, commit 1ab3f46).
 const swapAccounts = () => ({
   payer: admin.publicKey, round: roundPda, ansemMint, mintAuthority: mintAuth,
-  vaultAuthority: vaultAuth, payoutVault, potVault: potVaultPda, treasury,
+  vaultAuthority: vaultAuth, payoutVault, potVault: potVaultPda, treasury, tokenProgram: TOKEN_PROGRAM_ID,
 });
 const claimAccounts = () => ({
   authority: player.publicKey, round: roundPda, ansemMint, vaultAuthority: vaultAuth,
-  payoutVault, playerAta,
+  payoutVault, playerAta, tokenProgram: TOKEN_PROGRAM_ID,
 });
 
 describe("ansem-miner (M2b VRF)", () => {
   before("L1 prelude: initialize, fund player, create round 1, init miner", async () => {
-    await program.methods.initialize().accounts({ admin: admin.publicKey }).rpc();
+    await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
+    // Fixture (BEEF/jackpot upgrade): execute_swap_mock now reads the JackpotConfig
+    // PDA (spec D6). Seed it once so the swap resolves it — defaults (1-in-25/100x)
+    // run at rollover 0 in this suite, so the bite is 0 and payouts are unchanged.
+    await program.methods.initJackpotConfig().accounts({ admin: admin.publicKey }).rpc();
     await program.methods.setRoundDuration(new anchor.BN(20))
       .accounts({ admin: admin.publicKey }).rpc();
     // Lottery model: flat 50% return band so the sole staker always gets > 0.

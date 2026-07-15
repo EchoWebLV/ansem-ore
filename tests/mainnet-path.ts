@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnsemMiner } from "../target/types/ansem_miner";
 import { PublicKey, Keypair } from "@solana/web3.js";
-import { assert } from "chai";
+import { assert, expect } from "chai";
 import {
   createMint,
   mintTo,
@@ -122,7 +122,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
   // Negative FIRST: while Config does not yet exist, a non-upgrade-authority signer
   // must be rejected. (Running this before the successful init proves the failure is
   // the upgrade-authority constraint, not an "already in use" Config collision.)
-  it("rejects init by a non-upgrade-authority signer (Unauthorized)", async () => {
+  it("rent reserve fixture: rejects init by a non-upgrade-authority signer (Unauthorized)", async () => {
     try {
       await (program.methods as any)
         .initializeReal(keeperAdmin.publicKey)
@@ -135,7 +135,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     }
   });
 
-  it("initialize_real: external mint, JUPITER mode, admin = keeper_admin (not the signer)", async () => {
+  it("rent reserve fixture: initialize_real: external mint, JUPITER mode, admin = keeper_admin (not the signer)", async () => {
     await (program.methods as any)
       .initializeReal(keeperAdmin.publicKey)
       .accountsPartial(initRealAccounts(deployer.publicKey))
@@ -160,9 +160,20 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(cfg.rolloverJackpot.toString(), "0");
     assert.equal(cfg.minSwapRate.toString(), "0");
     assert.isTrue(cfg.currentRoundFinalized);
+
+    // Fixture (BEEF/jackpot upgrade): execute_swap_real now reads the JackpotConfig
+    // PDA (spec D6) — seed it once here, gated by the real-mode admin (keeper_admin).
+    // Defaults (1-in-25 / 100x) are transparent to this suite's assertions: every
+    // real-swap round below starts from rollover 0, so the bite is 0 and the
+    // "rollover consumed by the winner" identity is unchanged.
+    await (program.methods as any)
+      .initJackpotConfig()
+      .accounts({ admin: keeperAdmin.publicKey })
+      .signers([keeperAdmin])
+      .rpc();
   });
 
-  it("admin-gated ix signed by the DEPLOY wallet now FAILS Unauthorized", async () => {
+  it("rent reserve fixture: admin-gated ix signed by the DEPLOY wallet now FAILS Unauthorized", async () => {
     try {
       await program.methods
         .setRoundDuration(new anchor.BN(42))
@@ -174,7 +185,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     }
   });
 
-  it("the SAME admin-gated ix signed by keeper_admin SUCCEEDS", async () => {
+  it("rent reserve fixture: the SAME admin-gated ix signed by keeper_admin SUCCEEDS", async () => {
     await program.methods
       .setRoundDuration(new anchor.BN(42))
       .accounts({ admin: keeperAdmin.publicKey })
@@ -257,7 +268,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     }
   };
 
-  it("real round: fund keeper inventory, two wallets stake, settle to a known jackpot", async () => {
+  it("rent reserve fixture: real round: fund keeper inventory, two wallets stake, settle to a known jackpot", async () => {
     payoutVault = getAssociatedTokenAddressSync(ansemMint, vaultAuth, true, TOKEN_2022_PROGRAM_ID);
     await airdrop(winner.publicKey, 3);
     await airdrop(loser.publicKey, 3);
@@ -341,7 +352,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(r1.jackpotSquare, jsq, "jackpot square == our forced keccak draw");
   });
 
-  it("execute_swap_real rejects a non-admin payer (Unauthorized)", async () => {
+  it("rent reserve fixture: execute_swap_real rejects a non-admin payer (Unauthorized)", async () => {
     // stranger is neither the deploy wallet nor config.admin: the payer==admin
     // constraint on `config` fails before any funds move (round stays SETTLED).
     try {
@@ -358,7 +369,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(r.state, 2, "round still SETTLED after the failed swap");
   });
 
-  it("execute_swap_real enforces the min_swap_rate floor (SwapRateTooLow)", async () => {
+  it("rent reserve fixture: execute_swap_real enforces the min_swap_rate floor (SwapRateTooLow)", async () => {
     // Set an absurd floor: ansem_out >= net * rate / LAMPORTS_PER_SOL is unmeetable.
     await (program.methods as any)
       .setMinSwapRate(new anchor.BN("1000000000000"))
@@ -385,7 +396,7 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(r.state, 2, "round still SETTLED (rate-floor reverted the tx)");
   });
 
-  it("execute_swap_real fails when the source ATA holds less than ansem_out (SPL transfer)", async () => {
+  it("rent reserve fixture: execute_swap_real fails when the source ATA holds less than ansem_out (SPL transfer)", async () => {
     // Ask to pay out MORE than the keeper minted -> the in-ix SPL transfer fails and
     // the whole tx reverts (the pot->treasury leg that ran first is rolled back too).
     const tooMuch = new anchor.BN((KEEPER_INVENTORY + 1).toString());
@@ -404,18 +415,30 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
     assert.equal(r.state, 2, "round still SETTLED (SPL transfer failure reverted)");
   });
 
-  it("execute_swap_real: pot -> treasury, ansem_out pulled FROM the keeper ATA (no mint), state CLAIMABLE", async () => {
+  it("rent reserve: execute_swap_real keeps the pot vault alive while moving the exact pot", async () => {
     const cfg0: any = await program.account.config.fetch(configPda);
     const r0: any = await program.account.round.fetch(roundPda);
     const pot = BigInt(r0.pot.toString());
 
-    const potVaultBefore = BigInt(await provider.connection.getBalance(potVault));
-    const treasuryBefore = BigInt(await provider.connection.getBalance(treasury));
+    const potVaultBefore = await provider.connection.getBalance(potVault);
+    const treasuryBefore = await provider.connection.getBalance(treasury);
     const sourceBefore = await balOf(keeperAta);
     const payoutBefore = await balOf(payoutVault);
     const supplyBefore = (await getMint(provider.connection, ansemMint!, undefined, TOKEN_2022_PROGRAM_ID)).supply;
     assert.equal(cfg0.ansemObligations.toString(), "0", "no obligations before the first swap");
     assert.equal(cfg0.rolloverJackpot.toString(), "0", "no rollover before the first swap");
+    assert.equal(potVaultBefore, Number(pot), "the pot vault has no residual balance");
+
+    await provider.sendAndConfirm(
+      new anchor.web3.Transaction().add(
+        anchor.web3.SystemProgram.transfer({
+          fromPubkey: deployer.publicKey,
+          toPubkey: potVault,
+          lamports: 1_000,
+        })
+      )
+    );
+    expect(await provider.connection.getBalance(potVault)).to.equal(Number(pot) + 1_000);
 
     await (program.methods as any)
       .executeSwapReal(ANSEM_OUT)
@@ -423,11 +446,13 @@ describe("mainnet-path: initialize_real (upgrade-authority gated, external ANSEM
       .signers([keeperAdmin])
       .rpc();
 
-    // SOL pot moved out of pot_vault into treasury, exactly `pot`.
-    const potVaultAfter = BigInt(await provider.connection.getBalance(potVault));
-    const treasuryAfter = BigInt(await provider.connection.getBalance(treasury));
-    assert.equal((potVaultBefore - potVaultAfter).toString(), pot.toString(), "pot left pot_vault");
-    assert.equal((treasuryAfter - treasuryBefore).toString(), pot.toString(), "pot landed in treasury");
+    // SOL pot moved out exactly, while the pot_vault remains rent-exempt.
+    const postSwapPotVaultLamports = await provider.connection.getBalance(potVault);
+    const postSwapTreasuryLamports = await provider.connection.getBalance(treasury);
+    expect(postSwapPotVaultLamports).to.be.gte(
+      await provider.connection.getMinimumBalanceForRentExemption(0)
+    );
+    expect(postSwapTreasuryLamports - treasuryBefore).to.equal(Number(pot));
 
     // ANSEM proceeds came FROM the keeper ATA (no minting): source -ansem_out,
     // payout +ansem_out, and the mint's total supply is UNCHANGED.

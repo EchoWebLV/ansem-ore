@@ -6,12 +6,15 @@ const config: Config = {
     extend: {
       colors: {
         bull: {
-          green: "#35e07a",
-          gold: "#e8c452",
-          bg: "#0b0b0e",
-          dim: "#2c4034",
-          muted: "#8a8a93",
-          edge: "#23232a",
+          green: "#a8f080",
+          gold: "#d6b75f",
+          bg: "#0a0b0a",
+          surface: "#111310",
+          raised: "#161916",
+          dim: "#344035",
+          muted: "#92978f",
+          edge: "#292d28",
+          ink: "#f2f1e9",
         },
       },
       fontFamily: {

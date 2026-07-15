@@ -33,7 +33,7 @@ import {
 import { readFileSync } from "node:fs";
 import { vaultAuthPda } from "@ansem/sdk";
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
-import { keypairIdentity, percentAmount } from "@metaplex-foundation/umi";
+import { createSignerFromKeypair, keypairIdentity, percentAmount } from "@metaplex-foundation/umi";
 import { fromWeb3JsKeypair, fromWeb3JsPublicKey, toWeb3JsPublicKey } from "@metaplex-foundation/umi-web3js-adapters";
 import { createV1, findMetadataPda, mplTokenMetadata, TokenStandard } from "@metaplex-foundation/mpl-token-metadata";
 
@@ -45,6 +45,11 @@ const req = (k) => {
 const kpOf = (p) => Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(p, "utf8"))));
 const arg = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
 const DRY_RUN = process.argv.includes("--dry-run");
+// Local validators (solana-test-validator) have no Metaplex Token Metadata program, so the
+// createV1 step below would fail there. --skip-metadata forces the skip; otherwise we probe
+// for the program account and auto-skip when it is absent (e.g. a bare local validator).
+const SKIP_METADATA = process.argv.includes("--skip-metadata");
+const MPL_TOKEN_METADATA_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
 const RPC = process.env.RPC_URL || process.env.RPC || "https://api.mainnet-beta.solana.com";
 const payer = kpOf(req("PAYER_WALLET"));
@@ -91,23 +96,37 @@ if (DRY_RUN) {
   process.exit(0);
 }
 
-// (a) Mint: 6 decimals, freeze authority null FROM CREATION, payer = temp mint authority.
-await createMint(conn, payer, payer.publicKey, null, DECIMALS, mintKp);
-console.log("(a) mint created:", mintKp.publicKey.toBase58(), "(freeze authority: NULL, temp mint authority:", payer.publicKey.toBase58() + ")");
-
-// (b) Metadata while the payer still signs as mint authority (see ORDERING NOTE).
-await createV1(umi, {
-  mint: fromWeb3JsPublicKey(mintKp.publicKey),
-  authority: umi.identity, // mint authority signer = payer
-  name: BEEF_NAME,
-  symbol: BEEF_SYMBOL,
-  uri: BEEF_META_URI,
-  sellerFeeBasisPoints: percentAmount(0),
-  decimals: DECIMALS,
-  tokenStandard: TokenStandard.Fungible,
-  isMutable: true, // update authority (payer) can fix logo/URI later; supply stays PDA-gated
-}).sendAndConfirm(umi);
-console.log("(b) metadata created:", toWeb3JsPublicKey(metadataPda).toBase58());
+// (a)+(b) Mint AND metadata in ONE atomic Metaplex createV1 tx — the canonical fungible
+// flow: the mint keypair signs, Metaplex initializes the mint (6 decimals) and writes the
+// metadata together. No existence race between separate create-mint and metadata txs
+// (the split flow failed live 2026-07-14: Metaplex error 0x86 "Mint needs to be signer").
+// Fallback (local validators without Metaplex): the old plain createMint, no metadata.
+if (SKIP_METADATA || !(await conn.getAccountInfo(MPL_TOKEN_METADATA_ID))) {
+  await createMint(conn, payer, payer.publicKey, null, DECIMALS, mintKp);
+  console.warn("(a) mint created (metadata SKIPPED — no Metaplex on this cluster):", mintKp.publicKey.toBase58());
+} else {
+  await createV1(umi, {
+    mint: createSignerFromKeypair(umi, fromWeb3JsKeypair(mintKp)), // mint signs; createV1 initializes it
+    authority: umi.identity, // mint authority = payer (temp, handed to PDA in (d))
+    name: BEEF_NAME,
+    symbol: BEEF_SYMBOL,
+    uri: BEEF_META_URI,
+    sellerFeeBasisPoints: percentAmount(0),
+    decimals: DECIMALS,
+    tokenStandard: TokenStandard.Fungible,
+    isMutable: true, // update authority (payer) can fix logo/URI later; supply stays PDA-gated
+  }).sendAndConfirm(umi);
+  console.log("(a+b) mint + metadata created atomically:", mintKp.publicKey.toBase58(), "metadata:", toWeb3JsPublicKey(metadataPda).toBase58());
+}
+// createV1 may set a freeze authority (payer) on the mint it initializes — D1 requires NONE.
+// Null it here if present, BEFORE the mint-authority handoff makes changes impossible.
+{
+  const m = await getMint(conn, mintKp.publicKey);
+  if (m.freezeAuthority) {
+    await setAuthority(conn, payer, mintKp.publicKey, payer, AuthorityType.FreezeAccount, null);
+    console.log("(b2) freeze authority nulled (createV1 had set it to the payer)");
+  }
+}
 
 // (c) Vault token account (owner = vault_authority PDA) + treasury ATA.
 const vault = await createAccount(conn, payer, mintKp.publicKey, vaultAuthority, vaultKp);

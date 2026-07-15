@@ -49,6 +49,11 @@ describe("ansem-miner", () => {
 
   it("initializes config and mock mint", async () => {
     await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
+    // Fixture (BEEF/jackpot upgrade): execute_swap_* now reads the JackpotConfig
+    // PDA (spec D6). Seed it once so swaps resolve it. Defaults (1-in-25 / 100x)
+    // are transparent here — every jackpot assertion in this suite runs with the
+    // rollover held at 0, so the bite is 0 and behavior is byte-identical.
+    await program.methods.initJackpotConfig().accounts({ admin: admin.publicKey }).rpc();
     const cfg = await program.account.config.fetch(configPda);
     assert.equal(cfg.admin.toBase58(), admin.publicKey.toBase58());
     assert.equal(cfg.ansemMint.toBase58(), ansemMint.toBase58());
@@ -591,6 +596,13 @@ describe("ansem-miner", () => {
   });
 
   it("§lottery: an unstaked jackpot square rolls its pool into the next round", async () => {
+    // Fixture (BEEF/jackpot upgrade): this test asserts the LEGACY full-drain
+    // contract (winner consumes the whole carried rollover). Under the new
+    // defaults (1-in-25 trigger + 100x cap) the drain is randomness-gated, so
+    // pin legacy params (odds<=1 = always fire, cap 0 = uncapped) for this flow
+    // and restore the defaults at the end. Assertions unchanged.
+    await (program.methods as any).setJackpotParams(1, 0).accounts({ admin: admin.publicKey }).rpc();
+
     // Round A: nobody stakes the jackpot square => the whole leftover rolls over.
     const cfg0 = await program.account.config.fetch(configPda);
     assert.equal(cfg0.rolloverJackpot.toNumber(), 0, "precondition: rollover starts empty");
@@ -637,6 +649,10 @@ describe("ansem-miner", () => {
     const pbAta = getAssociatedTokenAddressSync(ansemMint, pB.publicKey);
     await program.methods.claim(new anchor.BN(roundB.id)).accounts(claimAccounts(roundB.pda, pB.publicKey, pbAta)).signers([pB]).rpc();
     assert.equal(Number((await getAccount(provider.connection, pbAta)).amount), rB.swapProceeds.toNumber() + carried, "winner collects proceeds + rollover");
+
+    // Restore the launch defaults (1-in-25 trigger, 100x cap) for any later flow.
+    // Rollover is 0 here, so the gate is transparent to everything that follows.
+    await (program.methods as any).setJackpotParams(25, 100).accounts({ admin: admin.publicKey }).rpc();
   });
 
   // Task 13: final end-to-end happy-path sweep for a completely fresh player,

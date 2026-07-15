@@ -3,12 +3,13 @@ import { useEffect, useState } from "react";
 import type { Program } from "@coral-xyz/anchor";
 import { useConnection } from "@solana/wallet-adapter-react";
 import {
-  claimDirectIx, refundDirectIx, roundPda, fetchRound, fetchConfig, configPda,
+  refundDirectIx, roundPda, beefRoundPda, fetchRound, fetchConfig, configPda,
   RoundState, type AnsemMiner, type BN,
 } from "@ansem/sdk";
 import { PublicKey } from "@solana/web3.js";
 import { usePlayerState } from "../hooks/use-player-state.js";
-import { directStake, type WalletAdapter } from "../lib/writes.js";
+import { directStake, claimRound, type WalletAdapter } from "../lib/writes.js";
+import { accountExists } from "../lib/beef.js";
 import { CLUSTER } from "../lib/explorer.js";
 import { lamportsToSolStr } from "../lib/amount.js";
 import type { AppSnapshot } from "../lib/keeper-client.js";
@@ -21,18 +22,27 @@ export interface PlayControlsProps {
   wallet: WalletAdapter;
   snapshot: AppSnapshot;
   selectedSquares: number[];
+  onRemoveSquare?: (square: number) => void;
   onStaked?: () => void;
   /** Fired with an explorer-linkable artifact after every landed action. */
   onReceipt?: (r: ReceiptInput) => void;
+  /**
+   * BEEF is live on-chain (BeefConfig exists). Same gate the BeefChip uses. When false
+   * (today's mainnet, or wallet disconnected), claim/stake bundles are EXACTLY the
+   * pre-BEEF single transactions — zero behavior change. When true, a defensive
+   * `rollBeef` is prepended so a played round's BEEF share is captured before the
+   * ANSEM claim/stake zeroes the stake it is computed from.
+   */
+  beefLive?: boolean;
 }
 
 // Direct-stake engine (ORE model): pick squares -> ONE approval moves the SOL
 // wallet->pot in that tx. No escrow, no session key, no round entry. Winnings
 // are pull-claimed per round (claim_direct); cancelled rounds refund exactly.
-export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, onReceipt }: PlayControlsProps) {
+export function PlayControls({ l1, wallet, snapshot, selectedSquares, onRemoveSquare, onStaked, onReceipt, beefLive }: PlayControlsProps) {
   const { connection } = useConnection();
   const owner = wallet.publicKey;
-  const { miner, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
+  const { miner, config, loaded, refresh } = usePlayerState({ program: l1, wallet: owner });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -73,7 +83,14 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
     if (walletLamports !== null && total + FEE_HEADROOM > walletLamports) {
       throw new Error(`that's ${lamportsToSolStr(total)} SOL + fees — more than your wallet holds`);
     }
-    const sig = await directStake({ l1, owner, roundId, squares, amountPerSquare });
+    // Staking a NEW round re-stamps (zeroes) the miner — roll the prior stamped round's
+    // BEEF share FIRST so it survives. Only when BEEF is live AND that round is stamped;
+    // otherwise the bundle is exactly the pre-BEEF [stakeDirect…] (BEEF never blocks a stake).
+    const rollBeefRound =
+      beefLive && stakedRound > 0 && stakedRound !== roundId && (await accountExists(connection, beefRoundPda(stakedRound)))
+        ? stakedRound
+        : null;
+    const sig = await directStake({ l1, owner, roundId, squares, amountPerSquare, rollBeefRound });
     onReceipt?.({ label: `stake ×${squares.length} · one approval`, sig });
     onStaked?.();
   });
@@ -87,7 +104,10 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
     const ansemMint = new PublicKey(cfg.ansemMint);
     const mintInfo = await connection.getAccountInfo(ansemMint);
     if (!mintInfo) throw new Error("could not resolve the ANSEM mint on-chain");
-    const sig = await claimDirectIx(l1, owner, rid, ansemMint, mintInfo.owner).rpc();
+    // Roll this round's BEEF share FIRST (claim_direct zeroes the stake it's derived from),
+    // but only when BEEF is live AND the round is stamped — else exactly the pre-BEEF claim.
+    const rollBeef = !!beefLive && (await accountExists(connection, beefRoundPda(rid)));
+    const sig = await claimRound({ l1, owner, roundId: rid, ansemMint, ansemTokenProgramId: mintInfo.owner, rollBeef });
     onReceipt?.({ label: `claim round ${rid}`, sig });
   });
   const doRefund = (rid: number) => run(async () => {
@@ -101,16 +121,90 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
   const offerable = stakedRound > 0 && unresolvedLamports > 0n;
   const [stakedRoundState, setStakedRoundState] = useState<RoundState | null>(null);
   const [stakedRoundDeadline, setStakedRoundDeadline] = useState<number | null>(null);
+  // The round's on-chain draw, captured so the panel can label WON vs NO-WIN honestly.
+  const [stakedJackpotSquare, setStakedJackpotSquare] = useState<number | null>(null);
+  const [stakedJackpotPool, setStakedJackpotPool] = useState<bigint | null>(null);
+  // Whether this offerable round's BeefRound exists on-chain — the exact condition
+  // doClaim uses to decide whether it prepends rollBeef. Lets the panel honestly note
+  // that claiming banks the round's BEEF share (never before BEEF is live, never on a
+  // failed probe: accountExists degrades read failures to false).
+  const [beefRoundStamped, setBeefRoundStamped] = useState(false);
   useEffect(() => {
-    if (!offerable) { setStakedRoundState(null); setStakedRoundDeadline(null); return; }
+    if (!offerable) {
+      setStakedRoundState(null); setStakedRoundDeadline(null);
+      setStakedJackpotSquare(null); setStakedJackpotPool(null);
+      return;
+    }
     let live = true;
     const poll = () => fetchRound(l1, roundPda(stakedRound))
-      .then((r) => { if (live) { setStakedRoundState(r.state); setStakedRoundDeadline(r.deadlineTs); } })
-      .catch(() => { if (live) { setStakedRoundState(null); setStakedRoundDeadline(null); } });
+      .then((r) => { if (live) {
+        setStakedRoundState(r.state); setStakedRoundDeadline(r.deadlineTs);
+        setStakedJackpotSquare(r.jackpotSquare); setStakedJackpotPool(r.jackpotPool);
+      } })
+      .catch(() => { if (live) {
+        setStakedRoundState(null); setStakedRoundDeadline(null);
+        setStakedJackpotSquare(null); setStakedJackpotPool(null);
+      } });
     poll();
     const id = setInterval(poll, 5000);
     return () => { live = false; clearInterval(id); };
   }, [l1, stakedRound, offerable]);
+
+  // Mirror doClaim's bundle decision (`beefLive && accountExists(beefRoundPda(rid))`)
+  // as reactive state so the panel can pre-announce the BEEF bank. Only when BEEF is
+  // live and the round is offerable; a false/failed probe leaves it un-noted.
+  useEffect(() => {
+    if (!beefLive || !offerable) { setBeefRoundStamped(false); return; }
+    let live = true;
+    accountExists(connection, beefRoundPda(stakedRound))
+      .then((exists) => { if (live) setBeefRoundStamped(exists); })
+      .catch(() => { if (live) setBeefRoundStamped(false); });
+    return () => { live = false; };
+  }, [connection, beefLive, offerable, stakedRound]);
+
+  // Did this player actually win the staked round? jackpotPool > 0 ⟺ someone hit the
+  // drawn square and it pays; == 0 ⟺ no winner, the pot rolled into the jackpot. A
+  // nonzero return band (config.multMaxBps > 0) pays every staked square, so any stake
+  // wins. null until the draw + the player's stakes + the config band are all known —
+  // the panel must never flash WON before it can prove it. (multMaxBps is 0 live today.)
+  const won: boolean | null =
+    stakedJackpotPool === null || stakedJackpotSquare === null || !miner || !config
+      ? null
+      : config.multMaxBps > 0
+        ? unresolvedLamports > 0n
+        : stakedJackpotPool > 0n && (miner.blockStake[stakedJackpotSquare] ?? 0n) > 0n;
+
+  // Gate copy mirrors the panel's honesty: a refundable round says "forfeits it"; a
+  // no-win round just needs clearing before restaking; a real win (or unknown) keeps
+  // the neutral claim wording.
+  const gateCopy =
+    stakedRoundState === RoundState.Closed
+      ? `Refund round ${stakedRound} below first. Staking now forfeits it.`
+      : won === false
+        ? `Clear round ${stakedRound} below first to stake again.`
+        : won === true
+          ? `Claim round ${stakedRound} below first. Staking now forfeits it.`
+          : `Resolve round ${stakedRound} below first to stake again.`;
+
+  // The ClaimPanel is an ACTION surface (not just settling status) exactly when it will
+  // render a claim or refund — mirror its internal claimable/refundable test. In that
+  // state it TAKES the bet slip's slot (one action surface at a time); staking is already
+  // hard-gated (stakeBlocked) so the slip is dead weight. An offerable-but-still-settling
+  // round is not pending here, so the slip stays with its "round is settling" hint.
+  const claimActionPending =
+    offerable && (stakedRoundState === RoundState.Claimable || stakedRoundState === RoundState.Closed);
+
+  // Folded-in gate message for when the panel replaces the slip: there's no bet button
+  // to forfeit, so it just states — terse, lowercase — that betting resumes once this
+  // round is resolved. Mirrors the button verb; not shown alongside the amber gateCopy.
+  const gateNote =
+    stakedRoundState === RoundState.Closed
+      ? "refund to bet the next round"
+      : won === false
+        ? "clear to bet the next round"
+        : won === true
+          ? "claim to bet the next round"
+          : "resolve to bet the next round";
 
   // Claim-by deadline (unix secs) = staked round's deadline + the config claim
   // window carried on the snapshot. Undefined until both are known (or if the
@@ -124,38 +218,49 @@ export function PlayControls({ l1, wallet, snapshot, selectedSquares, onStaked, 
   return (
     <div className="flex flex-col gap-3">
       {walletLamports !== null && (
-        <div className="flex justify-end">
-          <span className="font-mono text-[10px] text-bull-muted">wallet {lamportsToSolStr(walletLamports)} SOL</span>
+        <div className="flex items-center justify-between px-1 text-[10px] text-bull-muted">
+          <span>Wallet balance</span>
+          <span className="font-mono">{lamportsToSolStr(walletLamports)} SOL</span>
         </div>
       )}
-      <StakeRail
-        selectedSquares={selectedSquares}
-        enabled={!stakeBlocked}
-        busy={busy}
-        onStake={doStake}
-      />
-      {!loaded ? (
-        <p className="text-[10px] text-bull-muted">checking your prior round…</p>
-      ) : priorUnresolved ? (
-        <p className="text-[10px] text-amber-400">
-          {stakedRoundState === RoundState.Closed ? "Refund" : "Claim"} round {stakedRound} below first — staking now forfeits it.
-        </p>
-      ) : snapshot.state !== RoundState.Open ? (
-        <p className="text-[10px] text-bull-muted">round is settling — staking opens with the next round.</p>
-      ) : null}
-      {offerable && stakedRoundState !== null && (
+      {claimActionPending ? (
+        // Claim/refund/clear pending: the panel occupies the bet-slip slot. The essential
+        // gate message is folded into the panel (gateNote), so no standalone amber hint.
         <ClaimPanel
-          roundId={stakedRound} roundState={stakedRoundState}
+          roundId={stakedRound}
+          roundState={stakedRoundState!}
           lastClaimedRound={0}
           claimByTs={claimByTs}
-          busy={busy} onClaim={doClaim} onRefund={doRefund}
+          won={won}
+          busy={busy}
+          onClaim={doClaim}
+          onRefund={doRefund}
+          gateNote={gateNote}
+          beefBanked={!!beefLive && beefRoundStamped}
         />
+      ) : (
+        <>
+          <StakeRail
+            selectedSquares={selectedSquares}
+            enabled={!stakeBlocked}
+            busy={busy}
+            onStake={doStake}
+            onRemoveSquare={onRemoveSquare}
+            feeReserveSol={lamportsToSolStr(FEE_HEADROOM)}
+          />
+          {!loaded ? (
+            <p className="px-1 text-[10px] text-bull-muted">Checking your prior round…</p>
+          ) : priorUnresolved ? (
+            <p className="px-1 text-[10px] text-amber-400">{gateCopy}</p>
+          ) : snapshot.state !== RoundState.Open ? (
+            <p className="px-1 text-[10px] text-bull-muted">Round is settling. Betting opens with the next round.</p>
+          ) : null}
+        </>
       )}
       {CLUSTER !== "mainnet-beta" && (
-        <a href="https://faucet.solana.com" target="_blank" rel="noreferrer"
-          className="text-[10px] text-bull-muted underline self-end">get devnet SOL</a>
+        <a href="https://faucet.solana.com" target="_blank" rel="noreferrer" className="self-end text-[10px] text-bull-muted underline">Get devnet SOL</a>
       )}
-      {err && <p className="text-red-400 text-xs break-words">{err}</p>}
+      {err && <p role="alert" className="break-words px-1 text-xs text-red-400">{err}</p>}
     </div>
   );
 }

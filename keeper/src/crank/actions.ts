@@ -3,12 +3,13 @@ import { Program } from "@coral-xyz/anchor";
 import {
   AnsemMiner, BN, roundPda, minerPda, escrowPda, ataForMint,
   createRoundIx, delegateRoundIx, requestSettleIx, commitRoundIx, commitMinerIx,
-  reconcileMinerIx, executeSwapMockIx, executeSwapRealIx, cancelRoundIx, setRoundDurationIx, stampBeefIx,
+  reconcileMinerIx, executeSwapMockIx, executeSwapRealIx, cancelRoundIx, setRoundDurationIx,
   erRpcTolerant, retryPastDeadline, l1Send, awaitOwnerIs, flushCommit, fetchMiner,
   DLP_PROGRAM_ID, PROGRAM_ID, TOKEN_PROGRAM_ID,
   type ConfigState, type RoundStateData,
 } from "@ansem/sdk";
 import type { Logger } from "../logger.js";
+import type { BeefStamper } from "../beef.js";
 import { fetchJoinedWallets } from "../participants.js";
 import { quoteSolToAnsem, FetchLike } from "../jupiter.js";
 
@@ -24,9 +25,10 @@ export interface ActionCtx {
   /** Direct-stake mode: rounds stay on L1 (never delegated) so players can
    *  stake_direct against them; the commit/reconcile stages never fire. */
   directMode?: boolean;
-  /** BEEF emission layer: set at startup if BeefConfig exists on-chain. */
-  beefEnabled?: boolean;
-  beefVault?: PublicKey;
+  /** Minted-BEEF stamp crank (plan Task 6). Created + boot-probed in service.ts; holds the
+   *  pinned mint/vault/treasury cache and pushes each stamp's emission to the snapshot holder.
+   *  Absent -> BEEF stamping is not wired (the game runs untouched). */
+  beefStamper?: BeefStamper;
   // ---- Real-payout swap (plan 2026-07-14, Task 7) ----
   /** "real" routes finalize through Jupiter + execute_swap_real; "mock" mints synthetic ANSEM. */
   swapMode: "mock" | "real";
@@ -148,7 +150,7 @@ export async function finalizeSettled(_roundId: number, deps: FinalizeDeps): Pro
   await deps.executeSwap();
   if (deps.stampBeef) {
     try { await deps.stampBeef(); }
-    catch { /* best-effort: BEEF never blocks the game (invariant) */ }
+    catch { /* best-effort here; Claimable CreateRound retries and blocks advancement */ }
   }
 }
 
@@ -237,20 +239,14 @@ export function liveFinalizeDeps(
     reconcileMiner: (w) =>
       l1Send(() => reconcileMinerIx(ctx.program, roundId, escrowPda(w), minerPda(w)).rpc()),
     executeSwap,
-    // ---- BEEF stamp crank seam (plan Task 6 Step 2 — DEFERRED) ----
-    // This is the mount point for the per-round BEEF emission stamp. It stays wired to the
-    // OLD dormant vault-drip `stampBeefIx` (roundId + beefVault) and is inert on mainnet:
-    // `beefEnabled` is only true once a BeefConfig exists on-chain, which it does NOT today.
-    // TODO(beef-stamp-crank): when the mint-on-emission program upgrade + the Task 5 SDK land,
-    //   (1) switch to the minted-model builder — stampBeefIx gains beefMint/vaultAuthority/
-    //       beefTreasury/tokenProgram accounts (spec D4, plan Task 2/5);
-    //   (2) capture the stamped players' emission and push it to service.ts `lastBeefEmission`
-    //       so snapshot.beefPerRound reads a live value for the app BEEF drip counter.
-    // INVARIANT (unchanged): a throw here must never block finalize — finalizeSettled swallows it.
-    stampBeef: ctx.beefEnabled && ctx.beefVault ? async () => {
-      await l1Send(() => stampBeefIx(ctx.program, ctx.keeper, roundId, ctx.beefVault!).rpc());
-      ctx.log.info("beef emission stamped", { roundId });
-    } : undefined,
+    // ---- BEEF stamp crank (plan Task 6 Step 2) ----
+    // The just-settled round is now CLAIMABLE + still current (post-swap, pre-advance): the
+    // exact window stamp_beef requires. The stamper sources mint/vault/treasury/tokenProgram
+    // from the on-chain BeefConfig (never env), skips silently while BEEF is uninitialized
+    // (mainnet today), and pushes each stamp's players' emission to service.ts lastBeefEmission
+    // for snapshot.beefPerRound. INVARIANT: a throw here never blocks finalize — finalizeSettled
+    // swallows it. Claimable CreateRound retries and gates advancement. Absent stamper -> unwired.
+    stampBeef: ctx.beefStamper ? () => ctx.beefStamper!.stamp(roundId) : undefined,
   };
 }
 

@@ -52,6 +52,11 @@ export const programDataPda = (programId = PROGRAM_ID) =>
 export const sessionTokenPda = (sessionSigner: PublicKey, authorityWallet: PublicKey, target = PROGRAM_ID) =>
   pda([enc(SEED.sessionTokenV2), target.toBuffer(), sessionSigner.toBuffer(), authorityWallet.toBuffer()], GUM_PROGRAM_ID);
 
+// ---- Jackpot params PDA (spec D6): random-trigger + bet-scaled cap ----
+// Canonical derivation for keeper/app. Seed matches program JACKPOT_CONFIG_SEED
+// ("jackpot_config"); keeper/src/read/jackpot.ts derives it raw pending a swap to this.
+export const jackpotConfigPda = () => pda([enc(SEED.jackpotConfig)]);
+
 // ---- BEEF vault emission layer ----
 export const beefConfigPda = () => pda([enc(SEED.beefConfig)]);
 export const beefMinerPda = (wallet: PublicKey) => pda([enc(SEED.beefMiner), wallet.toBuffer()]);

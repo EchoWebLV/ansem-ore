@@ -2,7 +2,8 @@
 import { Connection, PublicKey, Keypair, Transaction, TransactionInstruction } from "@solana/web3.js";
 import type { Program, Wallet } from "@coral-xyz/anchor";
 import {
-  buildEntryInstructions, stakeIx, stakeDirectIx, escrowPda, minerPda, fetchEscrow, fetchMiner,
+  buildEntryInstructions, stakeIx, stakeDirectIx, claimDirectIx, rollBeefIx, claimBeefIx,
+  escrowPda, minerPda, fetchEscrow, fetchMiner,
   awaitEr, awaitOwnerIs, erRpcTolerant, sleep, DLP_PROGRAM_ID, BN, type AnsemMiner, type EscrowState,
 } from "@ansem/sdk";
 
@@ -35,19 +36,85 @@ export interface DirectStakeArgs {
   roundId: number;
   squares: number[];
   amountPerSquare: BN;
+  /**
+   * BEEF ordering hook. When set (>0), prepend `rollBeef(rollBeefRound)` as the FIRST
+   * instruction so the miner's prior-round BEEF share is captured BEFORE `stakeDirect`
+   * re-stamps (zeroes) the miner and forfeits it (SDK player.ts ordering invariant).
+   * Null/absent => exactly the pre-BEEF `[stakeDirect…]` bundle (zero behavior change).
+   * The caller only sets it once that round's BeefRound provably exists, or the roll ix
+   * would abort the whole stake tx (BEEF must never block the game).
+   */
+  rollBeefRound?: number | null;
   /** Injectable sender (tests). Defaults to the provider's sendAndConfirm (the single popup). */
   send?: (tx: Transaction) => Promise<string>;
 }
 
+const providerSend = (l1: Program<AnsemMiner>) => (tx: Transaction) =>
+  (l1.provider as unknown as { sendAndConfirm: (tx: Transaction) => Promise<string> }).sendAndConfirm(tx);
+
 export async function directStake(a: DirectStakeArgs): Promise<string> {
   if (a.squares.length === 0) throw new Error("pick at least one square");
   const ixs: TransactionInstruction[] = [];
+  if (a.rollBeefRound != null && a.rollBeefRound > 0) {
+    ixs.push(await rollBeefIx(a.l1, a.owner, a.rollBeefRound).instruction());
+  }
   for (const sq of a.squares) {
     ixs.push(await stakeDirectIx(a.l1, a.owner, a.roundId, sq, a.amountPerSquare).instruction());
   }
   const tx = new Transaction().add(...ixs);
-  const send = a.send ?? ((t: Transaction) =>
-    (a.l1.provider as unknown as { sendAndConfirm: (tx: Transaction) => Promise<string> }).sendAndConfirm(t));
+  const send = a.send ?? providerSend(a.l1);
+  return await send(tx);
+}
+
+// ---- BEEF-aware harvest bundles (spec 2026-07-14 D4; SDK player.ts ordering block).
+// rollBeef ALWAYS goes first: claimDirect zeroes block_stake, so an un-rolled share is
+// forfeited if the roll lands after it. Both composers degrade to the exact pre-BEEF
+// single-ix transaction when BEEF isn't live, so nothing changes before launch.
+
+export interface ClaimRoundArgs {
+  l1: Program<AnsemMiner>;
+  owner: PublicKey;
+  roundId: number;
+  ansemMint: PublicKey;
+  ansemTokenProgramId: PublicKey;
+  /** True => `[rollBeef(roundId), claimDirect(roundId)]`; false/absent => `[claimDirect(roundId)]`. */
+  rollBeef?: boolean;
+  send?: (tx: Transaction) => Promise<string>;
+}
+
+/** Claim a round's ANSEM, optionally rolling that round's BEEF share first (one tx, one popup). */
+export async function claimRound(a: ClaimRoundArgs): Promise<string> {
+  const ixs: TransactionInstruction[] = [];
+  if (a.rollBeef) ixs.push(await rollBeefIx(a.l1, a.owner, a.roundId).instruction());
+  ixs.push(await claimDirectIx(a.l1, a.owner, a.roundId, a.ansemMint, a.ansemTokenProgramId).instruction());
+  const tx = new Transaction().add(...ixs);
+  const send = a.send ?? providerSend(a.l1);
+  return await send(tx);
+}
+
+export interface ClaimBeefArgs {
+  l1: Program<AnsemMiner>;
+  owner: PublicKey;
+  beefMint: PublicKey;
+  beefVault: PublicKey;
+  tokenProgramId: PublicKey;
+  /**
+   * The miner's stamped round to roll in FIRST (`[rollBeef(rollRound), claimBeef]`).
+   * Null/0/absent => `[claimBeef]` alone. Only set when that BeefRound provably exists;
+   * otherwise the roll ix aborts the cash-out (rollBeef is a handler-level no-op on an
+   * already-rolled / moved-on position, but a MISSING BeefRound account fails resolution).
+   */
+  rollRound?: number | null;
+  send?: (tx: Transaction) => Promise<string>;
+}
+
+/** Cash out accrued BEEF from the emission vault, rolling the current staked round first. */
+export async function claimBeef(a: ClaimBeefArgs): Promise<string> {
+  const ixs: TransactionInstruction[] = [];
+  if (a.rollRound != null && a.rollRound > 0) ixs.push(await rollBeefIx(a.l1, a.owner, a.rollRound).instruction());
+  ixs.push(await claimBeefIx(a.l1, a.owner, a.beefMint, a.beefVault, a.tokenProgramId).instruction());
+  const tx = new Transaction().add(...ixs);
+  const send = a.send ?? providerSend(a.l1);
   return await send(tx);
 }
 

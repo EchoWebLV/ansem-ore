@@ -115,6 +115,11 @@ async function ensureInitialized() {
   // Flat 50% return band so a sole ER staker always mines > 0 ANSEM regardless of
   // which square is the VRF-picked jackpot square.
   await program.methods.setReturnBand(5000, 5000).accounts({ admin: admin.publicKey }).rpc();
+  // Fixture (BEEF/jackpot upgrade): execute_swap_* read the JackpotConfig PDA (spec
+  // D6). Seed it once; tolerate "already in use" — this suite is idempotent on devnet
+  // (Config is closed + reinit each run, but the JackpotConfig PDA persists).
+  await program.methods.initJackpotConfig().accounts({ admin: admin.publicKey }).rpc()
+    .catch((e: any) => { if (!/already in use/.test(String(e))) throw e; });
   // The fresh initialize reset current_round_id to 0, but historical Round PDAs from
   // earlier devnet runs still occupy the low ids and would collide with create_round's
   // strict init. Fast-forward the round cursor to the current slot (>> any id ever

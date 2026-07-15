@@ -5,9 +5,11 @@ import { createProgram } from "../src/program.js";
 import { stakeIx, joinRoundIx, claimIx } from "../src/instructions/player.js";
 import { delegateRoundIx, executeSwapMockIx, initializeRealIx, executeSwapRealIx,
   sweepTreasuryIx, sweepBeefExcessIx, closeRoundIx, setClaimWindowIx, setMinSwapRateIx,
-  setStakeLimitsIx } from "../src/instructions/keeper.js";
+  setStakeLimitsIx, initBeefIx, stampBeefIx, setFeeBpsIx, initJackpotConfigIx,
+  setJackpotParamsIx } from "../src/instructions/keeper.js";
 import { configPda, roundPda, minerPda, escrowPda, payoutVault, treasuryPda, beefConfigPda,
-  payoutVaultForMint, ataForMint, programDataPda } from "../src/pdas.js";
+  beefRoundPda, jackpotConfigPda, vaultAuthPda, payoutVaultForMint, ataForMint,
+  programDataPda } from "../src/pdas.js";
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "../src/constants.js";
 
 const program = () => createProgram(new Connection("http://127.0.0.1:9999"), new Wallet(Keypair.generate()));
@@ -141,5 +143,59 @@ describe("token-program threading (Token-2022 vs classic)", () => {
     const destAta = Keypair.generate().publicKey;
     const ix = await sweepBeefExcessIx(program(), admin, new BN(10), beefMint, beefVault, destAta, TOKEN_2022_PROGRAM_ID).instruction();
     expect(has(ix, TOKEN_2022_PROGRAM_ID)).toBe(true);
+  });
+});
+
+// BEEF is now the program's own minted SPL token: init_beef pins mint/vault/treasury,
+// stamp_beef MINTS the per-round emission (so it carries mint/vault/treasury + tokenProgram).
+describe("BEEF minted-model + jackpot + fee-dial builders", () => {
+  const admin = Keypair.generate().publicKey;
+  const beefMint = Keypair.generate().publicKey;
+  const beefVault = Keypair.generate().publicKey;
+  const beefTreasury = Keypair.generate().publicKey;
+
+  it("initBeef pins mint/vault/treasury + the vault-authority mint signer", async () => {
+    const ix = await initBeefIx(
+      program(), admin, beefMint, beefVault, beefTreasury,
+      new BN(210_000_000), new BN(1_000_000_000), new BN(21_000_000_000_000), 2000, 3, 30_000, new BN(86_400), new BN(60),
+    ).instruction();
+    expect(has(ix, beefMint)).toBe(true);
+    expect(has(ix, beefVault)).toBe(true);
+    expect(has(ix, beefTreasury)).toBe(true);
+    expect(has(ix, vaultAuthPda())).toBe(true);
+    expect(has(ix, beefConfigPda())).toBe(true);
+  });
+
+  it("stampBeef references round/beefRound + mint/vault/treasury, classic token program by default", async () => {
+    const ix = await stampBeefIx(program(), admin, 7, beefMint, beefVault, beefTreasury).instruction();
+    expect(has(ix, roundPda(7))).toBe(true);
+    expect(has(ix, beefRoundPda(7))).toBe(true);
+    expect(has(ix, beefMint)).toBe(true);
+    expect(has(ix, beefVault)).toBe(true);
+    expect(has(ix, beefTreasury)).toBe(true);
+    expect(has(ix, vaultAuthPda())).toBe(true);
+    expect(has(ix, TOKEN_PROGRAM_ID)).toBe(true);
+  });
+
+  it("stampBeef threads Token-2022 into the tokenProgram account", async () => {
+    const ix = await stampBeefIx(program(), admin, 7, beefMint, beefVault, beefTreasury, TOKEN_2022_PROGRAM_ID).instruction();
+    expect(has(ix, TOKEN_2022_PROGRAM_ID)).toBe(true);
+  });
+
+  it("setFeeBps resolves the admin-gated config", async () => {
+    const ix = await setFeeBpsIx(program(), admin, 500).instruction();
+    expect(has(ix, configPda())).toBe(true);
+  });
+
+  it("initJackpotConfig seeds the jackpot-config PDA", async () => {
+    const ix = await initJackpotConfigIx(program(), admin).instruction();
+    expect(has(ix, jackpotConfigPda())).toBe(true);
+    expect(has(ix, configPda())).toBe(true);
+  });
+
+  it("setJackpotParams references the jackpot-config PDA + admin-gated config", async () => {
+    const ix = await setJackpotParamsIx(program(), admin, 25, 100).instruction();
+    expect(has(ix, jackpotConfigPda())).toBe(true);
+    expect(has(ix, configPda())).toBe(true);
   });
 });

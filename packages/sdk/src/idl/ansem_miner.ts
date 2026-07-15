@@ -1601,6 +1601,32 @@ export type AnsemMiner = {
           }
         },
         {
+          "name": "jackpotConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  97,
+                  99,
+                  107,
+                  112,
+                  111,
+                  116,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "ansemMint",
           "writable": true
         },
@@ -1822,6 +1848,32 @@ export type AnsemMiner = {
           }
         },
         {
+          "name": "jackpotConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  97,
+                  99,
+                  107,
+                  112,
+                  111,
+                  116,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "ansemMint"
         },
         {
@@ -2006,10 +2058,11 @@ export type AnsemMiner = {
           }
         },
         {
-          "name": "beefMint"
-        },
-        {
           "name": "vaultAuthority",
+          "docs": [
+            "AND (now) the BEEF mint authority. Declared BEFORE beef_mint so the",
+            "mint-authority constraint below can reference its key."
+          ],
           "pda": {
             "seeds": [
               {
@@ -2031,7 +2084,13 @@ export type AnsemMiner = {
           }
         },
         {
+          "name": "beefMint"
+        },
+        {
           "name": "beefVault"
+        },
+        {
+          "name": "beefTreasury"
         },
         {
           "name": "beefConfig",
@@ -2064,8 +2123,20 @@ export type AnsemMiner = {
       ],
       "args": [
         {
-          "name": "divisor",
+          "name": "maxRoundMint",
           "type": "u64"
+        },
+        {
+          "name": "satLamports",
+          "type": "u64"
+        },
+        {
+          "name": "hardCap",
+          "type": "u64"
+        },
+        {
+          "name": "treasuryBps",
+          "type": "u16"
         },
         {
           "name": "tickBps",
@@ -2084,6 +2155,76 @@ export type AnsemMiner = {
           "type": "i64"
         }
       ]
+    },
+    {
+      "name": "initJackpotConfig",
+      "discriminator": [
+        131,
+        161,
+        96,
+        112,
+        147,
+        187,
+        238,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "jackpotConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  97,
+                  99,
+                  107,
+                  112,
+                  111,
+                  116,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "initMiner",
@@ -3191,7 +3332,11 @@ export type AnsemMiner = {
       ],
       "args": [
         {
-          "name": "divisor",
+          "name": "maxRoundMint",
+          "type": "u64"
+        },
+        {
+          "name": "satLamports",
           "type": "u64"
         },
         {
@@ -3253,6 +3398,124 @@ export type AnsemMiner = {
         {
           "name": "secs",
           "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "setFeeBps",
+      "discriminator": [
+        2,
+        161,
+        245,
+        141,
+        111,
+        32,
+        39,
+        198
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "feeBps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "setJackpotParams",
+      "discriminator": [
+        151,
+        155,
+        197,
+        124,
+        56,
+        94,
+        187,
+        144
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "jackpotConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  106,
+                  97,
+                  99,
+                  107,
+                  112,
+                  111,
+                  116,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "triggerOdds",
+          "type": "u16"
+        },
+        {
+          "name": "capMult",
+          "type": "u16"
         }
       ]
     },
@@ -3951,7 +4214,38 @@ export type AnsemMiner = {
           }
         },
         {
-          "name": "beefVault"
+          "name": "beefMint",
+          "writable": true
+        },
+        {
+          "name": "vaultAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "beefVault",
+          "writable": true
+        },
+        {
+          "name": "beefTreasury",
+          "writable": true
         },
         {
           "name": "beefRound",
@@ -3979,6 +4273,9 @@ export type AnsemMiner = {
               }
             ]
           }
+        },
+        {
+          "name": "tokenProgram"
         },
         {
           "name": "systemProgram",
@@ -4315,6 +4612,19 @@ export type AnsemMiner = {
       ]
     },
     {
+      "name": "jackpotConfig",
+      "discriminator": [
+        94,
+        197,
+        183,
+        218,
+        20,
+        143,
+        179,
+        25
+      ]
+    },
+    {
       "name": "minerPosition",
       "discriminator": [
         231,
@@ -4509,6 +4819,11 @@ export type AnsemMiner = {
       "code": 6030,
       "name": "badStakeBounds",
       "msg": "Invalid stake bounds (require 0 < min <= max)"
+    },
+    {
+      "code": 6031,
+      "name": "badFeeBps",
+      "msg": "Fee bps exceeds the 2000 (20%) ceiling"
     }
   ],
   "types": [
@@ -4524,18 +4839,48 @@ export type AnsemMiner = {
           {
             "name": "beefVault",
             "docs": [
-              "SPL token account holding the emission supply. Owner = the existing",
-              "vault_authority PDA. Ops-side this sits at a vanity BEEF... address;",
-              "the program only cares that this pubkey matches."
+              "Player-emission buffer. Owner = vault_authority PDA, which is ALSO the",
+              "beef mint authority — stamp mints into here, claims transfer out."
             ],
             "type": "pubkey"
           },
           {
-            "name": "divisor",
+            "name": "beefTreasury",
             "docs": [
-              "emission_per_round = free_vault / divisor (free = vault - total_owed)."
+              "Treasury ATA (20% cut minted straight here). Pinned at init."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "maxRoundMint",
+            "docs": [
+              "emission_total_per_round = max_round_mint * pot/(pot + sat_lamports),",
+              "times the ZINC-style decay factor (hard_cap - minted_total)/hard_cap."
             ],
             "type": "u64"
+          },
+          {
+            "name": "satLamports",
+            "type": "u64"
+          },
+          {
+            "name": "hardCap",
+            "docs": [
+              "Emission stops forever at the cap. minted_total counts BOTH shares",
+              "(players + treasury) — it is the supply meter; the cap is init-pinned."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "mintedTotal",
+            "type": "u64"
+          },
+          {
+            "name": "treasuryBps",
+            "docs": [
+              "Continuous treasury cut in bps (init-pinned; 20% at launch)."
+            ],
+            "type": "u16"
           },
           {
             "name": "tickBps",
@@ -4556,9 +4901,10 @@ export type AnsemMiner = {
           {
             "name": "totalOwed",
             "docs": [
-              "Solvency ledger: every stamped emission and accrued bonus is recognized",
-              "here the moment it becomes claimable; claims subtract their payout.",
-              "free_vault = vault.amount - total_owed can never go negative-spendable."
+              "Solvency ledger for the PLAYERS' buffered share: every stamped players'",
+              "emission and accrued bonus is recognized here the moment it becomes",
+              "claimable; claims subtract their payout. free_vault = vault.amount -",
+              "total_owed can never go negative-spendable."
             ],
             "type": "u64"
           },
@@ -4738,6 +5084,34 @@ export type AnsemMiner = {
           },
           {
             "name": "mintAuthBump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "jackpotConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "triggerOdds",
+            "docs": [
+              "0|1 = every winner round pays the rollover (legacy). N>1 = 1-in-N: a round",
+              "pays the jackpot only when the frozen-randomness draw passes 1-in-N odds."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "capMult",
+            "docs": [
+              "Bite ceiling = cap_mult x the winning-square stake's ANSEM value. 0 = uncapped",
+              "(winner takes the whole rollover, legacy behavior). Default 100x."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bump",
             "type": "u8"
           }
         ]

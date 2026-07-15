@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 import { PROGRAM_ID, GUM_PROGRAM_ID } from "../src/constants.js";
 import { configPda, roundPda, minerPda, escrowPda, potVaultPda, treasuryPda,
-  vaultAuthPda, mintAuthPda, ansemMintPda, sessionTokenPda } from "../src/pdas.js";
+  vaultAuthPda, mintAuthPda, ansemMintPda, sessionTokenPda, jackpotConfigPda } from "../src/pdas.js";
 
 describe("PDA derivations (vectors verified on devnet)", () => {
   it("static PDAs match known on-chain addresses", () => {
@@ -13,6 +13,13 @@ describe("PDA derivations (vectors verified on devnet)", () => {
     expect(vaultAuthPda().toBase58()).toBe("9prJ9GV8NTyevD8S94dbpEXuNBeidEBnaR49Mzhw6fNw");
     expect(potVaultPda().toBase58()).toBe("5rrickgeHZJDDiS14T76d749iwSTnz6E538KaWtHDiiB");
     expect(treasuryPda().toBase58()).toBe("EjwB8X4toQJzPtcRhjtzm4RpAX2bLKrcNDurLgDxXD4G");
+  });
+
+  it("jackpotConfig PDA seeds on the program JACKPOT_CONFIG_SEED", () => {
+    // seed "jackpot_config" (program constant) — matches keeper/src/read/jackpot.ts raw derivation
+    expect(jackpotConfigPda().toBase58()).toBe("BjSQ4zvp4ztfXSDfyBbZU8vbtuAAuXQY3edNU1D2WiTo");
+    expect(jackpotConfigPda().toBase58()).toBe(
+      PublicKey.findProgramAddressSync([Buffer.from("jackpot_config")], PROGRAM_ID)[0].toBase58());
   });
 
   it("round PDA uses u64 LE round id", () => {

@@ -25,6 +25,17 @@ export function formatAnsem(baseUnits: string): string {
   return `${s} ANSEM`;
 }
 
+// $BEEF is a classic-SPL, 6-decimal mint (spec 2026-07-14-beef-on-ansem-design D2;
+// same base-unit scale as ANSEM, e.g. BEEF_MAX_ROUND_MINT = 210_000_000 = 210 BEEF).
+const BEEF_UNIT = 10 ** 6;
+
+/** BEEF base units -> "N BEEF", trimmed to <=2 decimals. Accepts bigint or wire string. */
+export function formatBeef(baseUnits: bigint | string): string {
+  const n = Number(BigInt(baseUnits)) / BEEF_UNIT;
+  const s = n.toFixed(2).replace(/\.?0+$/, "");
+  return `${s} BEEF`;
+}
+
 export function stateLabel(state: RoundState): string {
   switch (state) {
     case RoundState.Open: return "OPEN";
@@ -83,7 +94,7 @@ export function eventToText(e: KeeperEvent): string {
     case "round.open": return `Round ${e.roundId} opened`;
     case "stake": return `Bull #${e.square + 1} staked → ${formatSol(e.totalStake)}`;
     case "round.settling": return `Round ${e.roundId} settling…`;
-    case "round.revealed": return `Jackpot: Bull #${e.jackpotSquare + 1} struck the big pot`;
+    case "round.revealed": return `Round ${e.roundId} revealed Bull #${e.jackpotSquare + 1}`;
     case "round.claimable": return `Round ${e.roundId} claimable`;
   }
 }

@@ -64,7 +64,7 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
     let escrow = &mut ctx.accounts.escrow;
     require!(escrow.last_claimed_round < round_id, AnsemError::AlreadyClaimed);
 
-    let miner = &ctx.accounts.miner;
+    let miner = &mut ctx.accounts.miner;
 
     // Payout = non-jackpot returns (0-50% per square) + this player's pro-rata
     // share of the jackpot pool if they staked the jackpot square. Both are paid
@@ -109,6 +109,9 @@ pub fn claim_handler(ctx: Context<Claim>, round_id: u64) -> Result<()> {
     let cfg = &mut ctx.accounts.config;
     // saturating: a ledger drift must never block a player's claim.
     cfg.ansem_obligations = cfg.ansem_obligations.saturating_sub(amount);
+
+    // Consume shared stake for cross-path idempotency; roll_beef must run first.
+    miner.block_stake = [0u64; GRID_SIZE];
 
     // NOTE: claim intentionally does NOT touch Config.total_escrow_balance —
     // the staked SOL already left escrow (and total_escrow_balance) at

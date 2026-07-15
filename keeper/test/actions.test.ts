@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { ataForMint, TOKEN_2022_PROGRAM_ID } from "@ansem/sdk";
 import {
   commitToL1, CommitDeps, finalizeSettled, FinalizeDeps, isNotThisRoundError,
-  realExecuteSwap, RealSwapDeps, liveRealSwapDeps, ActionCtx,
+  realExecuteSwap, RealSwapDeps, liveRealSwapDeps, liveFinalizeDeps, ActionCtx,
 } from "../src/crank/actions.js";
 
 const wallet = () => PublicKey.unique();
@@ -122,6 +122,26 @@ describe("finalizeSettled + BEEF stamp", () => {
       executeSwap: async () => { calls.push("swap"); },
     });
     expect(calls).toEqual(["swap"]);
+  });
+});
+
+describe("liveFinalizeDeps BEEF stamp wiring", () => {
+  it("routes stampBeef to ctx.beefStamper.stamp(roundId)", async () => {
+    const stamped: number[] = [];
+    const ctx = {
+      swapMode: "mock",
+      beefStamper: { stamp: async (r: number) => { stamped.push(r); }, init: async () => {}, enabled: () => true },
+    } as unknown as ActionCtx;
+    const deps = liveFinalizeDeps(ctx, 77, {} as any, { pot: 0n } as any);
+    expect(deps.stampBeef).toBeDefined();
+    await deps.stampBeef!();
+    expect(stamped).toEqual([77]);
+  });
+
+  it("leaves stampBeef undefined when ctx has no beefStamper (BEEF never wired)", () => {
+    const ctx = { swapMode: "mock" } as unknown as ActionCtx;
+    const deps = liveFinalizeDeps(ctx, 77, {} as any, { pot: 0n } as any);
+    expect(deps.stampBeef).toBeUndefined();
   });
 });
 

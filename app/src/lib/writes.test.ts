@@ -2,10 +2,38 @@
 // (web3.js findProgramAddressSync needs real curve/crypto; jsdom breaks it. writes.ts
 //  has no DOM, and real browsers have WebCrypto — T4's devnet spike proves the derivation.)
 import { describe, it, expect, vi } from "vitest";
-import { Connection, Keypair, Transaction, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, Transaction, TransactionInstruction, PublicKey } from "@solana/web3.js";
 import { createProgram, DEFAULT_ER_VALIDATOR, BN } from "@ansem/sdk";
 import { keypairWallet } from "./anchor.js";
-import { enterRound, gaslessStake } from "./writes.js";
+import { enterRound, gaslessStake, directStake, claimRound, claimBeef } from "./writes.js";
+
+// Tag each SDK instruction so a composed bundle's ORDER is assertable without decoding.
+const TAG = { rollBeef: 1, claimDirect: 2, claimBeef: 3, stakeDirect: 4 } as const;
+const tagsOf = (tx: Transaction) => tx.instructions.map((i) => i.data[0]);
+
+/** Fake Program: methods.* yield a tagged instruction; provider.sendAndConfirm is spied. */
+function fakeBundleProgram() {
+  const mk = (tag: number) => ({
+    accountsPartial: () => ({
+      instruction: async () => new TransactionInstruction({ keys: [], programId: PublicKey.default, data: Buffer.from([tag]) }),
+    }),
+  });
+  const sendAndConfirm = vi.fn(async () => "PROVIDER_SIG");
+  const p = {
+    provider: { sendAndConfirm },
+    methods: {
+      rollBeef: () => mk(TAG.rollBeef),
+      claimDirect: () => mk(TAG.claimDirect),
+      claimBeef: () => mk(TAG.claimBeef),
+      stakeDirect: () => mk(TAG.stakeDirect),
+    },
+  };
+  return { p: p as any, sendAndConfirm };
+}
+
+const OWNER = Keypair.generate().publicKey;
+const MINT = Keypair.generate().publicKey;
+const PROG = PublicKey.default; // token program id (only threaded into ATA seeds)
 
 /** Stateful fake ER Program: minerPosition.fetch reflects state; stake() applies block_stake += amount. */
 function fakeEr(initial: bigint[], roundId = 7) {
@@ -27,6 +55,86 @@ function fakeEr(initial: bigint[], roundId = 7) {
   };
   return { er, state, calls: () => calls };
 }
+
+describe("BEEF-aware harvest bundles (ordering invariant + pre-BEEF no-op)", () => {
+  it("directStake with NO rollBeefRound composes exactly [stakeDirect…] — the unchanged pre-BEEF tx", async () => {
+    const { p } = fakeBundleProgram();
+    let captured: Transaction | null = null;
+    const sig = await directStake({
+      l1: p, owner: OWNER, roundId: 9, squares: [4, 17], amountPerSquare: new BN(10_000_000),
+      send: async (tx) => { captured = tx; return "SIG"; },
+    });
+    expect(sig).toBe("SIG");
+    expect(tagsOf(captured!)).toEqual([TAG.stakeDirect, TAG.stakeDirect]); // no roll prepended
+  });
+
+  it("directStake WITH rollBeefRound prepends rollBeef FIRST, then the stakes", async () => {
+    const { p } = fakeBundleProgram();
+    let captured: Transaction | null = null;
+    await directStake({
+      l1: p, owner: OWNER, roundId: 9, squares: [4, 17], amountPerSquare: new BN(10_000_000),
+      rollBeefRound: 8, send: async (tx) => { captured = tx; return "SIG"; },
+    });
+    expect(tagsOf(captured!)).toEqual([TAG.rollBeef, TAG.stakeDirect, TAG.stakeDirect]); // roll before any stake
+  });
+
+  it("directStake treats rollBeefRound 0 as pre-BEEF (no roll — never rolls the genesis round)", async () => {
+    const { p } = fakeBundleProgram();
+    let captured: Transaction | null = null;
+    await directStake({
+      l1: p, owner: OWNER, roundId: 9, squares: [4], amountPerSquare: new BN(10_000_000),
+      rollBeefRound: 0, send: async (tx) => { captured = tx; return "SIG"; },
+    });
+    expect(tagsOf(captured!)).toEqual([TAG.stakeDirect]);
+  });
+
+  it("claimRound with rollBeef=false composes exactly [claimDirect] — the unchanged pre-BEEF tx", async () => {
+    const { p } = fakeBundleProgram();
+    let captured: Transaction | null = null;
+    await claimRound({
+      l1: p, owner: OWNER, roundId: 12, ansemMint: MINT, ansemTokenProgramId: PROG,
+      send: async (tx) => { captured = tx; return "SIG"; },
+    });
+    expect(tagsOf(captured!)).toEqual([TAG.claimDirect]);
+  });
+
+  it("claimRound with rollBeef=true composes [rollBeef(rid), claimDirect(rid)] — roll FIRST", async () => {
+    const { p } = fakeBundleProgram();
+    let captured: Transaction | null = null;
+    await claimRound({
+      l1: p, owner: OWNER, roundId: 12, ansemMint: MINT, ansemTokenProgramId: PROG,
+      rollBeef: true, send: async (tx) => { captured = tx; return "SIG"; },
+    });
+    expect(tagsOf(captured!)).toEqual([TAG.rollBeef, TAG.claimDirect]);
+  });
+
+  it("claimBeef with no rollRound composes [claimBeef] alone", async () => {
+    const { p } = fakeBundleProgram();
+    let captured: Transaction | null = null;
+    await claimBeef({
+      l1: p, owner: OWNER, beefMint: MINT, beefVault: Keypair.generate().publicKey, tokenProgramId: PROG,
+      send: async (tx) => { captured = tx; return "SIG"; },
+    });
+    expect(tagsOf(captured!)).toEqual([TAG.claimBeef]);
+  });
+
+  it("claimBeef WITH rollRound composes [rollBeef(stakedRound), claimBeef] — roll FIRST", async () => {
+    const { p } = fakeBundleProgram();
+    let captured: Transaction | null = null;
+    await claimBeef({
+      l1: p, owner: OWNER, beefMint: MINT, beefVault: Keypair.generate().publicKey, tokenProgramId: PROG,
+      rollRound: 40, send: async (tx) => { captured = tx; return "SIG"; },
+    });
+    expect(tagsOf(captured!)).toEqual([TAG.rollBeef, TAG.claimBeef]);
+  });
+
+  it("defaults to the provider's single-popup sendAndConfirm when no sender is injected", async () => {
+    const { p, sendAndConfirm } = fakeBundleProgram();
+    const sig = await claimRound({ l1: p, owner: OWNER, roundId: 3, ansemMint: MINT, ansemTokenProgramId: PROG });
+    expect(sig).toBe("PROVIDER_SIG");
+    expect(sendAndConfirm).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("enterRound (one-popup contract)", () => {
   it("builds ONE tx, session-co-signs, then calls wallet.signTransaction exactly once, sends skipPreflight", async () => {

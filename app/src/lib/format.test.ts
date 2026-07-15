@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { RoundState } from "@ansem/sdk";
-import { lamportsToSol, formatSol, formatAnsem, stateLabel, secondsLeft, formatCountdown, formatUntil, formatHms, shortAddr, eventToText } from "./format.js";
+import { lamportsToSol, formatSol, formatAnsem, formatBeef, stateLabel, secondsLeft, formatCountdown, formatUntil, formatHms, shortAddr, eventToText } from "./format.js";
 
 describe("format helpers", () => {
   it("lamportsToSol parses stringified lamports without precision loss", () => {
@@ -18,6 +18,12 @@ describe("format helpers", () => {
     expect(formatAnsem("27720000")).toBe("27.72 ANSEM");
     expect(formatAnsem("3044903400")).toBe("3044.9 ANSEM");
     expect(formatAnsem("0")).toBe("0 ANSEM");
+  });
+
+  it("formatBeef renders 1e6 base units as a trimmed BEEF string (bigint or wire string)", () => {
+    expect(formatBeef(27_300_000n)).toBe("27.3 BEEF");
+    expect(formatBeef("210000000")).toBe("210 BEEF");
+    expect(formatBeef(0n)).toBe("0 BEEF");
   });
 
   it("stateLabel maps each RoundState", () => {
@@ -59,7 +65,9 @@ describe("format helpers", () => {
     expect(eventToText({ type: "round.open", roundId: 5, deadlineTs: 0 })).toBe("Round 5 opened");
     expect(eventToText({ type: "stake", roundId: 5, square: 3, totalStake: "20000000" })).toContain("Bull #4");
     expect(eventToText({ type: "round.settling", roundId: 5 })).toBe("Round 5 settling…");
-    expect(eventToText({ type: "round.revealed", roundId: 5, jackpotSquare: 6 })).toContain("Bull #7");
+    const revealed = eventToText({ type: "round.revealed", roundId: 5, jackpotSquare: 6 });
+    expect(revealed).toBe("Round 5 revealed Bull #7");
+    expect(revealed).not.toMatch(/jackpot|win|big pot/i);
     expect(eventToText({ type: "round.claimable", roundId: 5 })).toBe("Round 5 claimable");
   });
 });

@@ -5,8 +5,10 @@ import { JackpotMeter } from "./JackpotMeter.js";
 describe("JackpotMeter", () => {
   it("shows the rolling jackpot in ANSEM (base units, never lamports)", () => {
     // 3_044_903_400 base units / 1e6 = 3044.9 ANSEM
-    render(<JackpotMeter rolloverJackpot="3044903400" />);
-    expect(screen.getByText("3044.9")).toBeInTheDocument();
+    const { container } = render(<JackpotMeter rolloverJackpot="3044903400" />);
+    expect(screen.getByRole("heading", { name: "Jackpot" })).toBeInTheDocument();
+    expect(container.firstChild).toHaveClass("terminal-panel", "p-4");
+    expect(screen.getByText("3044.9").parentElement).not.toHaveAttribute("style");
     expect(screen.getByText("ANSEM")).toBeInTheDocument();
     expect(screen.getByText(/grows every miss/i)).toBeInTheDocument();
   });

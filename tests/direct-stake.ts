@@ -109,6 +109,10 @@ describe("direct-stake engine", () => {
 
   it("initializes", async () => {
     await program.methods.initialize().accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID }).rpc();
+    // Fixture (BEEF/jackpot upgrade): every swap now reads the JackpotConfig PDA
+    // (spec D6). Seed it once so execute_swap_* resolves it. Defaults 1-in-25 /
+    // 100x are fine here — these legacy assertions all run at rollover 0 (bite 0).
+    await program.methods.initJackpotConfig().accounts({ admin: admin.publicKey }).rpc();
     const cfg = await program.account.config.fetch(configPda);
     assert.isTrue(cfg.currentRoundFinalized);
   });
