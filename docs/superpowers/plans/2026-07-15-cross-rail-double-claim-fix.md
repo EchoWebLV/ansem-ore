@@ -46,6 +46,7 @@ import { AnsemMiner } from "../target/types/ansem_miner";
 
 const enc = (value: string) => Buffer.from(value);
 const randomness = Buffer.alloc(32, 7); // u64(bytes 16..24) % 25 == 11, so no rollover bite.
+const STAKE_WINDOW_SECS = 5;
 
 describe("cross-rail double claim", () => {
   const provider = anchor.AnchorProvider.env();
@@ -118,6 +119,22 @@ describe("cross-rail double claim", () => {
     return player;
   }
 
+  async function settleAfterDeadline(round: PublicKey) {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      try {
+        await program.methods
+          .settle([...randomness])
+          .accounts({ admin: admin.publicKey, round })
+          .rpc();
+        return;
+      } catch (error: any) {
+        if (!error.toString().includes("RoundNotEnded")) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    throw new Error("round never became settleable");
+  }
+
   async function freshRound(): Promise<{ id: number; pda: PublicKey }> {
     const current = await program.account.config.fetch(config);
     const id = current.currentRoundId.toNumber() + 1;
@@ -143,10 +160,7 @@ describe("cross-rail double claim", () => {
       })
       .signers([player])
       .rpc();
-    await program.methods
-      .settle([...randomness])
-      .accounts({ admin: admin.publicKey, round: round.pda })
-      .rpc();
+    await settleAfterDeadline(round.pda);
     await program.methods.executeSwapMock().accounts(swapAccounts(round.pda)).rpc();
     return round;
   }
@@ -157,7 +171,10 @@ describe("cross-rail double claim", () => {
       .accounts({ admin: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID })
       .rpc();
     await program.methods.initJackpotConfig().accounts({ admin: admin.publicKey }).rpc();
-    await program.methods.setRoundDuration(new anchor.BN(0)).accounts({ admin: admin.publicKey }).rpc();
+    await program.methods
+      .setRoundDuration(new anchor.BN(STAKE_WINDOW_SECS))
+      .accounts({ admin: admin.publicKey })
+      .rpc();
     await program.methods.setReturnBand(0, 0).accounts({ admin: admin.publicKey }).rpc();
 
     const seedPlayer = await fundedPlayer();
@@ -228,10 +245,21 @@ describe("cross-rail double claim", () => {
 
 - [ ] **Step 2: Run the focused test against the vulnerable baseline and verify RED**
 
-Run:
+The repository-pinned Anchor 1.0.2 CLI does not use `anchor test --run <file>` to select a TypeScript file. Build once, then run only this file against a fresh legacy validator:
 
 ```bash
-anchor test --run tests/cross-rail-double-claim.ts -- --features devnet
+anchor build -- --features devnet
+
+LEDGER=$(mktemp -d /tmp/ansem-claim-red.XXXXXX)
+solana-test-validator --reset --ledger "$LEDGER" --mint "$(solana address)" \
+  --bpf-program 8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz target/deploy/ansem_miner.so \
+  >"$LEDGER/validator.log" 2>&1 &
+VALIDATOR_PID=$!
+trap 'kill "$VALIDATOR_PID" 2>/dev/null || true; rm -rf "$LEDGER"' EXIT
+until solana cluster-version --url http://127.0.0.1:8899 >/dev/null 2>&1; do sleep 1; done
+ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 \
+ANCHOR_WALLET="$HOME/.config/solana/id.json" \
+  pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 tests/cross-rail-double-claim.ts
 ```
 
 Expected: FAIL in the `legacy-first` case because the wallet receives two payouts and the ledger is decremented twice. The `direct-first` case may pass because `claim_direct` already clears the stake. Do not write production code until the legacy-first failure has been observed and recorded.
@@ -257,21 +285,51 @@ Do not change the `Claim` account struct, payout formula, escrow fields, or `cla
 
 - [ ] **Step 4: Run the focused test and verify GREEN**
 
-Run:
+Rebuild the devnet binary and run the focused file against a new validator:
 
 ```bash
-anchor test --run tests/cross-rail-double-claim.ts -- --features devnet
+anchor build -- --features devnet
+
+LEDGER=$(mktemp -d /tmp/ansem-claim-green.XXXXXX)
+solana-test-validator --reset --ledger "$LEDGER" --mint "$(solana address)" \
+  --bpf-program 8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz target/deploy/ansem_miner.so \
+  >"$LEDGER/validator.log" 2>&1 &
+VALIDATOR_PID=$!
+trap 'kill "$VALIDATOR_PID" 2>/dev/null || true; rm -rf "$LEDGER"' EXIT
+until solana cluster-version --url http://127.0.0.1:8899 >/dev/null 2>&1; do sleep 1; done
+ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 \
+ANCHOR_WALLET="$HOME/.config/solana/id.json" \
+  pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 tests/cross-rail-double-claim.ts
 ```
 
 Expected: PASS, 2 passing and 0 failing. Both instruction orders transfer and account for exactly one payout.
 
 - [ ] **Step 5: Run relevant regression suites**
 
-Run:
+Run each TypeScript file against its own fresh validator, then run the Rust suite:
 
 ```bash
-anchor test --run tests/direct-stake.ts -- --features devnet
-anchor test --run tests/direct-beef.ts -- --features devnet
+run_anchor_file() {
+  TEST_FILE="$1"
+  LEDGER=$(mktemp -d /tmp/ansem-claim-regression.XXXXXX)
+  solana-test-validator --reset --ledger "$LEDGER" --mint "$(solana address)" \
+    --bpf-program 8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz target/deploy/ansem_miner.so \
+    >"$LEDGER/validator.log" 2>&1 &
+  VALIDATOR_PID=$!
+  until solana cluster-version --url http://127.0.0.1:8899 >/dev/null 2>&1; do sleep 1; done
+  ANCHOR_PROVIDER_URL=http://127.0.0.1:8899 \
+  ANCHOR_WALLET="$HOME/.config/solana/id.json" \
+    pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 "$TEST_FILE"
+  STATUS=$?
+  kill "$VALIDATOR_PID" 2>/dev/null || true
+  wait "$VALIDATOR_PID" 2>/dev/null || true
+  rm -rf "$LEDGER"
+  return "$STATUS"
+}
+
+run_anchor_file tests/direct-stake.ts
+run_anchor_file tests/direct-beef.ts
+
 cargo test -p ansem-miner --all-targets
 ```
 
