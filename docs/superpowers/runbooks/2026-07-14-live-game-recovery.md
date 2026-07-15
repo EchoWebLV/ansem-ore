@@ -1173,39 +1173,51 @@ Record:
 Complete these public fields after deployment and proof. Keep the raw command outputs in the
 operator evidence directory; commit only this public summary.
 
-- Release source commit:
-- Release worktree clean:
-- Verification counts and documented skips:
-- Independent review result:
+- Release source commit: `8e76923e9d95d501c7dd8566976777ef6d2c1131`
+- Release worktree clean: yes at the program and both keeper deployment gates
+- Verification counts and documented skips: SDK 36/36; keeper 130/130 with 2 live integration
+  suites skipped; seeder 2/2; focused Anchor suites 60/60. App typecheck passed; the unchanged
+  app suite retained its documented pre-existing PlayBoard accessibility failure. Repository-wide
+  `cargo fmt --all -- --check` retained documented pre-existing formatting drift.
+- Independent review result: APPROVE at release HEAD `8e76923`
 - Program ID: `8Q9EnK7ydn6ywo7ZxeqhubqYybf7FFNNwnz8JzJjXZjz`
 - ProgramData: `2K1sLP43GKajCgrGTgkAfvc23GVLgqY1YQwwkCGBaFvM`
 - Upgrade authority: `FP39ztVCx7FDPpou4mfPV6HyXoNVDRLEqZyvKkFgpCCM`
-- Release artifact SHA-256:
-- Program upgrade signature:
-- Deployed program SHA-256:
-- Railway deployment ID:
-- Keeper health URL:
-- Keeper snapshot URL:
+- Release artifact SHA-256: `a612d60e3f70c1bfc15bbd8423630bddf0fd22d45fb5f5e41c1d41b1ad50b411`
+- Program upgrade signature: `uU8B5K1p5YGPa8oi5ZqnBZJs9pxUdb9n7BVAZ5Jer4jJTzwwQU9DmeUcYJAh8dKxvnUz9cG659nKc6Q8u4bo5pd`
+- Deployed program SHA-256: `a612d60e3f70c1bfc15bbd8423630bddf0fd22d45fb5f5e41c1d41b1ad50b411`
+- Railway 300-second recovery deployment ID: `25cf1d31-7d44-49de-9eed-c15116513dab`
+- Railway final 60-second deployment ID: `5bc16981-bf73-4d63-b04f-84b3d4d5d96e`
+- Keeper health URL: `https://keeper-production-33d5.up.railway.app/health` returned `ok`
+- Keeper snapshot URL: `https://keeper-production-33d5.up.railway.app/snapshot`
 - `KEEPER_ROUND_SECS`: `60`
 - On-chain Config `roundDurationSecs`: `60`
-- Next-round `create_round` signature:
-- Next-round create block time:
-- Next-round deadline:
-- Deadline minus create block time, seconds:
-- Proof round ID:
-- Proof start and end slots:
-- Stake signature:
-- Swap signature:
-- Stamp signature:
-- Roll signature:
-- Claim signature:
-- Post-proof BEEF supply:
-- Post-proof BEEF vault balance:
-- Post-proof BEEF treasury balance:
-- Post-proof `total_owed`:
-- Quiet BEEF accounting window confirmed:
-- 47.481502 BEEF protected vault floor maintained:
-- Post-proof vault balance at or above pre-proof vault balance:
-- Rollback keeper state: `not used`, `stopped`, or `manually supervised`:
-- Rollback program state: `not used`, `stopped`, or `rent-floor supervised`:
-- Final audit UTC:
+- Proof `set_round_duration(60)` signature: `4DqubyrRaW7GRAgQE3ZP589v4KWxhMDgMxMymRp5mG9fbF1SZgxsqXZ59Ai4jeD2ko14ea9e4QyafLiUWkpJbG54`
+- Next-round `create_round` signature: `qZRMzvBsvfQvmmnpSeaq1nfGVnfYytyzd33y2kxs67D5kJPuhSqULduAhnVQpWFnwyeNXmDgvzMi61BK1grMzVP`
+- Next-round create block time: `1784101738`
+- Next-round deadline: `1784101798` from the on-chain 60-second setting applied immediately
+  before creation; the janitor closed the old empty account before the final readback
+- Deadline minus create block time, seconds: `60`
+- Independent live 60-second round proof: round 163 create signature
+  `5ifsiEcbk5UBKv6R9FnwJdaAxe3Q3r51YjqNfEL9CPYJs6UTMB11KPzPLB9UcJ5knaoxRKTatTpPV184cGfUX5cn`,
+  create time `1784101872`, deadline `1784101932`
+- Proof round ID: `160`
+- Proof start and end slots: `433022102..433023136`
+- Stake signature: `34BCkwTT7FtCW945ka2PbE7oUAFYX1uhemdtPMUeQgKrCejWVXL7ndit5kk5FKZGbSXJNG8mLBPyDWSK4Y9727Bb`
+- Swap signature: `5UkWZg2EHCVmQiiuKZTDAuE17ST2q4EMVhHFA2MXMDASByNsz6xkvByFe7yRaXyYRRGu9cze2pwe3ipRjawuoUk9`
+- Stamp signature: `3hpogApKpjS3ii2WGBBP36CFpgjga2JwVkJfpd49FHQCDc9obqYXSgbwRR1jq1FKUnWWsB3XEsaT8HwssD3owf1V`
+- Roll signature: `4qYGxYNFBDzd2cRUnZe7rQyReb8DkEiLd5L8coZgJyiS3ZqDBGQpHhakz7JKhrd9ysxU4PvhQU1z5psNnmD1oqEm`
+- Claim signature: `YBmPuUuCQKjXbG7iQU8dVPk4pYdbitb9A7rMQpf7AP83e5gMLdTKLXiBHz6dPSpASup2jTH9jLyebSsohdFGobh`
+- BEEF claimed by proof wallet: `1.663361` BEEF (`1663361` base units), exactly equal to
+  the fresh round-160 player emission
+- Post-proof BEEF supply: `61.431076` BEEF (`61431076` base units)
+- Post-proof BEEF vault balance: `47.481502` BEEF (`47481502` base units)
+- Post-proof BEEF treasury balance: `12.286213` BEEF (`12286213` base units)
+- Post-proof `total_owed`: `47.481502` BEEF (`47481502` base units)
+- Quiet BEEF accounting window confirmed: one stamp, one claim, zero sweeps
+- 47.481502 BEEF protected vault floor maintained: yes
+- Post-proof vault balance at or above pre-proof vault balance: yes, unchanged at `47481502`
+- Post-proof pot-vault balance and rent minimum: `1503000 >= 890880` lamports
+- Rollback keeper state: `not used`
+- Rollback program state: `not used`
+- Final audit UTC: `2026-07-15T07:53:38Z`
